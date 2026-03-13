@@ -1,0 +1,24 @@
+[package]
+name = "oxide_engine"
+description = "Oxide Core engine - main game engine crate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_renderer = { path = "../oxide_renderer" }
+oxide_math = { path = "../oxide_math" }
+wgpu.workspace = true
+winit.workspace = true
+glam.workspace = true
+bevy_ecs.workspace = true
+bytemuck.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+pollster = "0.4"
+
+[features]
+default = []
+trace = ["tracing/release_max_level_trace"]
