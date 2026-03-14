@@ -1,0 +1,9 @@
+{
+  "name": "hello_scene_custom",
+  "material_type": "lit",
+  "shader": {
+    "source": "file",
+    "path": "examples/hello_window/assets/shaders/custom_scene.wgsl"
+  },
+  "fallback_shader": "fallback"
+}

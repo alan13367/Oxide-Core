@@ -4,7 +4,7 @@ mod primitive;
 mod vertex;
 
 pub use primitive::*;
-pub use vertex::{Vertex, Vertex3D, triangle_vertices};
+pub use vertex::{triangle_vertices, Vertex, Vertex3D};
 
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device};
 
@@ -29,10 +29,15 @@ impl Mesh3D {
         Self::create(device, &vertices, &indices, Some("Sphere"))
     }
 
-    fn create(device: &Device, vertices: &[Vertex3D], indices: &[u16], label: Option<&str>) -> Self {
+    fn create(
+        device: &Device,
+        vertices: &[Vertex3D],
+        indices: &[u16],
+        label: Option<&str>,
+    ) -> Self {
         let vertex_buffer = device.create_buffer(&BufferDescriptor {
             label: label.map(|l| format!("{} Vertex Buffer", l)).as_deref(),
-            size: (vertices.len() * std::mem::size_of::<Vertex3D>()) as wgpu::BufferAddress,
+            size: std::mem::size_of_val(vertices) as wgpu::BufferAddress,
             usage: BufferUsages::VERTEX,
             mapped_at_creation: true,
         });
@@ -45,7 +50,7 @@ impl Mesh3D {
 
         let index_buffer = device.create_buffer(&BufferDescriptor {
             label: label.map(|l| format!("{} Index Buffer", l)).as_deref(),
-            size: (indices.len() * std::mem::size_of::<u16>()) as wgpu::BufferAddress,
+            size: std::mem::size_of_val(indices) as wgpu::BufferAddress,
             usage: BufferUsages::INDEX,
             mapped_at_creation: true,
         });
@@ -75,7 +80,7 @@ impl Mesh {
 
         let vertex_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Triangle Vertex Buffer"),
-            size: (vertices.len() * std::mem::size_of::<Vertex>()) as wgpu::BufferAddress,
+            size: std::mem::size_of_val(&vertices) as wgpu::BufferAddress,
             usage: BufferUsages::VERTEX,
             mapped_at_creation: true,
         });

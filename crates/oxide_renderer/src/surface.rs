@@ -1,8 +1,8 @@
 //! Surface configuration and management
 
 use wgpu::{
-    PresentMode, Surface, SurfaceConfiguration, SurfaceError, SurfaceTexture,
-    TextureFormat, TextureUsages,
+    PresentMode, Surface, SurfaceConfiguration, SurfaceError, SurfaceTexture, TextureFormat,
+    TextureUsages,
 };
 
 pub struct SurfaceState {

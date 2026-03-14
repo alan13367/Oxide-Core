@@ -36,14 +36,17 @@ pub fn cube_vertices() -> Vec<Vertex3D> {
         ([-0.5, 0.5, -0.5], [-1.0, 0.0, 0.0], [0.0, 0.0]),
     ];
 
-    positions.iter().map(|(p, n, uv)| Vertex3D::new(*p, *n, *uv)).collect()
+    positions
+        .iter()
+        .map(|(p, n, uv)| Vertex3D::new(*p, *n, *uv))
+        .collect()
 }
 
 pub fn cube_indices() -> Vec<u16> {
     vec![
-        0, 1, 2, 2, 3, 0,       // front
-        4, 5, 6, 6, 7, 4,       // back
-        8, 9, 10, 10, 11, 8,    // top
+        0, 1, 2, 2, 3, 0, // front
+        4, 5, 6, 6, 7, 4, // back
+        8, 9, 10, 10, 11, 8, // top
         12, 13, 14, 14, 15, 12, // bottom
         16, 17, 18, 18, 19, 16, // right
         20, 21, 22, 22, 23, 20, // left

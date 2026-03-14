@@ -42,6 +42,12 @@ pub struct AppRunner<T: App> {
     window: Option<Window>,
 }
 
+impl<T: App> Default for AppRunner<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: App> AppRunner<T> {
     pub fn new() -> Self {
         Self {
@@ -52,7 +58,9 @@ impl<T: App> AppRunner<T> {
 
     pub fn run(mut self) {
         let event_loop = EventLoop::new().expect("Failed to create event loop");
-        event_loop.run_app(&mut self).expect("Failed to run event loop");
+        event_loop
+            .run_app(&mut self)
+            .expect("Failed to run event loop");
     }
 }
 
@@ -121,7 +129,8 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
             WindowEvent::CursorEntered { .. } => {
                 if let (Some(app), Some(window)) = (self.app.as_mut(), self.window.as_ref()) {
                     let size = window.size();
-                    let center = PhysicalPosition::new(size.width as f64 * 0.5, size.height as f64 * 0.5);
+                    let center =
+                        PhysicalPosition::new(size.width as f64 * 0.5, size.height as f64 * 0.5);
 
                     if let Err(err) = window.set_cursor_position(center) {
                         tracing::warn!("Failed to recenter cursor: {err}");

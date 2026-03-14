@@ -1,12 +1,12 @@
 //! Interactive Scene - 3D demo with FPS camera controls
 
+use std::path::Path;
 use std::sync::Arc;
 
 use oxide_engine::prelude::*;
 
 struct InteractiveScene {
     world: World,
-    window: Window,
     pipeline: wgpu::RenderPipeline,
     camera_buffer: CameraBuffer,
     cube_mesh: Mesh3D,
@@ -29,28 +29,87 @@ impl App for InteractiveScene {
         world.insert_resource(KeyboardInput::default());
         world.insert_resource(MouseInput::default());
         world.insert_resource(RendererResource::new(renderer));
-        world.insert_resource(WindowResource::new(window.size().width, window.size().height));
+        world.insert_resource(WindowResource::new(
+            window.size().width,
+            window.size().height,
+        ));
 
         // Spawn camera entity
         world.spawn((
             CameraComponent::new(),
-            CameraController::new().with_speed(3.0).with_sensitivity(0.003),
+            CameraController::new()
+                .with_speed(3.0)
+                .with_sensitivity(0.003),
         ));
+
+        // Setup Hot Reload Watcher for dev profile
+        #[cfg(debug_assertions)]
+        if let Ok(watcher) = AssetWatcher::new("examples/hello_window/assets") {
+            tracing::info!("Asset watcher initialized for hot-reloading");
+            world.insert_non_send_resource(watcher);
+        }
 
         let renderer_res = world.resource::<RendererResource>();
         let device = &renderer_res.renderer.device;
 
-        // Create shader and pipeline
-        let shader = create_shader(device, LIT_SHADER, Some("Lit Shader"));
+        // Create camera buffer and material pipeline (descriptor + fallback flow)
         let camera_buffer = CameraBuffer::new(device);
-        let pipeline = create_lit_pipeline(device, &shader, renderer_res.renderer.format(), &camera_buffer.bind_group_layout);
+        let descriptor_path = Path::new("examples/hello_window/assets/materials/scene_lit.json");
+
+        let material = match load_material_descriptor(descriptor_path) {
+            Ok(descriptor) => match MaterialPipeline::from_descriptor(
+                device,
+                renderer_res.renderer.format(),
+                &camera_buffer.bind_group_layout,
+                &descriptor,
+            ) {
+                Ok(material) => material,
+                Err(err) => {
+                    tracing::warn!(
+                        "Failed to build descriptor material '{}', using built-in fallback: {}",
+                        descriptor.name,
+                        err
+                    );
+                    MaterialPipeline::from_builtin(
+                        device,
+                        renderer_res.renderer.format(),
+                        &camera_buffer.bind_group_layout,
+                        BuiltinShader::Fallback,
+                        MaterialType::Lit,
+                        "hello_window_fallback",
+                    )
+                }
+            },
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to load material descriptor '{}', using built-in fallback: {}",
+                    descriptor_path.display(),
+                    err
+                );
+
+                MaterialPipeline::from_builtin(
+                    device,
+                    renderer_res.renderer.format(),
+                    &camera_buffer.bind_group_layout,
+                    BuiltinShader::Fallback,
+                    MaterialType::Lit,
+                    "hello_window_fallback",
+                )
+            }
+        };
+        let pipeline = material.pipeline;
 
         // Create meshes
         let cube_mesh = Mesh3D::new_cube(device);
         let sphere_mesh = Mesh3D::new_sphere(device, 16, 16);
 
         // Create depth texture
-        let depth_texture = DepthTexture::new(device, window.size().width, window.size().height, Some("Depth Texture"));
+        let depth_texture = DepthTexture::new(
+            device,
+            window.size().width,
+            window.size().height,
+            Some("Depth Texture"),
+        );
 
         tracing::info!(
             "Interactive scene initialized: {}x{}",
@@ -61,7 +120,6 @@ impl App for InteractiveScene {
 
         Self {
             world,
-            window: window.clone(),
             pipeline,
             camera_buffer,
             cube_mesh,
@@ -79,6 +137,31 @@ impl App for InteractiveScene {
     }
 
     fn update(&mut self) {
+        #[cfg(debug_assertions)]
+        if let Some(mut watcher) = self.world.get_non_send_resource_mut::<AssetWatcher>() {
+            let changed = watcher.poll_changed_files();
+            if !changed.is_empty() {
+                tracing::info!("Assets changed, attempting hot reload: {:?}", changed);
+                // Simple implementation: reload the main material pipeline
+                let descriptor_path =
+                    Path::new("examples/hello_window/assets/materials/scene_lit.json");
+                let renderer_res = self.world.resource::<RendererResource>();
+                let device = &renderer_res.renderer.device;
+
+                if let Ok(descriptor) = load_material_descriptor(descriptor_path) {
+                    if let Ok(material) = MaterialPipeline::from_descriptor(
+                        device,
+                        renderer_res.renderer.format(),
+                        &self.camera_buffer.bind_group_layout,
+                        &descriptor,
+                    ) {
+                        tracing::info!("Successfully hot-reloaded material '{}'", descriptor.name);
+                        self.pipeline = material.pipeline;
+                    }
+                }
+            }
+        }
+
         // Store key states to avoid borrow checker issues
         let (w, s, a, d, space, shift) = {
             let keyboard = self.world.resource::<KeyboardInput>();
@@ -91,32 +174,50 @@ impl App for InteractiveScene {
                 keyboard.pressed(KeyCode::ShiftLeft),
             )
         };
-        
+
         let (dx, dy) = {
             let mouse = self.world.resource::<MouseInput>();
             mouse.delta()
         };
 
-        let mut query = self.world.query::<(&mut CameraController, &mut CameraComponent)>();
-        
+        let mut query = self
+            .world
+            .query::<(&mut CameraController, &mut CameraComponent)>();
+
         for (mut controller, mut camera_comp) in query.iter_mut(&mut self.world) {
             let camera = &mut camera_comp.0;
-            
+
             controller.yaw -= dx * controller.sensitivity;
             controller.pitch -= dy * controller.sensitivity;
-            controller.pitch = controller.pitch.clamp(-std::f32::consts::FRAC_PI_2 + 0.01, std::f32::consts::FRAC_PI_2 - 0.01);
+            controller.pitch = controller.pitch.clamp(
+                -std::f32::consts::FRAC_PI_2 + 0.01,
+                std::f32::consts::FRAC_PI_2 - 0.01,
+            );
 
-            let rotation = Quat::from_rotation_y(controller.yaw) * Quat::from_rotation_x(controller.pitch);
+            let rotation =
+                Quat::from_rotation_y(controller.yaw) * Quat::from_rotation_x(controller.pitch);
             let forward = rotation * Vec3::NEG_Z;
             let right = rotation * Vec3::X;
 
             let mut velocity = Vec3::ZERO;
-            if w { velocity += forward; }
-            if s { velocity -= forward; }
-            if a { velocity -= right; }
-            if d { velocity += right; }
-            if space { velocity += Vec3::Y; }
-            if shift { velocity -= Vec3::Y; }
+            if w {
+                velocity += forward;
+            }
+            if s {
+                velocity -= forward;
+            }
+            if a {
+                velocity -= right;
+            }
+            if d {
+                velocity += right;
+            }
+            if space {
+                velocity += Vec3::Y;
+            }
+            if shift {
+                velocity -= Vec3::Y;
+            }
 
             if velocity != Vec3::ZERO {
                 camera.position += velocity.normalize() * controller.speed * 0.016;
@@ -156,11 +257,15 @@ impl App for InteractiveScene {
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         // Update camera uniform
-        let aspect_ratio = if height > 0 { width as f32 / height as f32 } else { 1.0 };
-        
+        let aspect_ratio = if height > 0 {
+            width as f32 / height as f32
+        } else {
+            1.0
+        };
+
         {
             let mut query = self.world.query::<(&CameraComponent, &CameraController)>();
-            
+
             if let Some((camera_comp, _)) = query.iter(&self.world).next() {
                 let camera = &camera_comp.0;
                 let mut uniform = CameraUniform::new();
@@ -170,8 +275,8 @@ impl App for InteractiveScene {
         }
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
+            label: Some("Render Encoder"),
+        });
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -211,12 +316,18 @@ impl App for InteractiveScene {
 
             // Draw cubes
             render_pass.set_vertex_buffer(0, self.cube_mesh.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.cube_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            render_pass.set_index_buffer(
+                self.cube_mesh.index_buffer.slice(..),
+                wgpu::IndexFormat::Uint16,
+            );
             render_pass.draw_indexed(0..self.cube_mesh.index_count, 0, 0..6);
 
             // Draw spheres
             render_pass.set_vertex_buffer(0, self.sphere_mesh.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.sphere_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            render_pass.set_index_buffer(
+                self.sphere_mesh.index_buffer.slice(..),
+                wgpu::IndexFormat::Uint16,
+            );
             render_pass.draw_indexed(0..self.sphere_mesh.index_count, 0, 6..10);
         }
 

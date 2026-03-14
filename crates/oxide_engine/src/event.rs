@@ -18,7 +18,9 @@ pub fn window_event_to_engine(event: &WindowEvent) -> Option<EngineEvent> {
             height: size.height,
         }),
         WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-            Some(EngineEvent::ScaleFactorChanged { scale_factor: *scale_factor })
+            Some(EngineEvent::ScaleFactorChanged {
+                scale_factor: *scale_factor,
+            })
         }
         WindowEvent::CloseRequested => Some(EngineEvent::CloseRequested),
         WindowEvent::Destroyed => Some(EngineEvent::Destroyed),

@@ -34,7 +34,17 @@ impl Transform {
     pub fn look_at(&mut self, target: Vec3, up: Vec3) {
         let forward = (target - self.position).normalize_or_zero();
         if forward != Vec3::ZERO {
-            self.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, forward);
+            // Calculate a proper orientation using the provided `up` vector
+            let right = up.cross(forward).normalize_or_zero();
+            let new_up = forward.cross(right).normalize_or_zero();
+
+            if right != Vec3::ZERO && new_up != Vec3::ZERO {
+                let m = glam::Mat3::from_cols(right, new_up, forward);
+                self.rotation = Quat::from_mat3(&m);
+            } else {
+                // Fallback if looking directly along the up vector
+                self.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, forward);
+            }
         }
     }
 

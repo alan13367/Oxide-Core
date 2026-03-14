@@ -47,7 +47,10 @@ impl Window {
         self.inner.set_cursor_visible(visible);
     }
 
-    pub fn set_cursor_position(&self, position: PhysicalPosition<f64>) -> Result<(), winit::error::ExternalError> {
+    pub fn set_cursor_position(
+        &self,
+        position: PhysicalPosition<f64>,
+    ) -> Result<(), winit::error::ExternalError> {
         self.inner.set_cursor_position(position)
     }
 

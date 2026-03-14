@@ -1,0 +1,9 @@
+{
+  "name": "hello_scene_lit",
+  "material_type": "lit",
+  "shader": {
+    "source": "builtin",
+    "shader": "lit"
+  },
+  "fallback_shader": "fallback"
+}

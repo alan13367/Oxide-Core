@@ -11,9 +11,10 @@ pub mod input;
 pub mod prelude;
 pub mod scene;
 pub mod time;
+pub mod watcher;
 pub mod window;
 
-pub use oxide_renderer as renderer;
 pub use oxide_math as math;
+pub use oxide_renderer as renderer;
 
 pub use bevy_ecs;

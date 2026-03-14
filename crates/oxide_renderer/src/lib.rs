@@ -2,7 +2,9 @@
 
 pub mod adapter;
 pub mod depth;
+pub mod descriptor;
 pub mod device;
+pub mod material;
 pub mod mesh;
 pub mod pipeline;
 pub mod prelude;
@@ -41,7 +43,9 @@ impl Renderer {
     pub async fn new(window: Arc<winit::window::Window>) -> Result<Self, RendererError> {
         let instance = Arc::new(create_instance());
 
-        let surface = instance.create_surface(window.clone()).expect("Failed to create surface");
+        let surface = instance
+            .create_surface(window.clone())
+            .expect("Failed to create surface");
 
         let adapter = Arc::new(adapter::request_adapter(&instance, Some(&surface)).await?);
 

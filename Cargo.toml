@@ -5,12 +5,15 @@ members = [
     "crates/oxide_renderer",
     "crates/oxide_math",
     "examples/hello_window",
+    "examples/unlit_example",
+    "examples/sky_gradient_example",
+    "examples/sprite_ui_example",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.94"
 authors = ["Oxide Core Contributors"]
 license = "MIT OR Apache-2.0"
 
@@ -18,11 +21,13 @@ license = "MIT OR Apache-2.0"
 wgpu = "28.0.0"
 winit = "0.30"
 glam = "0.32.1"
-bevy_ecs = "0.16.1"
+bevy_ecs = "0.18.1"
 bytemuck = { version = "1.21", features = ["derive"] }
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [profile.dev]
 opt-level = 1

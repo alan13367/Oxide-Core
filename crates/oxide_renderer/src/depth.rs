@@ -11,7 +11,11 @@ impl DepthTexture {
     pub fn new(device: &Device, width: u32, height: u32, label: Option<&str>) -> Self {
         let texture = device.create_texture(&TextureDescriptor {
             label,
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,

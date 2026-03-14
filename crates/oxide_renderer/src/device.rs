@@ -7,7 +7,9 @@ pub struct DeviceQueue {
     pub queue: Queue,
 }
 
-pub async fn request_device(adapter: &wgpu::Adapter) -> Result<DeviceQueue, wgpu::RequestDeviceError> {
+pub async fn request_device(
+    adapter: &wgpu::Adapter,
+) -> Result<DeviceQueue, wgpu::RequestDeviceError> {
     let (device, queue) = adapter
         .request_device(&DeviceDescriptor {
             label: Some("Oxide Core Device"),

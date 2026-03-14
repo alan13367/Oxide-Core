@@ -1,0 +1,10 @@
+[package]
+name = "unlit_example"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+oxide_engine = { path = "../../crates/oxide_engine" }
+wgpu.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
