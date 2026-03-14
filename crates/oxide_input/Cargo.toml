@@ -1,0 +1,12 @@
+[package]
+name = "oxide_input"
+description = "Oxide Core keyboard and mouse input primitives"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_ecs.workspace = true
+winit.workspace = true

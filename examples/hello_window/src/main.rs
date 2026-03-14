@@ -175,7 +175,7 @@ impl App for InteractiveScene {
 
     fn update(&mut self) {
         #[cfg(debug_assertions)]
-        if let Some(mut watcher) = self.world.get_non_send_resource_mut::<AssetWatcher>() {
+        if let Some(watcher) = self.world.get_non_send_resource_mut::<AssetWatcher>() {
             let changed = watcher.poll_changed_files();
             if !changed.is_empty() {
                 tracing::info!("Assets changed, attempting hot reload: {:?}", changed);
@@ -225,7 +225,7 @@ impl App for InteractiveScene {
             .world
             .query::<(&mut CameraController, &mut CameraComponent)>();
 
-        for (mut controller, mut camera_comp) in query.iter_mut(&mut self.world) {
+        for (controller, camera_comp) in query.iter_mut(&mut self.world) {
             let camera = &mut camera_comp.0;
 
             controller.yaw -= dx * controller.sensitivity;
@@ -268,8 +268,7 @@ impl App for InteractiveScene {
         }
     }
 
-    fn render(&mut self) {
-        // Get window info first
+    fn prepare(&mut self) {
         let (width, height) = {
             let window_res = self.world.resource::<WindowResource>();
             (window_res.width, window_res.height)
@@ -282,20 +281,6 @@ impl App for InteractiveScene {
                 Arc::clone(&renderer.renderer.queue),
             )
         };
-
-        let surface_texture: wgpu::SurfaceTexture = match self
-            .world
-            .resource::<RendererResource>()
-            .renderer
-            .begin_frame()
-        {
-            Ok(t) => t,
-            Err(_) => return,
-        };
-
-        let view = surface_texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
 
         // Update camera uniform
         let aspect_ratio = if height > 0 {
@@ -315,45 +300,44 @@ impl App for InteractiveScene {
             }
         }
 
-        // Update light buffer from ECS world
-        self.light_buffer.update(&queue, &mut self.world);
+        self.light_buffer.update(&device, &queue, &mut self.world);
+    }
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
-
+    fn queue(&mut self, frame: &mut RenderFrame) {
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Main Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.07,
-                            g: 0.09,
-                            b: 0.14,
-                            a: 1.0,
+            let mut render_pass = frame
+                .encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Main Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &frame.view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.07,
+                                g: 0.09,
+                                b: 0.14,
+                                a: 1.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.depth_texture.view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
                         }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture.view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
+                        stencil_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(0),
+                            store: wgpu::StoreOp::Store,
+                        }),
                     }),
-                    stencil_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
 
             render_pass.set_pipeline(&self.pipeline);
             render_pass.set_bind_group(0, &self.camera_buffer.bind_group, &[]);
@@ -378,9 +362,6 @@ impl App for InteractiveScene {
             );
             render_pass.draw_indexed(0..self.sphere_mesh.index_count, 0, 6..10);
         }
-
-        queue.submit(vec![encoder.finish()]);
-        surface_texture.present();
     }
 
     fn on_event(&mut self, event: EngineEvent) {
@@ -388,11 +369,11 @@ impl App for InteractiveScene {
             EngineEvent::Resized { width, height } => {
                 if width > 0 && height > 0 {
                     tracing::info!("Window resized: {}x{}", width, height);
-                    let mut window_res = self.world.resource_mut::<WindowResource>();
+                    let window_res = self.world.resource_mut::<WindowResource>();
                     window_res.update(width, height);
 
                     let renderer_device = {
-                        let mut renderer = self.world.resource_mut::<RendererResource>();
+                        let renderer = self.world.resource_mut::<RendererResource>();
                         renderer.renderer.resize(width, height);
                         Arc::clone(&renderer.renderer.device)
                     };
@@ -416,5 +397,5 @@ fn main() {
     tracing::info!("  Mouse - Look around");
     tracing::info!("  Space - Move up");
     tracing::info!("  Shift - Move down");
-    run_app::<InteractiveScene>();
+    app::<InteractiveScene>().run();
 }

@@ -13,10 +13,7 @@ use crate::mesh::Vertex3D;
 #[derive(thiserror::Error, Debug)]
 pub enum GltfError {
     #[error("Failed to load glTF file '{path}': {source}")]
-    Load {
-        path: String,
-        source: gltf::Error,
-    },
+    Load { path: String, source: gltf::Error },
     #[error("Failed to read glTF buffers: {0}")]
     Buffer(String),
     #[error("Primitive mode {0:?} is not supported. Only triangles are supported.")]

@@ -1,7 +1,7 @@
 //! FPS-style camera controller
 
-use oxide_ecs::Component;
 use glam::Vec3;
+use oxide_ecs::Component;
 
 use crate::ecs::World;
 use crate::input::{KeyboardInput, MouseInput};
@@ -66,9 +66,7 @@ impl CameraController {
     }
 }
 
-pub fn camera_controller_system(
-    world: &mut World,
-) {
+pub fn camera_controller_system(world: &mut World) {
     use winit::keyboard::KeyCode;
 
     let (w, s, a, d, space, shift, dx, dy) = {

@@ -16,7 +16,13 @@ impl FallbackTexture {
         // 1x1 RGBA white pixel
         let bytes: [u8; 4] = [255, 255, 255, 255];
 
-        let texture = Texture::from_bytes(device, queue, &bytes, (1, 1), Some("Fallback White Texture"));
+        let texture = Texture::from_bytes(
+            device,
+            queue,
+            &bytes,
+            (1, 1),
+            Some("Fallback White Texture"),
+        );
 
         Self { texture }
     }

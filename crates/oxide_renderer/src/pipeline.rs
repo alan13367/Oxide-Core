@@ -10,25 +10,9 @@ use wgpu::{
 use crate::mesh::{Vertex, Vertex3D};
 
 pub fn create_shader(device: &Device, source: &str, label: Option<&str>) -> ShaderModule {
-    // Basic bind-group validation via naga reflection
+    // Parse once to surface syntax issues early in logs before pipeline creation.
     match naga::front::wgsl::parse_str(source) {
-        Ok(module) => {
-            let mut has_camera_bind_group = false;
-            for (_, var) in module.global_variables.iter() {
-                if let Some(binding) = &var.binding {
-                    if binding.group == 0 {
-                        has_camera_bind_group = true;
-                        break;
-                    }
-                }
-            }
-            if !has_camera_bind_group {
-                tracing::warn!(
-                    "Shader '{}' validation warning: missing camera bind group (Group 0). It may not render correctly in Lit or Unlit pipelines.",
-                    label.unwrap_or("unnamed")
-                );
-            }
-        }
+        Ok(_) => {}
         Err(e) => {
             tracing::warn!(
                 "Failed to parse WGSL source for '{}' during validation: {:?}",

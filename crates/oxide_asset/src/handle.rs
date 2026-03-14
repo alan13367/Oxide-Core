@@ -19,9 +19,7 @@ impl<T> Copy for Handle<T> {}
 
 impl<T> std::fmt::Debug for Handle<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Handle")
-            .field("id", &self.id)
-            .finish()
+        f.debug_struct("Handle").field("id", &self.id).finish()
     }
 }
 

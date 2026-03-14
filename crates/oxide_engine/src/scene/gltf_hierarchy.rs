@@ -1,13 +1,12 @@
 //! glTF scene hierarchy spawning utilities
 
-use oxide_ecs::Component;
 use oxide_ecs::entity::Entity;
 use oxide_ecs::world::World;
+use oxide_ecs::Component;
 use oxide_renderer::gltf::{GltfNode, GltfScene};
+use oxide_transform::{attach_child, GlobalTransform, TransformComponent};
 
 use oxide_math::transform::Transform;
-
-use super::{Children, GlobalTransform, Parent, TransformComponent};
 
 /// Component storing the source glTF mesh index for an entity.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,13 +42,7 @@ fn spawn_gltf_node(world: &mut World, node: &GltfNode, parent: Option<Entity>) -
     let entity = entity_builder.id();
 
     if let Some(parent_entity) = parent {
-        world.entity_mut(entity).insert(Parent(parent_entity));
-
-        if let Some(children) = world.get_mut::<Children>(parent_entity) {
-            children.push(entity);
-        } else {
-            world.entity_mut(parent_entity).insert(Children::with(vec![entity]));
-        }
+        attach_child(world, parent_entity, entity);
     }
 
     for child in &node.children {
@@ -63,6 +56,7 @@ fn spawn_gltf_node(world: &mut World, node: &GltfNode, parent: Option<Entity>) -
 mod tests {
     use super::*;
     use glam::{Quat, Vec3};
+    use oxide_transform::{Children, Parent};
 
     #[test]
     fn gltf_hierarchy_spawns_parent_child_relationships() {

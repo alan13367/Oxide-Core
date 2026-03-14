@@ -4,7 +4,7 @@ pub use crate::depth::DepthTexture;
 pub use crate::descriptor::{
     load_material_descriptor, MaterialDescriptor, MaterialType, ShaderDescriptor,
 };
-pub use crate::gltf::{GltfError, GltfNode, GltfScene, load_gltf};
+pub use crate::gltf::{load_gltf, GltfError, GltfNode, GltfScene};
 pub use crate::material::{get_material_bind_group_layout, MaterialError, MaterialPipeline};
 pub use crate::mesh::{
     cube_indices, cube_vertices, sphere_indices, sphere_vertices, triangle_vertices, Mesh, Mesh3D,

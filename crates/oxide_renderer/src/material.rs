@@ -67,6 +67,7 @@ pub fn get_material_bind_group_layout(device: &Device) -> &'static BindGroupLayo
 }
 
 impl MaterialPipeline {
+    #[allow(clippy::too_many_arguments)]
     pub fn from_builtin(
         device: &Device,
         queue: &wgpu::Queue,
@@ -149,6 +150,7 @@ impl MaterialPipeline {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn from_source(
         device: &Device,
         queue: &wgpu::Queue,
@@ -206,6 +208,7 @@ impl MaterialPipeline {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn from_source_with_fallback(
         device: &Device,
         queue: &wgpu::Queue,
@@ -267,12 +270,12 @@ impl MaterialPipeline {
 
         // Load albedo texture if provided
         let albedo_texture = if let Some(path) = &descriptor.albedo_texture {
-            Some(
-                Texture::from_file(device, queue, path).map_err(|source| MaterialError::TextureLoad {
+            Some(Texture::from_file(device, queue, path).map_err(|source| {
+                MaterialError::TextureLoad {
                     path: path.clone(),
                     source,
-                })?,
-            )
+                }
+            })?)
         } else {
             None
         };

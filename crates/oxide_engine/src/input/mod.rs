@@ -1,7 +1,3 @@
-//! Input module - keyboard and mouse handling
+//! Compatibility facade for input APIs.
 
-mod keyboard;
-mod mouse;
-
-pub use keyboard::*;
-pub use mouse::*;
+pub use oxide_input::*;

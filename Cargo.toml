@@ -5,8 +5,10 @@ members = [
     "crates/oxide_ecs",
     "crates/oxide_ecs_derive",
     "crates/oxide_engine",
+    "crates/oxide_input",
     "crates/oxide_renderer",
     "crates/oxide_math",
+    "crates/oxide_transform",
     "examples/hello_window",
     "examples/unlit_example",
     "examples/sky_gradient_example",
@@ -27,6 +29,8 @@ glam = "0.32.1"
 oxide_ecs = { path = "crates/oxide_ecs" }
 oxide_ecs_derive = { path = "crates/oxide_ecs_derive" }
 oxide_asset = { path = "crates/oxide_asset" }
+oxide_input = { path = "crates/oxide_input" }
+oxide_transform = { path = "crates/oxide_transform" }
 bytemuck = { version = "1.21", features = ["derive"] }
 thiserror = "2.0"
 tracing = "0.1"

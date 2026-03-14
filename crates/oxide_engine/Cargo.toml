@@ -10,6 +10,8 @@ license.workspace = true
 [dependencies]
 oxide_renderer = { path = "../oxide_renderer" }
 oxide_math = { path = "../oxide_math" }
+oxide_transform.workspace = true
+oxide_input.workspace = true
 oxide_ecs.workspace = true
 oxide_asset.workspace = true
 wgpu.workspace = true

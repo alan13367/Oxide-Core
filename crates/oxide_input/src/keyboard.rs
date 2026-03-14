@@ -1,5 +1,3 @@
-//! Keyboard input handling
-
 use std::collections::HashSet;
 
 use oxide_ecs::Resource;
@@ -29,6 +27,8 @@ impl KeyboardInput {
         self.just_released.clear();
     }
 
+    /// Processes a keyboard event using winit's physical key mapping.
+    /// Physical keys keep positional bindings stable across keyboard layouts.
     pub fn process_event(&mut self, key: PhysicalKey, pressed: bool) {
         if let PhysicalKey::Code(code) = key {
             if pressed && !self.keys.contains(&code) {

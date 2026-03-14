@@ -9,3 +9,10 @@ license.workspace = true
 
 [dependencies]
 oxide_ecs_derive.workspace = true
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "component_iteration"
+harness = false

@@ -1,4 +1,7 @@
-//! Application trait and entry point
+//! Application trait and engine entry points.
+
+use std::marker::PhantomData;
+use std::sync::Arc;
 
 use winit::{
     application::ApplicationHandler,
@@ -11,6 +14,7 @@ use winit::{
 use crate::ecs::{Time, World};
 use crate::event::{window_event_to_engine, EngineEvent};
 use crate::input::{KeyboardInput, MouseInput};
+use crate::render::RenderFrame;
 use crate::ui::{handle_egui_event, EguiManager};
 use crate::window::Window;
 use oxide_renderer::Renderer;
@@ -27,13 +31,45 @@ pub struct PostUpdate;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Render;
 
+pub type SystemFn = fn(&mut World);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AppStage {
+    PreUpdate,
+    Update,
+    PostUpdate,
+    Extract,
+    Prepare,
+}
+
+#[derive(Default, Clone)]
+struct RunnerSystems {
+    pre_update: Vec<SystemFn>,
+    update: Vec<SystemFn>,
+    post_update: Vec<SystemFn>,
+    extract: Vec<SystemFn>,
+    prepare: Vec<SystemFn>,
+}
+
+impl RunnerSystems {
+    fn run(stage_systems: &[SystemFn], world: &mut World) {
+        for system in stage_systems {
+            system(world);
+        }
+    }
+}
+
 pub trait App: 'static {
     fn configure(world: &mut World);
     fn init(window: &Window, renderer: Renderer) -> Self;
     fn world(&self) -> &World;
     fn world_mut(&mut self) -> &mut World;
+
     fn update(&mut self);
-    fn render(&mut self);
+    fn extract(&mut self) {}
+    fn prepare(&mut self) {}
+    fn queue(&mut self, _frame: &mut RenderFrame) {}
+
     fn on_event(&mut self, event: EngineEvent);
 
     /// Returns the egui manager if the app integrates editor/debug UI.
@@ -42,9 +78,46 @@ pub trait App: 'static {
     }
 }
 
+pub struct AppBuilder<T: App> {
+    systems: RunnerSystems,
+    _marker: PhantomData<T>,
+}
+
+impl<T: App> Default for AppBuilder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: App> AppBuilder<T> {
+    pub fn new() -> Self {
+        Self {
+            systems: RunnerSystems::default(),
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn add_system(mut self, stage: AppStage, system: SystemFn) -> Self {
+        match stage {
+            AppStage::PreUpdate => self.systems.pre_update.push(system),
+            AppStage::Update => self.systems.update.push(system),
+            AppStage::PostUpdate => self.systems.post_update.push(system),
+            AppStage::Extract => self.systems.extract.push(system),
+            AppStage::Prepare => self.systems.prepare.push(system),
+        }
+        self
+    }
+
+    pub fn run(self) {
+        let runner = AppRunner::<T>::with_systems(self.systems);
+        runner.run();
+    }
+}
+
 pub struct AppRunner<T: App> {
     app: Option<T>,
     window: Option<Window>,
+    systems: RunnerSystems,
 }
 
 impl<T: App> Default for AppRunner<T> {
@@ -55,9 +128,14 @@ impl<T: App> Default for AppRunner<T> {
 
 impl<T: App> AppRunner<T> {
     pub fn new() -> Self {
+        Self::with_systems(RunnerSystems::default())
+    }
+
+    fn with_systems(systems: RunnerSystems) -> Self {
         Self {
             app: None,
             window: None,
+            systems,
         }
     }
 
@@ -123,8 +201,40 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
                         keyboard.update();
                     }
 
+                    RunnerSystems::run(&self.systems.pre_update, app.world_mut());
                     app.update();
-                    app.render();
+                    RunnerSystems::run(&self.systems.update, app.world_mut());
+                    RunnerSystems::run(&self.systems.post_update, app.world_mut());
+
+                    app.extract();
+                    RunnerSystems::run(&self.systems.extract, app.world_mut());
+
+                    app.prepare();
+                    RunnerSystems::run(&self.systems.prepare, app.world_mut());
+
+                    let frame_parts = {
+                        let renderer = &app
+                            .world()
+                            .resource::<crate::ecs::RendererResource>()
+                            .renderer;
+                        match renderer.begin_frame() {
+                            Ok(surface_texture) => Some((
+                                surface_texture,
+                                Arc::clone(&renderer.device),
+                                Arc::clone(&renderer.queue),
+                            )),
+                            Err(err) => {
+                                tracing::warn!("Skipping render frame: {err}");
+                                None
+                            }
+                        }
+                    };
+
+                    if let Some((surface_texture, device, queue)) = frame_parts {
+                        let mut frame = RenderFrame::new(&device, surface_texture);
+                        app.queue(&mut frame);
+                        frame.present(&queue);
+                    }
 
                     {
                         let mouse = app.world_mut().resource_mut::<MouseInput>();
@@ -193,9 +303,12 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
     }
 }
 
+pub fn app<T: App>() -> AppBuilder<T> {
+    AppBuilder::new()
+}
+
 pub fn run_app<T: App>() {
-    let runner = AppRunner::<T>::new();
-    runner.run();
+    AppBuilder::<T>::new().run();
 }
 
 pub async fn create_renderer(window: &Window) -> Renderer {

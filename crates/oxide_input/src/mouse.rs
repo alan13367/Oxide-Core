@@ -1,5 +1,3 @@
-//! Mouse input handling
-
 use oxide_ecs::Resource;
 use winit::dpi::PhysicalPosition;
 

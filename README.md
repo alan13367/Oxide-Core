@@ -35,7 +35,7 @@ cargo run -p sprite_ui_example    # 2D Orthographic overlay material
 
 ## Usage
 
-Oxide Core uses a data-driven architecture powered by an Entity-Component-System (ECS). Applications are built by implementing the `App` trait.
+Oxide Core uses a data-driven architecture powered by an Entity-Component-System (ECS). Applications are built by implementing the `App` trait and launched with the fluent app builder.
 
 ### 1. Implement the `App` Trait
 
@@ -80,12 +80,18 @@ impl App for MyApp {
         // Query components and run logic...
     }
 
-    // 4. Submit draw calls via the renderer (called after update)
-    fn render(&mut self) {
-        // Build wgpu command encoders, render passes, and draw meshes
+    // 4. Extract transient render data from the main world
+    fn extract(&mut self) {}
+
+    // 5. Prepare GPU data (uniform/storage buffers, bind groups, etc.)
+    fn prepare(&mut self) {}
+
+    // 6. Queue draw calls into the engine-provided frame context
+    fn queue(&mut self, frame: &mut RenderFrame) {
+        // Build render passes using frame.encoder and frame.view
     }
 
-    // 5. Handle system and windowing events
+    // 7. Handle system and windowing events
     fn on_event(&mut self, event: EngineEvent) {
         if let EngineEvent::Resized { width, height } = event {
             // Resize renderer and depth textures
@@ -95,7 +101,9 @@ impl App for MyApp {
 
 fn main() {
     tracing_subscriber::fmt::init();
-    run_app::<MyApp>(); // Bootstrap the event loop
+    app::<MyApp>()
+        .add_system(AppStage::PreUpdate, camera_controller_system)
+        .run();
 }
 ```
 
@@ -132,9 +140,11 @@ See `docs/shader_material_roadmap.md` for roadmap, implementation status, and AP
 | Crate | Description |
 |-------|-------------|
 | `oxide_engine` | Facade crate exposing prelude and high-level engine APIs |
+| `oxide_input` | Layout-stable keyboard/mouse input resources (`PhysicalKey`-based) |
 | `oxide_ecs` | Custom ECS runtime (world, entities, storage, resources, queries) |
 | `oxide_ecs_derive` | Proc-macro derives for ECS traits (`Component`, `Resource`, `ScheduleLabel`) |
 | `oxide_asset` | Asset handles and runtime mesh cache primitives |
+| `oxide_transform` | Transform + hierarchy components and dirty-aware propagation |
 | `oxide_renderer` | Low-level wgpu rendering abstraction and material descriptors |
 | `oxide_math` | Math types and utilities leveraging `glam` |
 

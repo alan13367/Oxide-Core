@@ -151,20 +151,111 @@ pub mod world {
     }
 
     struct Storage<T: Component> {
-        data: HashMap<Entity, T>,
+        sparse: Vec<Option<usize>>,
+        dense_entities: Vec<Entity>,
+        dense_data: Vec<T>,
     }
 
     impl<T: Component> Default for Storage<T> {
         fn default() -> Self {
             Self {
-                data: HashMap::new(),
+                sparse: Vec::new(),
+                dense_entities: Vec::new(),
+                dense_data: Vec::new(),
             }
+        }
+    }
+
+    impl<T: Component> Storage<T> {
+        fn ensure_sparse_capacity(&mut self, entity: Entity) {
+            let index = entity.index as usize;
+            if self.sparse.len() <= index {
+                self.sparse.resize(index + 1, None);
+            }
+        }
+
+        fn insert(&mut self, entity: Entity, component: T) {
+            self.ensure_sparse_capacity(entity);
+            let index = entity.index as usize;
+
+            if let Some(dense_index) = self.sparse[index] {
+                if self.dense_entities.get(dense_index).copied() == Some(entity) {
+                    self.dense_data[dense_index] = component;
+                    return;
+                }
+            }
+
+            let dense_index = self.dense_data.len();
+            self.dense_entities.push(entity);
+            self.dense_data.push(component);
+            self.sparse[index] = Some(dense_index);
+        }
+
+        fn get(&self, entity: Entity) -> Option<&T> {
+            let dense_index = self.sparse.get(entity.index as usize).copied().flatten()?;
+            if self.dense_entities.get(dense_index).copied() == Some(entity) {
+                self.dense_data.get(dense_index)
+            } else {
+                None
+            }
+        }
+
+        fn get_mut(&mut self, entity: Entity) -> Option<&mut T> {
+            let dense_index = self.sparse.get(entity.index as usize).copied().flatten()?;
+            if self.dense_entities.get(dense_index).copied() == Some(entity) {
+                self.dense_data.get_mut(dense_index)
+            } else {
+                None
+            }
+        }
+
+        fn get_mut_ptr(&mut self, entity: Entity) -> Option<*mut T> {
+            self.get_mut(entity).map(|value| value as *mut T)
+        }
+
+        fn remove(&mut self, entity: Entity) -> Option<T> {
+            let index = entity.index as usize;
+            let dense_index = self.sparse.get(index).copied().flatten()?;
+
+            if self.dense_entities.get(dense_index).copied() != Some(entity) {
+                return None;
+            }
+
+            self.sparse[index] = None;
+
+            let removed_entity = self.dense_entities.swap_remove(dense_index);
+            let removed_component = self.dense_data.swap_remove(dense_index);
+
+            debug_assert_eq!(removed_entity, entity);
+
+            if dense_index < self.dense_entities.len() {
+                let moved_entity = self.dense_entities[dense_index];
+                self.sparse[moved_entity.index as usize] = Some(dense_index);
+            }
+
+            Some(removed_component)
+        }
+
+        fn entities(&self) -> &[Entity] {
+            &self.dense_entities
+        }
+
+        fn values(&self) -> impl Iterator<Item = &T> {
+            self.dense_data.iter()
+        }
+
+        fn values_mut(&mut self) -> impl Iterator<Item = &mut T> {
+            self.dense_data.iter_mut()
+        }
+
+        fn contains_entity(&self, entity: Entity) -> bool {
+            self.get(entity).is_some()
         }
     }
 
     impl<T: Component> StorageDyn for Storage<T> {
         fn remove_entity(&mut self, entity: Entity) {
-            self.data.remove(&entity);
+            self.remove(entity);
         }
 
         fn as_any(&self) -> &dyn Any {
@@ -233,12 +324,18 @@ pub mod world {
         pub fn spawn<B: Bundle>(&mut self, bundle: B) -> EntityMut<'_> {
             let entity = self.alloc_entity();
             bundle.insert_into(self, entity);
-            EntityMut { world: self, entity }
+            EntityMut {
+                world: self,
+                entity,
+            }
         }
 
         pub fn entity_mut(&mut self, entity: Entity) -> EntityMut<'_> {
             assert!(self.contains(entity), "entity {:?} is not alive", entity);
-            EntityMut { world: self, entity }
+            EntityMut {
+                world: self,
+                entity,
+            }
         }
 
         pub fn contains(&self, entity: Entity) -> bool {
@@ -266,21 +363,21 @@ pub mod world {
             if !self.contains(entity) {
                 return None;
             }
-            self.storage::<T>()?.data.get(&entity)
+            self.storage::<T>()?.get(entity)
         }
 
         pub fn get_mut<T: Component>(&mut self, entity: Entity) -> Option<&mut T> {
             if !self.contains(entity) {
                 return None;
             }
-            self.storage_mut::<T>()?.data.get_mut(&entity)
+            self.storage_mut::<T>()?.get_mut(entity)
         }
 
         pub fn remove<T: Component>(&mut self, entity: Entity) -> Option<T> {
             if !self.contains(entity) {
                 return None;
             }
-            self.storage_mut::<T>()?.data.remove(&entity)
+            self.storage_mut::<T>()?.remove(entity)
         }
 
         pub fn insert_resource<T: 'static>(&mut self, value: T) {
@@ -353,7 +450,7 @@ pub mod world {
 
         fn insert_component<T: Component>(&mut self, entity: Entity, component: T) {
             assert!(self.contains(entity), "entity {:?} is not alive", entity);
-            self.ensure_storage::<T>().data.insert(entity, component);
+            self.ensure_storage::<T>().insert(entity, component);
         }
 
         fn ensure_storage<T: Component>(&mut self) -> &mut Storage<T> {
@@ -413,7 +510,7 @@ pub mod world {
         pub fn iter<'w>(&'w mut self, world: &'w World) -> impl Iterator<Item = &'w T> {
             world
                 .storage::<T>()
-                .map(|storage| storage.data.values())
+                .map(|storage| storage.values())
                 .into_iter()
                 .flatten()
         }
@@ -423,7 +520,7 @@ pub mod world {
         pub fn iter_mut<'w>(&'w mut self, world: &'w mut World) -> impl Iterator<Item = &'w mut T> {
             world
                 .storage_mut::<T>()
-                .map(|storage| storage.data.values_mut())
+                .map(|storage| storage.values_mut())
                 .into_iter()
                 .flatten()
         }
@@ -447,9 +544,7 @@ pub mod world {
             while self.index < self.entities.len() {
                 let entity = self.entities[self.index];
                 self.index += 1;
-                if let (Some(a), Some(b)) =
-                    (a_storage.data.get(&entity), b_storage.data.get(&entity))
-                {
+                if let (Some(a), Some(b)) = (a_storage.get(entity), b_storage.get(entity)) {
                     return Some((a, b));
                 }
             }
@@ -479,12 +574,12 @@ pub mod world {
                 unsafe {
                     let a_storage = &mut *self.a;
                     let b_storage = &mut *self.b;
-                    let a_ptr = match a_storage.data.get_mut(&entity) {
-                        Some(value) => value as *mut A,
+                    let a_ptr = match a_storage.get_mut_ptr(entity) {
+                        Some(value) => value,
                         None => continue,
                     };
-                    let b_ptr = match b_storage.data.get_mut(&entity) {
-                        Some(value) => value as *mut B,
+                    let b_ptr = match b_storage.get_mut_ptr(entity) {
+                        Some(value) => value,
                         None => continue,
                     };
                     return Some((&mut *a_ptr, &mut *b_ptr));
@@ -500,7 +595,7 @@ pub mod world {
             let b_storage = world.storage::<B>();
 
             let entities = a_storage
-                .map(|storage| storage.data.keys().copied().collect())
+                .map(|storage| storage.entities().to_vec())
                 .unwrap_or_default();
 
             TupleIter2 {
@@ -514,7 +609,11 @@ pub mod world {
 
     impl<A: Component, B: Component> QueryState<(&mut A, &mut B)> {
         pub fn iter_mut<'w>(&'w mut self, world: &'w mut World) -> TupleIterMut2<'w, A, B> {
-            assert_ne!(TypeId::of::<A>(), TypeId::of::<B>(), "duplicate mutable query type");
+            assert_ne!(
+                TypeId::of::<A>(),
+                TypeId::of::<B>(),
+                "duplicate mutable query type"
+            );
 
             let a_type = TypeId::of::<A>();
             let b_type = TypeId::of::<B>();
@@ -563,7 +662,7 @@ pub mod world {
                 };
             }
 
-            let entities = unsafe { (&*a_storage).data.keys().copied().collect() };
+            let entities = unsafe { (&*a_storage).entities().to_vec() };
 
             TupleIterMut2 {
                 entities,
@@ -601,10 +700,10 @@ pub mod world {
         pub fn iter<'w>(&'w mut self, world: &'w World) -> EntityWithWithoutIter {
             let mut entities = Vec::new();
             if let Some(with_storage) = world.storage::<T>() {
-                for entity in with_storage.data.keys().copied() {
+                for entity in with_storage.entities().iter().copied() {
                     let has_without = world
                         .storage::<U>()
-                        .map(|storage| storage.data.contains_key(&entity))
+                        .map(|storage| storage.contains_entity(entity))
                         .unwrap_or(false);
                     if !has_without {
                         entities.push(entity);
@@ -628,9 +727,9 @@ pub mod prelude {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Component, Resource};
     use crate::query::{With, Without};
     use crate::world::World;
+    use crate::{Component, Resource};
 
     #[derive(Component, Debug, PartialEq)]
     struct Position(i32);
@@ -666,7 +765,10 @@ mod tests {
         assert_eq!(world.resource::<Tick>().0, 7);
 
         world.insert_non_send_resource(String::from("watcher"));
-        assert_eq!(world.get_non_send_resource::<String>().map(String::as_str), Some("watcher"));
+        assert_eq!(
+            world.get_non_send_resource::<String>().map(String::as_str),
+            Some("watcher")
+        );
     }
 
     #[test]
@@ -685,7 +787,8 @@ mod tests {
         assert_eq!(world.get::<Position>(a).map(|v| v.0), Some(11));
         assert_eq!(world.get::<Position>(b).map(|v| v.0), Some(2));
 
-        let mut filtered = world.query_filtered::<crate::entity::Entity, (With<Position>, Without<Velocity>)>();
+        let mut filtered =
+            world.query_filtered::<crate::entity::Entity, (With<Position>, Without<Velocity>)>();
         let entities: Vec<_> = filtered.iter(&world).collect();
         assert_eq!(entities, vec![b]);
     }

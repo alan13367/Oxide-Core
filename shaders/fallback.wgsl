@@ -20,9 +20,9 @@ struct GpuDirectionalLight {
 }
 
 struct GpuPointLight {
-    position: vec4f,
+    position_radius: vec4f,
     color_intensity: vec4f,
-    radius: vec4f,
+    _padding: vec4f,
 }
 
 struct LightUniform {
@@ -31,11 +31,17 @@ struct LightUniform {
     point_count: u32,
     _padding: vec2u,
     directional_lights: array<GpuDirectionalLight, 4>,
-    point_lights: array<GpuPointLight, 8>,
+}
+
+struct PointLightStorage {
+    lights: array<GpuPointLight>,
 }
 
 @group(2) @binding(0)
 var<uniform> lights: LightUniform;
+
+@group(2) @binding(1)
+var<storage, read> point_light_storage: PointLightStorage;
 
 struct VertexInput {
     @location(0) position: vec3f,

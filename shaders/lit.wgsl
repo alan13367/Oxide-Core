@@ -20,9 +20,9 @@ struct GpuDirectionalLight {
 }
 
 struct GpuPointLight {
-    position: vec4f,
+    position_radius: vec4f,
     color_intensity: vec4f,
-    radius: vec4f,
+    _padding: vec4f,
 }
 
 struct LightUniform {
@@ -31,11 +31,17 @@ struct LightUniform {
     point_count: u32,
     _padding: vec2u,
     directional_lights: array<GpuDirectionalLight, 4>,
-    point_lights: array<GpuPointLight, 8>,
+}
+
+struct PointLightStorage {
+    lights: array<GpuPointLight>,
 }
 
 @group(2) @binding(0)
 var<uniform> lights: LightUniform;
+
+@group(2) @binding(1)
+var<storage, read> point_light_storage: PointLightStorage;
 
 struct VertexInput {
     @location(0) position: vec3f,
@@ -109,13 +115,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 
     // Process point lights
     for (var i = 0u; i < lights.point_count; i++) {
-        let light = lights.point_lights[i];
-        let light_dir = light.position.xyz - in.world_pos;
+        let light = point_light_storage.lights[i];
+        let light_dir = light.position_radius.xyz - in.world_pos;
         let distance = length(light_dir);
         let light_dir_norm = normalize(light_dir);
 
         // Distance attenuation
-        let radius = light.radius.x;
+        let radius = light.position_radius.w;
         let attenuation = 1.0 - smoothstep(0.0, radius, distance);
 
         let diffuse = max(dot(normal, light_dir_norm), 0.0);

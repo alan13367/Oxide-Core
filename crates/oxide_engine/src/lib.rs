@@ -11,6 +11,7 @@ pub mod event;
 pub mod input;
 pub mod light;
 pub mod prelude;
+pub mod render;
 pub mod scene;
 pub mod time;
 pub mod ui;

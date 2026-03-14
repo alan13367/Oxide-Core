@@ -1,37 +1,35 @@
-//! GPU mesh cache for sharing meshes across entities
-
-use std::collections::HashMap;
+//! GPU mesh cache for sharing meshes across entities.
 
 use oxide_renderer::mesh::Mesh3D;
 
-use super::Handle;
+use super::{Assets, Handle};
 
 /// Resource that caches GPU meshes by handle.
 pub struct MeshCache {
-    meshes: HashMap<u64, Mesh3D>,
+    meshes: Assets<Mesh3D>,
 }
 
 impl MeshCache {
     /// Creates an empty mesh cache.
     pub fn new() -> Self {
         Self {
-            meshes: HashMap::new(),
+            meshes: Assets::new(),
         }
     }
 
     /// Inserts a mesh with the given handle.
     pub fn insert(&mut self, handle: Handle<Mesh3D>, mesh: Mesh3D) {
-        self.meshes.insert(handle.id, mesh);
+        self.meshes.insert(handle, mesh);
     }
 
     /// Gets a mesh by handle.
     pub fn get(&self, handle: Handle<Mesh3D>) -> Option<&Mesh3D> {
-        self.meshes.get(&handle.id)
+        self.meshes.get(&handle)
     }
 
     /// Removes a mesh by handle.
     pub fn remove(&mut self, handle: Handle<Mesh3D>) -> Option<Mesh3D> {
-        self.meshes.remove(&handle.id)
+        self.meshes.remove(&handle)
     }
 
     /// Returns the number of cached meshes.

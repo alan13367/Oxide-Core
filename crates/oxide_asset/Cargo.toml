@@ -9,3 +9,4 @@ license.workspace = true
 
 [dependencies]
 oxide_renderer = { path = "../oxide_renderer" }
+thiserror.workspace = true
