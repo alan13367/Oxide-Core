@@ -11,6 +11,10 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Descriptor Pipeline**: JSON, RON, and TOML material descriptors for built-in and project-level shader assets
 - **Hot-Reloading**: Automatically reload shader assets during development
 - **Robust Validation**: Static checks to ensure custom shaders comply with engine bindings
+- **Plugin Architecture**: Group engine setup with `Plugin`/`DefaultPlugins` to reduce app boilerplate
+- **Ergonomic Systems**: Signature-driven systems via `IntoSystem` + params (`Res`, `ResMut`, `Query`, `Commands`)
+- **Deferred Commands**: Stage-scoped command queue for safe world mutation during iteration
+- **State Gating**: Conditionally run systems with `.run_if(in_state(...))`
 
 ## Requirements
 
@@ -102,8 +106,59 @@ impl App for MyApp {
 fn main() {
     tracing_subscriber::fmt::init();
     app::<MyApp>()
+        .add_plugins(DefaultPlugins)
         .add_system(AppStage::PreUpdate, camera_controller_system)
         .run();
+}
+```
+
+### 2. Ergonomic Systems + Deferred Commands
+
+You can now define systems by declaring dependencies directly in the function signature:
+
+```rust
+fn player_movement(
+    mut time: ResMut<Time>,
+    mut query: Query<(&mut TransformComponent, &Player)>,
+    mut commands: Commands,
+) {
+    for (transform, _player) in query.iter_mut() {
+        transform.transform.position.x += time.delta_secs();
+    }
+
+    // Deferred until the end of the stage
+    commands.spawn(Player::default());
+}
+```
+
+### 3. State-based Execution
+
+```rust
+#[derive(Clone, PartialEq, Eq)]
+enum AppState {
+    Menu,
+    Playing,
+}
+
+app::<MyApp>()
+    .add_system(AppStage::Update, player_movement.run_if(in_state(AppState::Playing)))
+    .run();
+```
+
+### 4. Async glTF Scene Spawn Pipeline
+
+`DefaultPlugins` registers asset resources and a glTF resolve/spawn system. Request a load, then consume spawned roots once ready:
+
+```rust
+let scene_handle = request_gltf_scene_spawn(
+    &mut self.world,
+    Arc::clone(&renderer.device),
+    Arc::clone(&renderer.queue),
+    "assets/models/scene.gltf",
+);
+
+if let Some(roots) = take_spawned_scene_roots(&mut self.world, scene_handle) {
+    tracing::info!("Spawned {} root entities from glTF", roots.len());
 }
 ```
 

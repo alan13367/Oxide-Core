@@ -182,5 +182,5 @@ impl App for SpriteUiApp {
 
 fn main() {
     tracing_subscriber::fmt::init();
-    app::<SpriteUiApp>().run();
+    app::<SpriteUiApp>().add_plugins(DefaultPlugins).run();
 }

@@ -67,10 +67,10 @@ impl AssetServer {
         handle
     }
 
-    pub fn poll_loaded<T: Send + 'static>(
+    /// Polls for completed async assets and returns ready `(Handle<T>, T)` pairs.
+    pub fn poll_ready<T: Send + 'static>(
         &mut self,
-        assets: &mut Assets<T>,
-    ) -> Vec<Result<Handle<T>, AssetServerError>> {
+    ) -> Vec<Result<(Handle<T>, T), AssetServerError>> {
         let mut completed = Vec::new();
         let pending_ids: Vec<u64> = self
             .pending
@@ -91,8 +91,7 @@ impl AssetServer {
                         Ok(boxed_asset) => match boxed_asset.downcast::<T>() {
                             Ok(asset) => {
                                 let handle = Handle::new(id);
-                                assets.insert(handle, *asset);
-                                completed.push(Ok(handle));
+                                completed.push(Ok((handle, *asset)));
                             }
                             Err(_) => completed.push(Err(AssetServerError::TypeMismatch)),
                         },
@@ -108,6 +107,23 @@ impl AssetServer {
         }
 
         completed
+    }
+
+    pub fn poll_loaded<T: Send + 'static>(
+        &mut self,
+        assets: &mut Assets<T>,
+    ) -> Vec<Result<Handle<T>, AssetServerError>> {
+        let mut completed_handles = Vec::new();
+        for result in self.poll_ready::<T>() {
+            match result {
+                Ok((handle, asset)) => {
+                    assets.insert(handle, asset);
+                    completed_handles.push(Ok(handle));
+                }
+                Err(err) => completed_handles.push(Err(err)),
+            }
+        }
+        completed_handles
     }
 
     pub fn is_loading<T: 'static>(&self, handle: &Handle<T>) -> bool {

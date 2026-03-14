@@ -192,5 +192,5 @@ impl App for SkyApp {
 
 fn main() {
     tracing_subscriber::fmt::init();
-    app::<SkyApp>().run();
+    app::<SkyApp>().add_plugins(DefaultPlugins).run();
 }

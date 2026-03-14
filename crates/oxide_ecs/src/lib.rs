@@ -79,61 +79,396 @@ pub mod schedule {
 }
 
 pub mod system {
+    use std::marker::PhantomData;
     use std::ops::{Deref, DerefMut};
 
+    use crate::component::Component;
     use crate::entity::Entity;
-    use crate::world::{EntityMut, World};
+    use crate::resource::Resource;
+    use crate::world::{Bundle, World};
 
-    pub trait SystemParam {}
-
-    pub struct Commands<'w> {
-        world: &'w mut World,
+    pub trait SystemParam: Sized {
+        /// Fetches this parameter from raw world and command-queue pointers.
+        ///
+        /// # Safety
+        /// `world` and `commands` must be valid pointers for the duration of the call and must
+        /// originate from the currently executing schedule stage.
+        unsafe fn fetch(world: *mut World, commands: *mut CommandQueue) -> Self;
     }
 
-    impl<'w> Commands<'w> {
-        pub fn new(world: &'w mut World) -> Self {
-            Self { world }
+    trait DeferredCommand {
+        fn apply(self: Box<Self>, world: &mut World);
+    }
+
+    impl<F> DeferredCommand for F
+    where
+        F: FnOnce(&mut World) + 'static,
+    {
+        fn apply(self: Box<Self>, world: &mut World) {
+            (*self)(world);
+        }
+    }
+
+    #[derive(Default)]
+    pub struct CommandQueue {
+        commands: Vec<Box<dyn DeferredCommand>>,
+    }
+
+    impl CommandQueue {
+        pub fn new() -> Self {
+            Self::default()
         }
 
-        pub fn spawn<B>(&mut self, bundle: B) -> EntityMut<'_>
+        pub fn push<F>(&mut self, command: F)
         where
-            B: crate::world::Bundle,
+            F: FnOnce(&mut World) + 'static,
         {
-            self.world.spawn(bundle)
+            self.commands.push(Box::new(command));
         }
 
-        pub fn entity(&mut self, entity: Entity) -> EntityMut<'_> {
-            self.world.entity_mut(entity)
+        pub fn is_empty(&self) -> bool {
+            self.commands.is_empty()
+        }
+
+        pub fn apply(&mut self, world: &mut World) {
+            let commands = std::mem::take(&mut self.commands);
+            for command in commands {
+                command.apply(world);
+            }
         }
     }
 
-    pub struct Res<'w, T>(pub &'w T);
+    pub struct Commands {
+        queue: *mut CommandQueue,
+    }
 
-    impl<'w, T> Deref for Res<'w, T> {
+    impl Commands {
+        pub fn new(queue: *mut CommandQueue) -> Self {
+            Self { queue }
+        }
+
+        pub fn spawn<B>(&mut self, bundle: B)
+        where
+            B: Bundle + 'static,
+        {
+            unsafe { &mut *self.queue }.push(move |world| {
+                let _ = world.spawn(bundle);
+            });
+        }
+
+        pub fn entity(&mut self, entity: Entity) -> EntityCommands {
+            EntityCommands {
+                entity,
+                queue: self.queue,
+            }
+        }
+
+        pub fn despawn(&mut self, entity: Entity) {
+            unsafe { &mut *self.queue }.push(move |world| {
+                let _ = world.despawn(entity);
+            });
+        }
+    }
+
+    pub struct EntityCommands {
+        entity: Entity,
+        queue: *mut CommandQueue,
+    }
+
+    impl EntityCommands {
+        pub fn insert<B>(&mut self, bundle: B) -> &mut Self
+        where
+            B: Bundle + 'static,
+        {
+            let entity = self.entity;
+            unsafe { &mut *self.queue }.push(move |world| {
+                if world.contains(entity) {
+                    world.entity_mut(entity).insert(bundle);
+                }
+            });
+            self
+        }
+
+        pub fn remove<T>(&mut self) -> &mut Self
+        where
+            T: Component,
+        {
+            let entity = self.entity;
+            unsafe { &mut *self.queue }.push(move |world| {
+                if world.contains(entity) {
+                    let _ = world.remove::<T>(entity);
+                }
+            });
+            self
+        }
+
+        pub fn despawn(&mut self) -> &mut Self {
+            let entity = self.entity;
+            unsafe { &mut *self.queue }.push(move |world| {
+                let _ = world.despawn(entity);
+            });
+            self
+        }
+    }
+
+    pub struct Res<T>(*const T, PhantomData<T>);
+
+    impl<T> Deref for Res<T> {
         type Target = T;
 
         fn deref(&self) -> &Self::Target {
-            self.0
+            unsafe { &*self.0 }
         }
     }
 
-    pub struct ResMut<'w, T>(pub &'w mut T);
+    pub struct ResMut<T>(*mut T, PhantomData<T>);
 
-    impl<'w, T> Deref for ResMut<'w, T> {
+    impl<T> Deref for ResMut<T> {
         type Target = T;
 
         fn deref(&self) -> &Self::Target {
-            self.0
+            unsafe { &*self.0 }
         }
     }
 
-    impl<'w, T> DerefMut for ResMut<'w, T> {
+    impl<T> DerefMut for ResMut<T> {
         fn deref_mut(&mut self) -> &mut Self::Target {
-            self.0
+            unsafe { &mut *self.0 }
         }
     }
 
-    pub struct Query<T>(pub std::marker::PhantomData<T>);
+    pub struct Query<Q> {
+        world: *mut World,
+        marker: PhantomData<Q>,
+    }
+
+    impl<Q> Query<Q> {
+        fn new(world: *mut World) -> Self {
+            Self {
+                world,
+                marker: PhantomData,
+            }
+        }
+    }
+
+    impl<T: Component> Query<&T> {
+        pub fn iter(&mut self) -> impl Iterator<Item = &T> {
+            let world = unsafe { &mut *self.world };
+            let mut query = world.query::<&T>();
+            query.iter(&*world).collect::<Vec<_>>().into_iter()
+        }
+    }
+
+    impl<T: Component> Query<&mut T> {
+        pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+            let world = unsafe { &mut *self.world };
+            let mut query = world.query::<&mut T>();
+            query.iter_mut(world).collect::<Vec<_>>().into_iter()
+        }
+    }
+
+    impl<A: Component, B: Component> Query<(&A, &B)> {
+        pub fn iter(&mut self) -> impl Iterator<Item = (&A, &B)> {
+            let world = unsafe { &mut *self.world };
+            let mut query = world.query::<(&A, &B)>();
+            query.iter(&*world).collect::<Vec<_>>().into_iter()
+        }
+    }
+
+    impl<A: Component, B: Component> Query<(&mut A, &mut B)> {
+        pub fn iter_mut(&mut self) -> impl Iterator<Item = (&mut A, &mut B)> {
+            let world = unsafe { &mut *self.world };
+            let mut query = world.query::<(&mut A, &mut B)>();
+            query.iter_mut(world).collect::<Vec<_>>().into_iter()
+        }
+    }
+
+    impl<A: Component, B: Component> Query<(&mut A, &B)> {
+        pub fn iter_mut(&mut self) -> impl Iterator<Item = (&mut A, &B)> {
+            let world = unsafe { &mut *self.world };
+            let mut query = world.query::<(&mut A, &B)>();
+            query.iter_mut(world).collect::<Vec<_>>().into_iter()
+        }
+    }
+
+    impl<A: Component, B: Component> Query<(&A, &mut B)> {
+        pub fn iter_mut(&mut self) -> impl Iterator<Item = (&A, &mut B)> {
+            let world = unsafe { &mut *self.world };
+            let mut query = world.query::<(&A, &mut B)>();
+            query.iter_mut(world).collect::<Vec<_>>().into_iter()
+        }
+    }
+
+    impl<T: 'static> SystemParam for Res<T> {
+        unsafe fn fetch(world: *mut World, _commands: *mut CommandQueue) -> Self {
+            let world = unsafe { &mut *world };
+            let value = world.resource::<T>() as *const T;
+            Res(value, PhantomData)
+        }
+    }
+
+    impl<T: 'static> SystemParam for ResMut<T> {
+        unsafe fn fetch(world: *mut World, _commands: *mut CommandQueue) -> Self {
+            let world = unsafe { &mut *world };
+            let value = world.resource_mut::<T>() as *mut T;
+            ResMut(value, PhantomData)
+        }
+    }
+
+    impl<Q: 'static> SystemParam for Query<Q> {
+        unsafe fn fetch(world: *mut World, _commands: *mut CommandQueue) -> Self {
+            Query::new(world)
+        }
+    }
+
+    impl SystemParam for Commands {
+        unsafe fn fetch(_world: *mut World, commands: *mut CommandQueue) -> Self {
+            Commands::new(commands)
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct State<T> {
+        current: T,
+        next: Option<T>,
+    }
+
+    impl<T> State<T> {
+        pub fn new(initial: T) -> Self {
+            Self {
+                current: initial,
+                next: None,
+            }
+        }
+
+        pub fn current(&self) -> &T {
+            &self.current
+        }
+
+        pub fn next(&self) -> Option<&T> {
+            self.next.as_ref()
+        }
+
+        pub fn set(&mut self, value: T) {
+            self.current = value;
+            self.next = None;
+        }
+
+        pub fn set_next(&mut self, value: T) {
+            self.next = Some(value);
+        }
+
+        pub fn apply_transition(&mut self) -> bool {
+            if let Some(next) = self.next.take() {
+                self.current = next;
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    impl<T: 'static> Resource for State<T> {}
+
+    pub struct System {
+        run: Box<dyn FnMut(&mut World, &mut CommandQueue)>,
+        run_condition: Option<Box<dyn FnMut(&World) -> bool>>,
+    }
+
+    impl System {
+        pub fn new<F>(run: F) -> Self
+        where
+            F: FnMut(&mut World, &mut CommandQueue) + 'static,
+        {
+            Self {
+                run: Box::new(run),
+                run_condition: None,
+            }
+        }
+
+        pub fn with_condition<F>(mut self, condition: F) -> Self
+        where
+            F: FnMut(&World) -> bool + 'static,
+        {
+            self.run_condition = Some(Box::new(condition));
+            self
+        }
+
+        pub fn run(&mut self, world: &mut World, commands: &mut CommandQueue) {
+            if let Some(condition) = self.run_condition.as_mut() {
+                if !(condition)(&*world) {
+                    return;
+                }
+            }
+
+            (self.run)(world, commands);
+        }
+    }
+
+    pub trait IntoSystem<Marker = ()> {
+        fn into_system(self) -> System;
+    }
+
+    impl IntoSystem for System {
+        fn into_system(self) -> System {
+            self
+        }
+    }
+
+    impl<F> IntoSystem<fn(&mut World)> for F
+    where
+        F: FnMut(&mut World) + 'static,
+    {
+        fn into_system(mut self) -> System {
+            System::new(move |world, _commands| self(world))
+        }
+    }
+
+    macro_rules! impl_into_system {
+        ($($param:ident),+) => {
+            impl<Func, $($param),+> IntoSystem<fn($($param),+)> for Func
+            where
+                Func: FnMut($($param),+) + 'static,
+                $($param: SystemParam + 'static),+
+            {
+                #[allow(non_snake_case)]
+                fn into_system(mut self) -> System {
+                    System::new(move |world, commands| {
+                        let world_ptr = world as *mut World;
+                        let commands_ptr = commands as *mut CommandQueue;
+                        unsafe {
+                            $(let $param = <$param as SystemParam>::fetch(world_ptr, commands_ptr);)+
+                            self($($param),+);
+                        }
+                    })
+                }
+            }
+        };
+    }
+
+    impl_into_system!(A);
+    impl_into_system!(A, B);
+    impl_into_system!(A, B, C);
+    impl_into_system!(A, B, C, D);
+    impl_into_system!(A, B, C, D, E);
+
+    pub trait IntoSystemExt<Marker>: IntoSystem<Marker> + Sized {
+        fn run_if<C>(self, condition: C) -> System
+        where
+            C: FnMut(&World) -> bool + 'static,
+        {
+            self.into_system().with_condition(condition)
+        }
+    }
+
+    impl<T, Marker> IntoSystemExt<Marker> for T where T: IntoSystem<Marker> + Sized {}
+
+    pub fn in_state<T>(target: T) -> impl FnMut(&World) -> bool
+    where
+        T: Clone + PartialEq + 'static,
+    {
+        move |world: &World| world.resource::<State<T>>().current().eq(&target)
+    }
 }
 
 pub mod world {
@@ -404,6 +739,10 @@ pub mod world {
             }
         }
 
+        pub fn contains_resource<T: 'static>(&self) -> bool {
+            self.resources.contains_key(&TypeId::of::<T>())
+        }
+
         pub fn insert_non_send_resource<T: 'static>(&mut self, value: T) {
             self.non_send_resources
                 .insert(TypeId::of::<T>(), Box::new(value));
@@ -507,7 +846,7 @@ pub mod world {
     }
 
     impl<T: Component> QueryState<&T> {
-        pub fn iter<'w>(&'w mut self, world: &'w World) -> impl Iterator<Item = &'w T> {
+        pub fn iter<'w>(&mut self, world: &'w World) -> impl Iterator<Item = &'w T> {
             world
                 .storage::<T>()
                 .map(|storage| storage.values())
@@ -517,7 +856,7 @@ pub mod world {
     }
 
     impl<T: Component> QueryState<&mut T> {
-        pub fn iter_mut<'w>(&'w mut self, world: &'w mut World) -> impl Iterator<Item = &'w mut T> {
+        pub fn iter_mut<'w>(&mut self, world: &'w mut World) -> impl Iterator<Item = &'w mut T> {
             world
                 .storage_mut::<T>()
                 .map(|storage| storage.values_mut())
@@ -590,7 +929,7 @@ pub mod world {
     }
 
     impl<A: Component, B: Component> QueryState<(&A, &B)> {
-        pub fn iter<'w>(&'w mut self, world: &'w World) -> TupleIter2<'w, A, B> {
+        pub fn iter<'w>(&mut self, world: &'w World) -> TupleIter2<'w, A, B> {
             let a_storage = world.storage::<A>();
             let b_storage = world.storage::<B>();
 
@@ -608,7 +947,7 @@ pub mod world {
     }
 
     impl<A: Component, B: Component> QueryState<(&mut A, &mut B)> {
-        pub fn iter_mut<'w>(&'w mut self, world: &'w mut World) -> TupleIterMut2<'w, A, B> {
+        pub fn iter_mut<'w>(&mut self, world: &'w mut World) -> TupleIterMut2<'w, A, B> {
             assert_ne!(
                 TypeId::of::<A>(),
                 TypeId::of::<B>(),
@@ -674,6 +1013,194 @@ pub mod world {
         }
     }
 
+    pub struct TupleIterMutRef2<'w, A: Component, B: Component> {
+        entities: Vec<Entity>,
+        index: usize,
+        a: *mut Storage<A>,
+        b: *const Storage<B>,
+        marker: PhantomData<(&'w mut A, &'w B)>,
+    }
+
+    impl<'w, A: Component, B: Component> Iterator for TupleIterMutRef2<'w, A, B> {
+        type Item = (&'w mut A, &'w B);
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.a.is_null() || self.b.is_null() {
+                return None;
+            }
+
+            while self.index < self.entities.len() {
+                let entity = self.entities[self.index];
+                self.index += 1;
+                unsafe {
+                    let a_storage = &mut *self.a;
+                    let b_storage = &*self.b;
+                    let a_ptr = match a_storage.get_mut_ptr(entity) {
+                        Some(value) => value,
+                        None => continue,
+                    };
+                    let b_ref = match b_storage.get(entity) {
+                        Some(value) => value,
+                        None => continue,
+                    };
+                    return Some((&mut *a_ptr, b_ref));
+                }
+            }
+            None
+        }
+    }
+
+    impl<A: Component, B: Component> QueryState<(&mut A, &B)> {
+        pub fn iter_mut<'w>(&mut self, world: &'w mut World) -> TupleIterMutRef2<'w, A, B> {
+            assert_ne!(
+                TypeId::of::<A>(),
+                TypeId::of::<B>(),
+                "mixed mutable/immutable query cannot use the same component type"
+            );
+
+            let a_type = TypeId::of::<A>();
+            let b_type = TypeId::of::<B>();
+
+            let a_storage = {
+                let Some(a_dyn) = world.storages.get_mut(&a_type) else {
+                    return TupleIterMutRef2 {
+                        entities: Vec::new(),
+                        index: 0,
+                        a: std::ptr::null_mut(),
+                        b: std::ptr::null(),
+                        marker: PhantomData,
+                    };
+                };
+
+                a_dyn
+                    .as_any_mut()
+                    .downcast_mut::<Storage<A>>()
+                    .expect("storage type mismatch") as *mut Storage<A>
+            };
+
+            let b_storage = {
+                let Some(b_dyn) = world.storages.get(&b_type) else {
+                    return TupleIterMutRef2 {
+                        entities: Vec::new(),
+                        index: 0,
+                        a: std::ptr::null_mut(),
+                        b: std::ptr::null(),
+                        marker: PhantomData,
+                    };
+                };
+
+                b_dyn
+                    .as_any()
+                    .downcast_ref::<Storage<B>>()
+                    .expect("storage type mismatch") as *const Storage<B>
+            };
+
+            let entities = unsafe { (&*a_storage).entities().to_vec() };
+
+            TupleIterMutRef2 {
+                entities,
+                index: 0,
+                a: a_storage,
+                b: b_storage,
+                marker: PhantomData,
+            }
+        }
+    }
+
+    pub struct TupleIterRefMut2<'w, A: Component, B: Component> {
+        entities: Vec<Entity>,
+        index: usize,
+        a: *const Storage<A>,
+        b: *mut Storage<B>,
+        marker: PhantomData<(&'w A, &'w mut B)>,
+    }
+
+    impl<'w, A: Component, B: Component> Iterator for TupleIterRefMut2<'w, A, B> {
+        type Item = (&'w A, &'w mut B);
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.a.is_null() || self.b.is_null() {
+                return None;
+            }
+
+            while self.index < self.entities.len() {
+                let entity = self.entities[self.index];
+                self.index += 1;
+                unsafe {
+                    let a_storage = &*self.a;
+                    let b_storage = &mut *self.b;
+                    let a_ref = match a_storage.get(entity) {
+                        Some(value) => value,
+                        None => continue,
+                    };
+                    let b_ptr = match b_storage.get_mut_ptr(entity) {
+                        Some(value) => value,
+                        None => continue,
+                    };
+                    return Some((a_ref, &mut *b_ptr));
+                }
+            }
+            None
+        }
+    }
+
+    impl<A: Component, B: Component> QueryState<(&A, &mut B)> {
+        pub fn iter_mut<'w>(&mut self, world: &'w mut World) -> TupleIterRefMut2<'w, A, B> {
+            assert_ne!(
+                TypeId::of::<A>(),
+                TypeId::of::<B>(),
+                "mixed immutable/mutable query cannot use the same component type"
+            );
+
+            let a_type = TypeId::of::<A>();
+            let b_type = TypeId::of::<B>();
+
+            let a_storage = {
+                let Some(a_dyn) = world.storages.get(&a_type) else {
+                    return TupleIterRefMut2 {
+                        entities: Vec::new(),
+                        index: 0,
+                        a: std::ptr::null(),
+                        b: std::ptr::null_mut(),
+                        marker: PhantomData,
+                    };
+                };
+
+                a_dyn
+                    .as_any()
+                    .downcast_ref::<Storage<A>>()
+                    .expect("storage type mismatch") as *const Storage<A>
+            };
+
+            let b_storage = {
+                let Some(b_dyn) = world.storages.get_mut(&b_type) else {
+                    return TupleIterRefMut2 {
+                        entities: Vec::new(),
+                        index: 0,
+                        a: std::ptr::null(),
+                        b: std::ptr::null_mut(),
+                        marker: PhantomData,
+                    };
+                };
+
+                b_dyn
+                    .as_any_mut()
+                    .downcast_mut::<Storage<B>>()
+                    .expect("storage type mismatch") as *mut Storage<B>
+            };
+
+            let entities = unsafe { (&*a_storage).entities().to_vec() };
+
+            TupleIterRefMut2 {
+                entities,
+                index: 0,
+                a: a_storage,
+                b: b_storage,
+                marker: PhantomData,
+            }
+        }
+    }
+
     pub struct FilteredQueryState<Q, F> {
         marker: PhantomData<(Q, F)>,
     }
@@ -697,7 +1224,7 @@ pub mod world {
     }
 
     impl<T: Component, U: Component> FilteredQueryState<Entity, (With<T>, Without<U>)> {
-        pub fn iter<'w>(&'w mut self, world: &'w World) -> EntityWithWithoutIter {
+        pub fn iter(&mut self, world: &World) -> EntityWithWithoutIter {
             let mut entities = Vec::new();
             if let Some(with_storage) = world.storage::<T>() {
                 for entity in with_storage.entities().iter().copied() {
@@ -721,13 +1248,19 @@ pub mod prelude {
     pub use crate::query::{With, Without};
     pub use crate::resource::Resource;
     pub use crate::schedule::ScheduleLabel;
-    pub use crate::system::{Commands, Query, Res, ResMut, SystemParam};
+    pub use crate::system::{
+        in_state, CommandQueue, Commands, IntoSystem, IntoSystemExt, Query, Res, ResMut, State,
+        System, SystemParam,
+    };
     pub use crate::world::World;
 }
 
 #[cfg(test)]
 mod tests {
     use crate::query::{With, Without};
+    use crate::system::{
+        in_state, CommandQueue, Commands, IntoSystem, IntoSystemExt, Query, ResMut, State,
+    };
     use crate::world::World;
     use crate::{Component, Resource};
 
@@ -791,5 +1324,79 @@ mod tests {
             world.query_filtered::<crate::entity::Entity, (With<Position>, Without<Velocity>)>();
         let entities: Vec<_> = filtered.iter(&world).collect();
         assert_eq!(entities, vec![b]);
+    }
+
+    fn movement_system(mut tick: ResMut<Tick>, mut query: Query<(&mut Position, &Velocity)>) {
+        tick.0 += 1;
+        for (position, velocity) in query.iter_mut() {
+            position.0 += velocity.0;
+        }
+    }
+
+    #[test]
+    fn into_system_extracts_params_from_signature() {
+        let mut world = World::new();
+        world.insert_resource(Tick::default());
+        let entity = world.spawn((Position(1), Velocity(2))).id();
+
+        let mut system = movement_system.into_system();
+        let mut commands = CommandQueue::new();
+        system.run(&mut world, &mut commands);
+        commands.apply(&mut world);
+
+        assert_eq!(world.resource::<Tick>().0, 1);
+        assert_eq!(world.get::<Position>(entity).map(|p| p.0), Some(3));
+    }
+
+    fn spawn_with_commands(mut commands: Commands) {
+        commands.spawn(Position(42));
+    }
+
+    #[test]
+    fn commands_are_deferred_until_applied() {
+        let mut world = World::new();
+
+        let mut system = spawn_with_commands.into_system();
+        let mut queue = CommandQueue::new();
+        system.run(&mut world, &mut queue);
+
+        {
+            let mut query = world.query::<&Position>();
+            assert!(query.iter(&world).next().is_none());
+        }
+
+        queue.apply(&mut world);
+
+        let mut query = world.query::<&Position>();
+        assert_eq!(query.iter(&world).count(), 1);
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum AppState {
+        Menu,
+        Playing,
+    }
+
+    fn gated_tick(mut tick: ResMut<Tick>) {
+        tick.0 += 1;
+    }
+
+    #[test]
+    fn run_if_in_state_gates_system_execution() {
+        let mut world = World::new();
+        world.insert_resource(Tick::default());
+        world.insert_resource(State::new(AppState::Menu));
+
+        let mut system = gated_tick.run_if(in_state(AppState::Playing));
+        let mut queue = CommandQueue::new();
+
+        system.run(&mut world, &mut queue);
+        assert_eq!(world.resource::<Tick>().0, 0);
+
+        world
+            .resource_mut::<State<AppState>>()
+            .set(AppState::Playing);
+        system.run(&mut world, &mut queue);
+        assert_eq!(world.resource::<Tick>().0, 1);
     }
 }

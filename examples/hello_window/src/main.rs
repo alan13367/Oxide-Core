@@ -397,5 +397,5 @@ fn main() {
     tracing::info!("  Mouse - Look around");
     tracing::info!("  Space - Move up");
     tracing::info!("  Shift - Move down");
-    app::<InteractiveScene>().run();
+    app::<InteractiveScene>().add_plugins(DefaultPlugins).run();
 }

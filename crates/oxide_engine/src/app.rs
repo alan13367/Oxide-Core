@@ -11,10 +11,12 @@ use winit::{
     window::WindowId,
 };
 
-use crate::ecs::{Time, World};
+use crate::asset::{AssetServerResource, GltfSceneAssets, MaterialAssets};
+use crate::ecs::{CommandQueue, IntoSystem, System, Time, WindowResource, World};
 use crate::event::{window_event_to_engine, EngineEvent};
 use crate::input::{KeyboardInput, MouseInput};
 use crate::render::RenderFrame;
+use crate::scene::{gltf_scene_spawn_system, PendingGltfSceneSpawns, SpawnedGltfScenes, transform_propagate_system};
 use crate::ui::{handle_egui_event, EguiManager};
 use crate::window::Window;
 use oxide_renderer::Renderer;
@@ -31,8 +33,6 @@ pub struct PostUpdate;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Render;
 
-pub type SystemFn = fn(&mut World);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AppStage {
     PreUpdate,
@@ -42,20 +42,25 @@ pub enum AppStage {
     Prepare,
 }
 
-#[derive(Default, Clone)]
+pub type StartupSystemFn = fn(&mut World, &Window);
+
+#[derive(Default)]
 struct RunnerSystems {
-    pre_update: Vec<SystemFn>,
-    update: Vec<SystemFn>,
-    post_update: Vec<SystemFn>,
-    extract: Vec<SystemFn>,
-    prepare: Vec<SystemFn>,
+    startup: Vec<StartupSystemFn>,
+    pre_update: Vec<System>,
+    update: Vec<System>,
+    post_update: Vec<System>,
+    extract: Vec<System>,
+    prepare: Vec<System>,
 }
 
 impl RunnerSystems {
-    fn run(stage_systems: &[SystemFn], world: &mut World) {
+    fn run(stage_systems: &mut [System], world: &mut World) {
+        let mut commands = CommandQueue::new();
         for system in stage_systems {
-            system(world);
+            system.run(world, &mut commands);
         }
+        commands.apply(world);
     }
 }
 
@@ -78,6 +83,87 @@ pub trait App: 'static {
     }
 }
 
+pub trait Plugin<T: App> {
+    fn build(&self, app: &mut AppBuilder<T>);
+}
+
+pub trait PluginGroup<T: App> {
+    fn build(self, app: &mut AppBuilder<T>);
+}
+
+pub struct InputPlugin;
+
+impl<T: App> Plugin<T> for InputPlugin {
+    fn build(&self, app: &mut AppBuilder<T>) {
+        app.add_startup_system_mut(initialize_input_resources);
+    }
+}
+
+fn initialize_input_resources(world: &mut World, _window: &Window) {
+    if !world.contains_resource::<Time>() {
+        world.init_resource::<Time>();
+    }
+    if !world.contains_resource::<KeyboardInput>() {
+        world.init_resource::<KeyboardInput>();
+    }
+    if !world.contains_resource::<MouseInput>() {
+        world.init_resource::<MouseInput>();
+    }
+}
+
+pub struct TransformPlugin;
+
+impl<T: App> Plugin<T> for TransformPlugin {
+    fn build(&self, app: &mut AppBuilder<T>) {
+        app.add_system_mut(AppStage::PostUpdate, transform_propagate_system);
+    }
+}
+
+pub struct RenderPlugin;
+
+impl<T: App> Plugin<T> for RenderPlugin {
+    fn build(&self, app: &mut AppBuilder<T>) {
+        app.add_startup_system_mut(initialize_window_resource);
+        app.add_startup_system_mut(initialize_asset_resources);
+        app.add_system_mut(AppStage::PreUpdate, gltf_scene_spawn_system);
+    }
+}
+
+fn initialize_window_resource(world: &mut World, window: &Window) {
+    if !world.contains_resource::<WindowResource>() {
+        let size = window.size();
+        world.insert_resource(WindowResource::new(size.width, size.height));
+    }
+}
+
+fn initialize_asset_resources(world: &mut World, _window: &Window) {
+    if !world.contains_resource::<AssetServerResource>() {
+        world.insert_resource(AssetServerResource::default());
+    }
+    if !world.contains_resource::<MaterialAssets>() {
+        world.insert_resource(MaterialAssets::default());
+    }
+    if !world.contains_resource::<GltfSceneAssets>() {
+        world.insert_resource(GltfSceneAssets::default());
+    }
+    if !world.contains_resource::<PendingGltfSceneSpawns>() {
+        world.insert_resource(PendingGltfSceneSpawns::default());
+    }
+    if !world.contains_resource::<SpawnedGltfScenes>() {
+        world.insert_resource(SpawnedGltfScenes::default());
+    }
+}
+
+pub struct DefaultPlugins;
+
+impl<T: App> PluginGroup<T> for DefaultPlugins {
+    fn build(self, app: &mut AppBuilder<T>) {
+        app.add_plugin_mut(InputPlugin);
+        app.add_plugin_mut(TransformPlugin);
+        app.add_plugin_mut(RenderPlugin);
+    }
+}
+
 pub struct AppBuilder<T: App> {
     systems: RunnerSystems,
     _marker: PhantomData<T>,
@@ -97,7 +183,19 @@ impl<T: App> AppBuilder<T> {
         }
     }
 
-    pub fn add_system(mut self, stage: AppStage, system: SystemFn) -> Self {
+    pub fn add_system<S, Marker>(mut self, stage: AppStage, system: S) -> Self
+    where
+        S: IntoSystem<Marker>,
+    {
+        self.add_system_mut(stage, system);
+        self
+    }
+
+    pub fn add_system_mut<S, Marker>(&mut self, stage: AppStage, system: S) -> &mut Self
+    where
+        S: IntoSystem<Marker>,
+    {
+        let system = system.into_system();
         match stage {
             AppStage::PreUpdate => self.systems.pre_update.push(system),
             AppStage::Update => self.systems.update.push(system),
@@ -105,6 +203,40 @@ impl<T: App> AppBuilder<T> {
             AppStage::Extract => self.systems.extract.push(system),
             AppStage::Prepare => self.systems.prepare.push(system),
         }
+        self
+    }
+
+    pub fn add_startup_system(mut self, system: StartupSystemFn) -> Self {
+        self.add_startup_system_mut(system);
+        self
+    }
+
+    pub fn add_startup_system_mut(&mut self, system: StartupSystemFn) -> &mut Self {
+        self.systems.startup.push(system);
+        self
+    }
+
+    pub fn add_plugin<P>(mut self, plugin: P) -> Self
+    where
+        P: Plugin<T>,
+    {
+        self.add_plugin_mut(plugin);
+        self
+    }
+
+    pub fn add_plugin_mut<P>(&mut self, plugin: P) -> &mut Self
+    where
+        P: Plugin<T>,
+    {
+        plugin.build(self);
+        self
+    }
+
+    pub fn add_plugins<G>(mut self, plugins: G) -> Self
+    where
+        G: PluginGroup<T>,
+    {
+        plugins.build(&mut self);
         self
     }
 
@@ -118,6 +250,7 @@ pub struct AppRunner<T: App> {
     app: Option<T>,
     window: Option<Window>,
     systems: RunnerSystems,
+    startup_ran: bool,
 }
 
 impl<T: App> Default for AppRunner<T> {
@@ -136,6 +269,7 @@ impl<T: App> AppRunner<T> {
             app: None,
             window: None,
             systems,
+            startup_ran: false,
         }
     }
 
@@ -144,6 +278,19 @@ impl<T: App> AppRunner<T> {
         event_loop
             .run_app(&mut self)
             .expect("Failed to run event loop");
+    }
+
+    fn run_startup_systems(&mut self) {
+        if self.startup_ran {
+            return;
+        }
+
+        if let (Some(app), Some(window)) = (self.app.as_mut(), self.window.as_ref()) {
+            for startup in &self.systems.startup {
+                startup(app.world_mut(), window);
+            }
+            self.startup_ran = true;
+        }
     }
 }
 
@@ -156,6 +303,7 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
 
             self.app = Some(app);
             self.window = Some(window);
+            self.run_startup_systems();
         }
     }
 
@@ -201,16 +349,16 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
                         keyboard.update();
                     }
 
-                    RunnerSystems::run(&self.systems.pre_update, app.world_mut());
+                    RunnerSystems::run(&mut self.systems.pre_update, app.world_mut());
                     app.update();
-                    RunnerSystems::run(&self.systems.update, app.world_mut());
-                    RunnerSystems::run(&self.systems.post_update, app.world_mut());
+                    RunnerSystems::run(&mut self.systems.update, app.world_mut());
+                    RunnerSystems::run(&mut self.systems.post_update, app.world_mut());
 
                     app.extract();
-                    RunnerSystems::run(&self.systems.extract, app.world_mut());
+                    RunnerSystems::run(&mut self.systems.extract, app.world_mut());
 
                     app.prepare();
-                    RunnerSystems::run(&self.systems.prepare, app.world_mut());
+                    RunnerSystems::run(&mut self.systems.prepare, app.world_mut());
 
                     let frame_parts = {
                         let renderer = &app

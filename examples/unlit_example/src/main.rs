@@ -192,5 +192,5 @@ impl App for UnlitApp {
 
 fn main() {
     tracing_subscriber::fmt::init();
-    app::<UnlitApp>().run();
+    app::<UnlitApp>().add_plugins(DefaultPlugins).run();
 }
