@@ -1,6 +1,5 @@
 //! Application trait and entry point
 
-use bevy_ecs::schedule::ScheduleLabel;
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalPosition,
@@ -12,19 +11,20 @@ use winit::{
 use crate::ecs::{Time, World};
 use crate::event::{window_event_to_engine, EngineEvent};
 use crate::input::{KeyboardInput, MouseInput};
+use crate::ui::{handle_egui_event, EguiManager};
 use crate::window::Window;
 use oxide_renderer::Renderer;
 
-#[derive(ScheduleLabel, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PreUpdate;
 
-#[derive(ScheduleLabel, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Update;
 
-#[derive(ScheduleLabel, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PostUpdate;
 
-#[derive(ScheduleLabel, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Render;
 
 pub trait App: 'static {
@@ -35,6 +35,11 @@ pub trait App: 'static {
     fn update(&mut self);
     fn render(&mut self);
     fn on_event(&mut self, event: EngineEvent);
+
+    /// Returns the egui manager if the app integrates editor/debug UI.
+    fn egui_manager_mut(&mut self) -> Option<&mut EguiManager> {
+        None
+    }
 }
 
 pub struct AppRunner<T: App> {
@@ -82,6 +87,21 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        let mut ui_consumed = false;
+        let mut ui_blocks_game_input = false;
+
+        if let (Some(app), Some(window)) = (self.app.as_mut(), self.window.as_ref()) {
+            if let Some(egui_manager) = app.egui_manager_mut() {
+                ui_consumed = handle_egui_event(egui_manager, window.winit_window(), &event);
+                ui_blocks_game_input =
+                    egui_manager.wants_pointer_input() || egui_manager.wants_keyboard_input();
+            }
+        }
+
+        if ui_consumed {
+            return;
+        }
+
         if let Some(app) = self.app.as_mut() {
             if let Some(engine_event) = window_event_to_engine(&event) {
                 app.on_event(engine_event);
@@ -95,11 +115,11 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
             WindowEvent::RedrawRequested => {
                 if let Some(app) = self.app.as_mut() {
                     {
-                        let mut time = app.world_mut().resource_mut::<Time>();
+                        let time = app.world_mut().resource_mut::<Time>();
                         time.update();
                     }
                     {
-                        let mut keyboard = app.world_mut().resource_mut::<KeyboardInput>();
+                        let keyboard = app.world_mut().resource_mut::<KeyboardInput>();
                         keyboard.update();
                     }
 
@@ -107,26 +127,38 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
                     app.render();
 
                     {
-                        let mut mouse = app.world_mut().resource_mut::<MouseInput>();
+                        let mouse = app.world_mut().resource_mut::<MouseInput>();
                         mouse.update();
                     }
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                if ui_blocks_game_input {
+                    return;
+                }
+
                 if let Some(app) = self.app.as_mut() {
-                    let mut keyboard = app.world_mut().resource_mut::<KeyboardInput>();
+                    let keyboard = app.world_mut().resource_mut::<KeyboardInput>();
                     let pressed = event.state == ElementState::Pressed;
                     keyboard.process_event(event.physical_key, pressed);
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                if ui_blocks_game_input {
+                    return;
+                }
+
                 if let Some(app) = self.app.as_mut() {
-                    let mut mouse = app.world_mut().resource_mut::<MouseInput>();
+                    let mouse = app.world_mut().resource_mut::<MouseInput>();
                     let pressed = state == ElementState::Pressed;
                     mouse.process_button(button.into(), pressed);
                 }
             }
             WindowEvent::CursorEntered { .. } => {
+                if ui_blocks_game_input {
+                    return;
+                }
+
                 if let (Some(app), Some(window)) = (self.app.as_mut(), self.window.as_ref()) {
                     let size = window.size();
                     let center =
@@ -136,13 +168,17 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
                         tracing::warn!("Failed to recenter cursor: {err}");
                     }
 
-                    let mut mouse = app.world_mut().resource_mut::<MouseInput>();
+                    let mouse = app.world_mut().resource_mut::<MouseInput>();
                     mouse.set_position(center);
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                if ui_blocks_game_input {
+                    return;
+                }
+
                 if let Some(app) = self.app.as_mut() {
-                    let mut mouse = app.world_mut().resource_mut::<MouseInput>();
+                    let mouse = app.world_mut().resource_mut::<MouseInput>();
                     mouse.process_move(position);
                 }
             }

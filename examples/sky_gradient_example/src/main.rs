@@ -4,7 +4,9 @@ use std::sync::Arc;
 struct SkyApp {
     world: World,
     pipeline: wgpu::RenderPipeline,
+    material_bind_group: Option<wgpu::BindGroup>,
     camera_buffer: CameraBuffer,
+    light_buffer: LightBuffer,
     cube_mesh: Mesh3D,
     depth_texture: DepthTexture,
 }
@@ -38,14 +40,18 @@ impl App for SkyApp {
 
         let renderer_res = world.resource::<RendererResource>();
         let device = Arc::clone(&renderer_res.renderer.device);
+        let queue = &renderer_res.renderer.queue;
         let format = renderer_res.renderer.format();
         let _ = renderer_res;
         let camera_buffer = CameraBuffer::new(&device);
+        let light_buffer = LightBuffer::new(&device);
 
         let material = MaterialPipeline::from_builtin(
             &device,
+            queue,
             format,
             &camera_buffer.bind_group_layout,
+            &light_buffer.bind_group_layout,
             BuiltinShader::SkyGradient,
             MaterialType::Unlit,
             "sky_material",
@@ -61,7 +67,9 @@ impl App for SkyApp {
         Self {
             world,
             pipeline: material.pipeline,
+            material_bind_group: material.bind_group,
             camera_buffer,
+            light_buffer,
             cube_mesh: Mesh3D::new_cube(&device),
             depth_texture,
         }
@@ -162,6 +170,9 @@ impl App for SkyApp {
 
             render_pass.set_pipeline(&self.pipeline);
             render_pass.set_bind_group(0, &self.camera_buffer.bind_group, &[]);
+            if let Some(ref bind_group) = self.material_bind_group {
+                render_pass.set_bind_group(1, bind_group, &[]);
+            }
             render_pass.set_vertex_buffer(0, self.cube_mesh.vertex_buffer.slice(..));
             render_pass.set_index_buffer(
                 self.cube_mesh.index_buffer.slice(..),

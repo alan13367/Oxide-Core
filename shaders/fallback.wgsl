@@ -6,6 +6,37 @@ struct CameraUniform {
 @group(0) @binding(0)
 var<uniform> camera: CameraUniform;
 
+// Material textures (Group 1)
+@group(1) @binding(0)
+var albedo_texture: texture_2d<f32>;
+
+@group(1) @binding(1)
+var albedo_sampler: sampler;
+
+// Light uniform buffer (Group 2)
+struct GpuDirectionalLight {
+    direction: vec4f,
+    color_intensity: vec4f,
+}
+
+struct GpuPointLight {
+    position: vec4f,
+    color_intensity: vec4f,
+    radius: vec4f,
+}
+
+struct LightUniform {
+    ambient_color_intensity: vec4f,
+    directional_count: u32,
+    point_count: u32,
+    _padding: vec2u,
+    directional_lights: array<GpuDirectionalLight, 4>,
+    point_lights: array<GpuPointLight, 8>,
+}
+
+@group(2) @binding(0)
+var<uniform> lights: LightUniform;
+
 struct VertexInput {
     @location(0) position: vec3f,
     @location(1) normal: vec3f,
@@ -27,6 +58,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+    // Magenta/black checker pattern to indicate fallback material
     let band = floor(in.uv.x * 8.0) + floor(in.uv.y * 8.0);
     let checker = fract(band * 0.5);
     let color_a = vec3f(1.0, 0.0, 1.0);

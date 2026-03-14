@@ -1,8 +1,8 @@
 //! Pipeline creation utilities
 
 use wgpu::{
-    ColorTargetState, ColorWrites, CompareFunction, DepthStencilState, Device, FragmentState,
-    PipelineLayoutDescriptor, PrimitiveState, PrimitiveTopology, RenderPipeline,
+    BindGroupLayout, ColorTargetState, ColorWrites, CompareFunction, DepthStencilState, Device,
+    FragmentState, PipelineLayoutDescriptor, PrimitiveState, PrimitiveTopology, RenderPipeline,
     RenderPipelineDescriptor, ShaderModule, ShaderModuleDescriptor, ShaderSource, StencilState,
     TextureFormat, VertexState,
 };
@@ -98,11 +98,13 @@ pub fn create_lit_pipeline(
     device: &Device,
     shader: &ShaderModule,
     format: TextureFormat,
-    bind_group_layout: &wgpu::BindGroupLayout,
+    camera_layout: &BindGroupLayout,
+    material_layout: &BindGroupLayout,
+    light_layout: &BindGroupLayout,
 ) -> RenderPipeline {
     let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("Lit Pipeline Layout"),
-        bind_group_layouts: &[bind_group_layout],
+        bind_group_layouts: &[camera_layout, material_layout, light_layout],
         immediate_size: 0,
     });
 
@@ -157,11 +159,12 @@ pub fn create_unlit_pipeline(
     device: &Device,
     shader: &ShaderModule,
     format: TextureFormat,
-    bind_group_layout: &wgpu::BindGroupLayout,
+    camera_layout: &BindGroupLayout,
+    material_layout: &BindGroupLayout,
 ) -> RenderPipeline {
     let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("Unlit Pipeline Layout"),
-        bind_group_layouts: &[bind_group_layout],
+        bind_group_layouts: &[camera_layout, material_layout],
         immediate_size: 0,
     });
 

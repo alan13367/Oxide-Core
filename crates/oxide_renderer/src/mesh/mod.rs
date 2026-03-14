@@ -29,7 +29,8 @@ impl Mesh3D {
         Self::create(device, &vertices, &indices, Some("Sphere"))
     }
 
-    fn create(
+    /// Creates a mesh from vertex and index data.
+    pub fn create(
         device: &Device,
         vertices: &[Vertex3D],
         indices: &[u16],

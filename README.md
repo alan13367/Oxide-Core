@@ -5,7 +5,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 ## Features
 
 - **Rendering**: wgpu-based abstraction with Metal as primary backend
-- **ECS**: bevy_ecs for entity-component-system architecture
+- **ECS**: custom `oxide_ecs` runtime for entity-component-system architecture
 - **Math**: glam for fast 3D math operations
 - **Materials + Shaders**: built-in shader pack plus custom WGSL (inline/file) with fallback support
 - **Descriptor Pipeline**: JSON, RON, and TOML material descriptors for built-in and project-level shader assets
@@ -131,9 +131,14 @@ See `docs/shader_material_roadmap.md` for roadmap, implementation status, and AP
 
 | Crate | Description |
 |-------|-------------|
-| `oxide_engine` | Core engine systems, `App` orchestration, and ECS integration |
+| `oxide_engine` | Facade crate exposing prelude and high-level engine APIs |
+| `oxide_ecs` | Custom ECS runtime (world, entities, storage, resources, queries) |
+| `oxide_ecs_derive` | Proc-macro derives for ECS traits (`Component`, `Resource`, `ScheduleLabel`) |
+| `oxide_asset` | Asset handles and runtime mesh cache primitives |
 | `oxide_renderer` | Low-level wgpu rendering abstraction and material descriptors |
 | `oxide_math` | Math types and utilities leveraging `glam` |
+
+The crate layout is being evolved toward a Bevy-style distribution of focused domain crates plus a stable facade. See `docs/bevy_style_crate_distribution.md` for the active structure plan.
 
 ## License
 

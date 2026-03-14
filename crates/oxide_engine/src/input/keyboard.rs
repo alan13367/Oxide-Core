@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use bevy_ecs::prelude::Resource;
+use oxide_ecs::Resource;
 use winit::keyboard::{KeyCode, PhysicalKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

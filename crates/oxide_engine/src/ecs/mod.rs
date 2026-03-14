@@ -1,4 +1,4 @@
-//! ECS module - bevy_ecs integration
+//! ECS module - Oxide ECS facade
 
 mod resource;
 mod world;

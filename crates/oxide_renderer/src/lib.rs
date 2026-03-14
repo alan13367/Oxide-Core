@@ -4,12 +4,14 @@ pub mod adapter;
 pub mod depth;
 pub mod descriptor;
 pub mod device;
+pub mod gltf;
 pub mod material;
 pub mod mesh;
 pub mod pipeline;
 pub mod prelude;
 pub mod shader;
 pub mod surface;
+pub mod texture;
 
 pub use wgpu;
 

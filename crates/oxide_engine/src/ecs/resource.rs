@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use bevy_ecs::prelude::Resource;
+use oxide_ecs::Resource;
 use oxide_renderer::Renderer;
 
 #[derive(Resource)]

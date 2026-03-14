@@ -1,6 +1,6 @@
 //! Mesh renderer component
 
-use bevy_ecs::prelude::Component;
+use oxide_ecs::Component;
 
 use crate::prelude::Mesh3D;
 

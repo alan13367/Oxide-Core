@@ -19,6 +19,8 @@ serde_json.workspace = true
 ron = "0.12.0"
 toml = "1.0.6"
 naga = { version = "28.0.0", features = ["wgsl-in"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+gltf = { version = "1.4", default-features = false, features = ["import", "utils"] }
 
 [features]
 default = []

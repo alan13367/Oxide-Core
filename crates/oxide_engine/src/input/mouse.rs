@@ -1,6 +1,6 @@
 //! Mouse input handling
 
-use bevy_ecs::prelude::Resource;
+use oxide_ecs::Resource;
 use winit::dpi::PhysicalPosition;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

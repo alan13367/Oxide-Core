@@ -28,6 +28,15 @@ pub struct MaterialDescriptor {
     pub material_type: MaterialType,
     pub shader: ShaderDescriptor,
     pub fallback_shader: Option<String>,
+    /// Path to the albedo (diffuse) texture file.
+    #[serde(default)]
+    pub albedo_texture: Option<String>,
+    /// Path to the normal map texture file.
+    #[serde(default)]
+    pub normal_texture: Option<String>,
+    /// Path to the roughness texture file.
+    #[serde(default)]
+    pub roughness_texture: Option<String>,
 }
 
 #[derive(thiserror::Error, Debug)]

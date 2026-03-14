@@ -1,4 +1,4 @@
-//! Interactive Scene - 3D demo with FPS camera controls
+//! Interactive Scene - 3D demo with FPS camera controls and dynamic lighting
 
 use std::path::Path;
 use std::sync::Arc;
@@ -8,7 +8,9 @@ use oxide_engine::prelude::*;
 struct InteractiveScene {
     world: World,
     pipeline: wgpu::RenderPipeline,
+    material_bind_group: Option<wgpu::BindGroup>,
     camera_buffer: CameraBuffer,
+    light_buffer: LightBuffer,
     cube_mesh: Mesh3D,
     sphere_mesh: Mesh3D,
     depth_texture: DepthTexture,
@@ -42,6 +44,29 @@ impl App for InteractiveScene {
                 .with_sensitivity(0.003),
         ));
 
+        // Spawn ambient light (global illumination)
+        world.spawn(AmbientLight::new(Vec3::new(0.4, 0.4, 0.5), 0.25));
+
+        // Spawn directional lights (like sun/moon)
+        world.spawn(DirectionalLight::new(
+            Vec3::new(0.9, 1.2, 0.8),
+            Vec3::new(1.0, 0.95, 0.9),
+            0.65,
+        ));
+        world.spawn(DirectionalLight::new(
+            Vec3::new(-0.6, 0.4, -1.0),
+            Vec3::new(0.4, 0.5, 0.7),
+            0.35,
+        ));
+
+        // Spawn a point light (like a torch)
+        world.spawn(PointLight::new(
+            Vec3::new(0.0, 2.0, -1.0),
+            Vec3::new(1.0, 0.8, 0.5),
+            1.0,
+            8.0,
+        ));
+
         // Setup Hot Reload Watcher for dev profile
         #[cfg(debug_assertions)]
         if let Ok(watcher) = AssetWatcher::new("examples/hello_window/assets") {
@@ -52,15 +77,20 @@ impl App for InteractiveScene {
         let renderer_res = world.resource::<RendererResource>();
         let device = &renderer_res.renderer.device;
 
-        // Create camera buffer and material pipeline (descriptor + fallback flow)
+        // Create camera buffer and light buffer
         let camera_buffer = CameraBuffer::new(device);
+        let light_buffer = LightBuffer::new(device);
+
+        let queue = &renderer_res.renderer.queue;
         let descriptor_path = Path::new("examples/hello_window/assets/materials/scene_lit.json");
 
         let material = match load_material_descriptor(descriptor_path) {
             Ok(descriptor) => match MaterialPipeline::from_descriptor(
                 device,
+                queue,
                 renderer_res.renderer.format(),
                 &camera_buffer.bind_group_layout,
+                &light_buffer.bind_group_layout,
                 &descriptor,
             ) {
                 Ok(material) => material,
@@ -72,8 +102,10 @@ impl App for InteractiveScene {
                     );
                     MaterialPipeline::from_builtin(
                         device,
+                        queue,
                         renderer_res.renderer.format(),
                         &camera_buffer.bind_group_layout,
+                        &light_buffer.bind_group_layout,
                         BuiltinShader::Fallback,
                         MaterialType::Lit,
                         "hello_window_fallback",
@@ -89,8 +121,10 @@ impl App for InteractiveScene {
 
                 MaterialPipeline::from_builtin(
                     device,
+                    queue,
                     renderer_res.renderer.format(),
                     &camera_buffer.bind_group_layout,
+                    &light_buffer.bind_group_layout,
                     BuiltinShader::Fallback,
                     MaterialType::Lit,
                     "hello_window_fallback",
@@ -98,6 +132,7 @@ impl App for InteractiveScene {
             }
         };
         let pipeline = material.pipeline;
+        let material_bind_group = material.bind_group;
 
         // Create meshes
         let cube_mesh = Mesh3D::new_cube(device);
@@ -121,7 +156,9 @@ impl App for InteractiveScene {
         Self {
             world,
             pipeline,
+            material_bind_group,
             camera_buffer,
+            light_buffer,
             cube_mesh,
             sphere_mesh,
             depth_texture,
@@ -147,16 +184,20 @@ impl App for InteractiveScene {
                     Path::new("examples/hello_window/assets/materials/scene_lit.json");
                 let renderer_res = self.world.resource::<RendererResource>();
                 let device = &renderer_res.renderer.device;
+                let queue = &renderer_res.renderer.queue;
 
                 if let Ok(descriptor) = load_material_descriptor(descriptor_path) {
                     if let Ok(material) = MaterialPipeline::from_descriptor(
                         device,
+                        queue,
                         renderer_res.renderer.format(),
                         &self.camera_buffer.bind_group_layout,
+                        &self.light_buffer.bind_group_layout,
                         &descriptor,
                     ) {
                         tracing::info!("Successfully hot-reloaded material '{}'", descriptor.name);
                         self.pipeline = material.pipeline;
+                        self.material_bind_group = material.bind_group;
                     }
                 }
             }
@@ -274,6 +315,9 @@ impl App for InteractiveScene {
             }
         }
 
+        // Update light buffer from ECS world
+        self.light_buffer.update(&queue, &mut self.world);
+
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
@@ -313,6 +357,10 @@ impl App for InteractiveScene {
 
             render_pass.set_pipeline(&self.pipeline);
             render_pass.set_bind_group(0, &self.camera_buffer.bind_group, &[]);
+            if let Some(ref bind_group) = self.material_bind_group {
+                render_pass.set_bind_group(1, bind_group, &[]);
+            }
+            render_pass.set_bind_group(2, &self.light_buffer.bind_group, &[]);
 
             // Draw cubes
             render_pass.set_vertex_buffer(0, self.cube_mesh.vertex_buffer.slice(..));

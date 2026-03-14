@@ -6,6 +6,37 @@ struct CameraUniform {
 @group(0) @binding(0)
 var<uniform> camera: CameraUniform;
 
+// Material textures (Group 1)
+@group(1) @binding(0)
+var albedo_texture: texture_2d<f32>;
+
+@group(1) @binding(1)
+var albedo_sampler: sampler;
+
+// Light uniform buffer (Group 2)
+struct GpuDirectionalLight {
+    direction: vec4f,
+    color_intensity: vec4f,
+}
+
+struct GpuPointLight {
+    position: vec4f,
+    color_intensity: vec4f,
+    radius: vec4f,
+}
+
+struct LightUniform {
+    ambient_color_intensity: vec4f,
+    directional_count: u32,
+    point_count: u32,
+    _padding: vec2u,
+    directional_lights: array<GpuDirectionalLight, 4>,
+    point_lights: array<GpuPointLight, 8>,
+}
+
+@group(2) @binding(0)
+var<uniform> lights: LightUniform;
+
 struct VertexInput {
     @location(0) position: vec3f,
     @location(1) normal: vec3f,
@@ -16,7 +47,8 @@ struct VertexOutput {
     @builtin(position) pos: vec4f,
     @location(0) normal: vec3f,
     @location(1) world_pos: vec3f,
-    @location(2) @interpolate(flat) instance_id: u32,
+    @location(2) uv: vec2f,
+    @location(3) @interpolate(flat) instance_id: u32,
 }
 
 const INSTANCE_POSITIONS: array<vec3f, 10> = array<vec3f, 10>(
@@ -54,25 +86,52 @@ fn vs_main(in: VertexInput, @builtin(instance_index) instance_index: u32) -> Ver
     out.pos = camera.view_proj * vec4f(world_pos, 1.0);
     out.normal = in.normal;
     out.world_pos = world_pos;
+    out.uv = in.uv;
     out.instance_id = idx;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    let light_dir_a = normalize(vec3f(0.9, 1.2, 0.8));
-    let light_dir_b = normalize(vec3f(-0.6, 0.4, -1.0));
     let normal = normalize(in.normal);
     let view_dir = normalize(camera.position.xyz - in.world_pos);
 
-    let diffuse_a = max(dot(normal, light_dir_a), 0.0);
-    let diffuse_b = max(dot(normal, light_dir_b), 0.0);
-    let ambient = 0.22;
-    let rim = pow(1.0 - max(dot(normal, view_dir), 0.0), 2.0) * 0.20;
+    // Start with ambient light
+    var total_light = lights.ambient_color_intensity.rgb * lights.ambient_color_intensity.a;
 
-    let light = ambient + diffuse_a * 0.65 + diffuse_b * 0.35 + rim;
-    let base_color = INSTANCE_COLORS[in.instance_id];
+    // Process directional lights
+    for (var i = 0u; i < lights.directional_count; i++) {
+        let light = lights.directional_lights[i];
+        let light_dir = normalize(light.direction.xyz);
+        let diffuse = max(dot(normal, light_dir), 0.0);
+        total_light += light.color_intensity.rgb * light.color_intensity.a * diffuse;
+    }
+
+    // Process point lights
+    for (var i = 0u; i < lights.point_count; i++) {
+        let light = lights.point_lights[i];
+        let light_dir = light.position.xyz - in.world_pos;
+        let distance = length(light_dir);
+        let light_dir_norm = normalize(light_dir);
+
+        // Distance attenuation
+        let radius = light.radius.x;
+        let attenuation = 1.0 - smoothstep(0.0, radius, distance);
+
+        let diffuse = max(dot(normal, light_dir_norm), 0.0);
+        total_light += light.color_intensity.rgb * light.color_intensity.a * diffuse * attenuation;
+    }
+
+    // Add rim lighting
+    let rim = pow(1.0 - max(dot(normal, view_dir), 0.0), 2.0) * 0.20;
+    total_light += vec3f(rim);
+
+    // Sample the albedo texture (fallback is white, so this works for untextured materials too)
+    let texture_color = textureSample(albedo_texture, albedo_sampler, in.uv).rgb;
+
+    // Blend instance color with texture color
+    let base_color = INSTANCE_COLORS[in.instance_id] * texture_color;
 
     let distance_fade = clamp(1.0 - length(in.world_pos) * 0.05, 0.35, 1.0);
-    return vec4f(base_color * light * distance_fade, 1.0);
+    return vec4f(base_color * total_light * distance_fade, 1.0);
 }

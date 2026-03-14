@@ -1,9 +1,9 @@
 //! FPS-style camera controller
 
-use bevy_ecs::prelude::{Component, Query, Res};
+use oxide_ecs::Component;
 use glam::Vec3;
 
-use crate::ecs::WindowResource;
+use crate::ecs::World;
 use crate::input::{KeyboardInput, MouseInput};
 use oxide_math::prelude::Camera;
 
@@ -67,17 +67,32 @@ impl CameraController {
 }
 
 pub fn camera_controller_system(
-    keyboard: Res<KeyboardInput>,
-    mouse: Res<MouseInput>,
-    _window: Res<WindowResource>,
-    mut query: Query<(&mut CameraController, &mut CameraComponent)>,
+    world: &mut World,
 ) {
     use winit::keyboard::KeyCode;
 
-    for (mut controller, mut camera_comp) in query.iter_mut() {
-        let camera = &mut camera_comp.0;
+    let (w, s, a, d, space, shift, dx, dy) = {
+        let keyboard = world.resource::<KeyboardInput>();
+        let mouse = world.resource::<MouseInput>();
 
         let (dx, dy) = mouse.delta();
+
+        (
+            keyboard.pressed(KeyCode::KeyW),
+            keyboard.pressed(KeyCode::KeyS),
+            keyboard.pressed(KeyCode::KeyA),
+            keyboard.pressed(KeyCode::KeyD),
+            keyboard.pressed(KeyCode::Space),
+            keyboard.pressed(KeyCode::ShiftLeft),
+            dx,
+            dy,
+        )
+    };
+
+    let mut query = world.query::<(&mut CameraController, &mut CameraComponent)>();
+    for (controller, camera_comp) in query.iter_mut(world) {
+        let camera = &mut camera_comp.0;
+
         controller.yaw -= dx * controller.sensitivity;
         controller.pitch -= dy * controller.sensitivity;
         controller.pitch = controller.pitch.clamp(
@@ -91,22 +106,22 @@ pub fn camera_controller_system(
         let right = rotation * Vec3::X;
 
         let mut velocity = Vec3::ZERO;
-        if keyboard.pressed(KeyCode::KeyW) {
+        if w {
             velocity += forward;
         }
-        if keyboard.pressed(KeyCode::KeyS) {
+        if s {
             velocity -= forward;
         }
-        if keyboard.pressed(KeyCode::KeyA) {
+        if a {
             velocity -= right;
         }
-        if keyboard.pressed(KeyCode::KeyD) {
+        if d {
             velocity += right;
         }
-        if keyboard.pressed(KeyCode::Space) {
+        if space {
             velocity += Vec3::Y;
         }
-        if keyboard.pressed(KeyCode::ShiftLeft) {
+        if shift {
             velocity -= Vec3::Y;
         }
 
