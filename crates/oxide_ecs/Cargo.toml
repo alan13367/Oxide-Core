@@ -13,7 +13,7 @@ homepage.workspace = true
 oxide_ecs_derive.workspace = true
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8.2"
 
 [[bench]]
 name = "component_iteration"
