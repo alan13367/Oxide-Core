@@ -16,7 +16,9 @@ use crate::ecs::{CommandQueue, IntoSystem, System, Time, WindowResource, World};
 use crate::event::{window_event_to_engine, EngineEvent};
 use crate::input::{KeyboardInput, MouseInput};
 use crate::render::RenderFrame;
-use crate::scene::{gltf_scene_spawn_system, PendingGltfSceneSpawns, SpawnedGltfScenes, transform_propagate_system};
+use crate::scene::{
+    gltf_scene_spawn_system, transform_propagate_system, PendingGltfSceneSpawns, SpawnedGltfScenes,
+};
 use crate::ui::{handle_egui_event, EguiManager};
 use crate::window::Window;
 use oxide_renderer::Renderer;

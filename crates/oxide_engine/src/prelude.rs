@@ -25,10 +25,10 @@ pub use crate::light::{
 };
 pub use crate::render::RenderFrame;
 pub use crate::scene::{
-    attach_child, detach_child, gltf_scene_spawn_system, mark_subtree_dirty, queue_gltf_scene_spawn,
-    request_gltf_scene_spawn, spawn_gltf_scene_hierarchy, take_spawned_scene_roots,
-    transform_propagate_system, Children, GlobalTransform, GltfMeshRef, MeshRenderer,
-    PendingGltfSceneSpawns, Parent, SpawnedGltfScenes, TransformComponent,
+    attach_child, detach_child, gltf_scene_spawn_system, mark_subtree_dirty,
+    queue_gltf_scene_spawn, request_gltf_scene_spawn, spawn_gltf_scene_hierarchy,
+    take_spawned_scene_roots, transform_propagate_system, Children, GlobalTransform, GltfMeshRef,
+    MeshRenderer, Parent, PendingGltfSceneSpawns, SpawnedGltfScenes, TransformComponent,
 };
 pub use crate::ui::{handle_egui_event, EguiManager, EguiRender};
 pub use crate::watcher::AssetWatcher;

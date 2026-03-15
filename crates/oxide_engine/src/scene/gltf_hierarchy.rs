@@ -264,7 +264,10 @@ mod tests {
             }],
         };
 
-        world.resource_mut::<GltfSceneAssets>().assets.insert(handle, scene);
+        world
+            .resource_mut::<GltfSceneAssets>()
+            .assets
+            .insert(handle, scene);
         queue_gltf_scene_spawn(&mut world, handle);
         gltf_scene_spawn_system(&mut world);
 
