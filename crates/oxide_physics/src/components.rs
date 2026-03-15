@@ -23,6 +23,7 @@ pub struct RigidBodyComponent {
     pub handle: Option<BodyId>,
     pub pending_initial_sync: bool,
     pub linear_velocity: Vec3,
+    pub angular_velocity: Vec3,
 }
 
 impl RigidBodyComponent {
@@ -32,6 +33,7 @@ impl RigidBodyComponent {
             handle: None,
             pending_initial_sync: true,
             linear_velocity: Vec3::ZERO,
+            angular_velocity: Vec3::ZERO,
         }
     }
 
@@ -53,6 +55,11 @@ impl RigidBodyComponent {
 
     pub fn with_linear_velocity(mut self, velocity: Vec3) -> Self {
         self.linear_velocity = velocity;
+        self
+    }
+
+    pub fn with_angular_velocity(mut self, velocity: Vec3) -> Self {
+        self.angular_velocity = velocity;
         self
     }
 }

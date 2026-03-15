@@ -167,6 +167,12 @@ impl PhysicsWorld {
         }
     }
 
+    pub fn set_body_angular_velocity(&mut self, id: BodyId, velocity: Vec3) {
+        if let Some(body) = self.bodies.get_mut(&id) {
+            body.angular_velocity = velocity;
+        }
+    }
+
     pub fn body_handles(&self) -> impl Iterator<Item = BodyId> + '_ {
         self.bodies.keys().copied()
     }

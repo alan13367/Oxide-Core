@@ -20,7 +20,7 @@ The workspace is divided into several specialized crates:
 - **`oxide_engine`**: The core orchestration layer. It defines the `App` trait, plugin APIs (`Plugin`, `DefaultPlugins`), manages the main loop via `winit`, integrates `oxide_ecs`, handles input/events, and provides an `AssetWatcher` for hot-reloading.
 - **`oxide_renderer`**: A low-level abstraction over `wgpu`. It handles device/queue initialization, swapchain management (Surface), and provides primitives for meshes, pipelines, descriptor-driven materials, and shaders.
 - **`oxide_math`**: Provides math types and utilities, re-exporting `glam` types and adding engine-specific transforms and camera math.
-- **`oxide_physics`**: In-house 3D physics crate providing ECS components/resources/systems and a `PhysicsPlugin` for `AppStage::Update`.
+- **`oxide_physics`**: In-house 3D physics crate providing ECS components/resources/systems and a `PhysicsPlugin` for `AppStage::Update` (fixed-step simulation, broadphase candidate filtering, dynamic-dynamic impulses, OBB-aware cuboid collisions).
 - **`examples/`**: Contains demonstration projects. The primary example is `hello_window`, which serves as a full-featured interactive 3D scene with FPS-style camera controls. Other examples include `physics_example`, `unlit_example`, `sky_gradient_example`, and `sprite_ui_example`.
 
 ### Published package names (crates.io)
