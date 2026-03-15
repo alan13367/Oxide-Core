@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use oxide_engine::prelude::*;
+use oxide_physics::prelude::*;
 
 struct InteractiveScene {
     world: World,
@@ -65,6 +66,13 @@ impl App for InteractiveScene {
             Vec3::new(1.0, 0.8, 0.5),
             1.0,
             8.0,
+        ));
+
+        // Minimal physics-enabled entity example.
+        world.spawn((
+            TransformComponent::from_position(Vec3::new(0.0, 3.0, 0.0)),
+            RigidBodyComponent::dynamic(),
+            ColliderComponent::cuboid(Vec3::splat(0.5)),
         ));
 
         // Setup Hot Reload Watcher for dev profile
@@ -397,5 +405,8 @@ fn main() {
     tracing::info!("  Mouse - Look around");
     tracing::info!("  Space - Move up");
     tracing::info!("  Shift - Move down");
-    app::<InteractiveScene>().add_plugins(DefaultPlugins).run();
+    app::<InteractiveScene>()
+        .add_plugins(DefaultPlugins)
+        .add_plugin(PhysicsPlugin)
+        .run();
 }

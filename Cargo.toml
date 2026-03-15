@@ -6,10 +6,12 @@ members = [
     "crates/oxide_ecs_derive",
     "crates/oxide_engine",
     "crates/oxide_input",
+    "crates/oxide_physics",
     "crates/oxide_renderer",
     "crates/oxide_math",
     "crates/oxide_transform",
     "examples/hello_window",
+    "examples/physics_example",
     "examples/unlit_example",
     "examples/sky_gradient_example",
     "examples/sprite_ui_example",
@@ -36,6 +38,7 @@ oxide_transform = { package = "oxide-core-transform", version = "0.1.0", path = 
 oxide_math = { package = "oxide-core-math", version = "0.1.0", path = "crates/oxide_math" }
 oxide_renderer = { package = "oxide-core-renderer", version = "0.1.0", path = "crates/oxide_renderer" }
 oxide_engine = { package = "oxide-core-engine", version = "0.1.0", path = "crates/oxide_engine" }
+oxide_physics = { package = "oxide-core-physics", version = "0.1.0", path = "crates/oxide_physics" }
 bytemuck = { version = "1.21", features = ["derive"] }
 thiserror = "2.0"
 tracing = "0.1"

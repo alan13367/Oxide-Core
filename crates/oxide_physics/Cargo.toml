@@ -1,0 +1,19 @@
+[package]
+name = "oxide-core-physics"
+description = "Oxide Core in-house physics runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "oxide_physics"
+
+[dependencies]
+oxide_engine.workspace = true
+oxide_ecs.workspace = true
+glam.workspace = true
+tracing.workspace = true

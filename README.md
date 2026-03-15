@@ -7,6 +7,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Rendering**: wgpu-based abstraction with Metal as primary backend
 - **ECS**: custom `oxide_ecs` runtime for entity-component-system architecture
 - **Math**: glam for fast 3D math operations
+- **Physics**: optional in-house 3D backend via `oxide_physics`
 - **Materials + Shaders**: built-in shader pack plus custom WGSL (inline/file) with fallback support
 - **Descriptor Pipeline**: JSON, RON, and TOML material descriptors for built-in and project-level shader assets
 - **Hot-Reloading**: Automatically reload shader assets during development
@@ -32,6 +33,7 @@ cargo build
 The workspace includes several examples demonstrating the engine's rendering capabilities:
 ```bash
 cargo run -p hello_window         # Interactive lit scene
+cargo run -p physics_example      # In-house physics demo (falling/collision)
 cargo run -p unlit_example        # Basic unlit rendering
 cargo run -p sky_gradient_example # Skybox/gradient material demo
 cargo run -p sprite_ui_example    # 2D Orthographic overlay material
@@ -162,6 +164,20 @@ if let Some(roots) = take_spawned_scene_roots(&mut self.world, scene_handle) {
 }
 ```
 
+### 5. Physics Plugin Integration
+
+Physics is provided by `oxide_physics` and intentionally exported through `oxide_physics::prelude`:
+
+```rust
+use oxide_engine::prelude::*;
+use oxide_physics::prelude::*;
+
+app::<MyApp>()
+    .add_plugins(DefaultPlugins)
+    .add_plugin(PhysicsPlugin)
+    .run();
+```
+
 ## Shader Workflow
 
 - Use built-in shaders through `BuiltinShader` (`basic`, `lit`, `unlit`, `sky_gradient`, `sprite_ui`, `fallback`)
@@ -200,6 +216,7 @@ See `docs/shader_material_roadmap.md` for roadmap, implementation status, and AP
 - `oxide-core-input` (library crate name: `oxide_input`)
 - `oxide-core-transform` (library crate name: `oxide_transform`)
 - `oxide-core-math` (library crate name: `oxide_math`)
+- `oxide-core-physics` (library crate name: `oxide_physics`)
 - `oxide_ecs`
 - `oxide_ecs_derive`
 
@@ -213,6 +230,7 @@ See `docs/shader_material_roadmap.md` for roadmap, implementation status, and AP
 | `oxide_transform` | Transform + hierarchy components and dirty-aware propagation |
 | `oxide_renderer` | Low-level wgpu rendering abstraction and material descriptors |
 | `oxide_math` | Math types and utilities leveraging `glam` |
+| `oxide_physics` | In-house 3D physics crate with ECS-first components, systems, and `PhysicsPlugin` |
 
 The crate layout is being evolved toward a Bevy-style distribution of focused domain crates plus a stable facade. See `docs/bevy_style_crate_distribution.md` for the active structure plan.
 

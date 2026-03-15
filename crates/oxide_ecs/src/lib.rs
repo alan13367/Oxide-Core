@@ -267,6 +267,22 @@ pub mod system {
         }
     }
 
+    impl<T: Component> Query<(Entity, &T)> {
+        pub fn iter(&mut self) -> impl Iterator<Item = (Entity, &T)> {
+            let world = unsafe { &mut *self.world };
+            let mut query = world.query::<(Entity, &T)>();
+            query.iter(&*world).collect::<Vec<_>>().into_iter()
+        }
+    }
+
+    impl<T: Component> Query<(Entity, &mut T)> {
+        pub fn iter_mut(&mut self) -> impl Iterator<Item = (Entity, &mut T)> {
+            let world = unsafe { &mut *self.world };
+            let mut query = world.query::<(Entity, &mut T)>();
+            query.iter_mut(world).collect::<Vec<_>>().into_iter()
+        }
+    }
+
     impl<A: Component, B: Component> Query<(&A, &B)> {
         pub fn iter(&mut self) -> impl Iterator<Item = (&A, &B)> {
             let world = unsafe { &mut *self.world };
@@ -862,6 +878,100 @@ pub mod world {
                 .map(|storage| storage.values_mut())
                 .into_iter()
                 .flatten()
+        }
+    }
+
+    pub struct EntityRefIter<'w, T: Component> {
+        entities: Vec<Entity>,
+        index: usize,
+        storage: Option<&'w Storage<T>>,
+    }
+
+    impl<'w, T: Component> Iterator for EntityRefIter<'w, T> {
+        type Item = (Entity, &'w T);
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let storage = self.storage?;
+            while self.index < self.entities.len() {
+                let entity = self.entities[self.index];
+                self.index += 1;
+                if let Some(component) = storage.get(entity) {
+                    return Some((entity, component));
+                }
+            }
+            None
+        }
+    }
+
+    pub struct EntityMutIter<'w, T: Component> {
+        entities: Vec<Entity>,
+        index: usize,
+        storage: *mut Storage<T>,
+        marker: PhantomData<&'w mut T>,
+    }
+
+    impl<'w, T: Component> Iterator for EntityMutIter<'w, T> {
+        type Item = (Entity, &'w mut T);
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.storage.is_null() {
+                return None;
+            }
+
+            while self.index < self.entities.len() {
+                let entity = self.entities[self.index];
+                self.index += 1;
+                unsafe {
+                    let storage = &mut *self.storage;
+                    let component_ptr = match storage.get_mut_ptr(entity) {
+                        Some(value) => value,
+                        None => continue,
+                    };
+                    return Some((entity, &mut *component_ptr));
+                }
+            }
+
+            None
+        }
+    }
+
+    impl<T: Component> QueryState<(Entity, &T)> {
+        pub fn iter<'w>(&mut self, world: &'w World) -> EntityRefIter<'w, T> {
+            let storage = world.storage::<T>();
+            let entities = storage
+                .map(|component_storage| component_storage.entities().to_vec())
+                .unwrap_or_default();
+
+            EntityRefIter {
+                entities,
+                index: 0,
+                storage,
+            }
+        }
+    }
+
+    impl<T: Component> QueryState<(Entity, &mut T)> {
+        pub fn iter_mut<'w>(&mut self, world: &'w mut World) -> EntityMutIter<'w, T> {
+            let storage = match world.storages.get_mut(&TypeId::of::<T>()) {
+                Some(storage) => storage
+                    .as_any_mut()
+                    .downcast_mut::<Storage<T>>()
+                    .expect("storage type mismatch") as *mut Storage<T>,
+                None => std::ptr::null_mut(),
+            };
+
+            let entities = if storage.is_null() {
+                Vec::new()
+            } else {
+                unsafe { (&*storage).entities().to_vec() }
+            };
+
+            EntityMutIter {
+                entities,
+                index: 0,
+                storage,
+                marker: PhantomData,
+            }
         }
     }
 
