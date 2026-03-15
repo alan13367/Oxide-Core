@@ -3,9 +3,10 @@ name = "hello_window"
 description = "Oxide Core example - basic window creation"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 [dependencies]
-oxide_engine = { path = "../../crates/oxide_engine" }
+oxide_engine.workspace = true
 wgpu.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

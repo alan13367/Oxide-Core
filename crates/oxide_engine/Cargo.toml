@@ -1,15 +1,20 @@
 [package]
-name = "oxide_engine"
+name = "oxide-core-engine"
 description = "Oxide Core engine - main game engine crate"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "oxide_engine"
 
 [dependencies]
-oxide_renderer = { path = "../oxide_renderer" }
-oxide_math = { path = "../oxide_math" }
+oxide_renderer.workspace = true
+oxide_math.workspace = true
 oxide_transform.workspace = true
 oxide_input.workspace = true
 oxide_ecs.workspace = true

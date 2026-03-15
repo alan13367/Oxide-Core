@@ -21,16 +21,21 @@ edition = "2021"
 rust-version = "1.94"
 authors = ["Oxide Core Contributors"]
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/alan13367/Oxide-Core"
+homepage = "https://github.com/alan13367/Oxide-Core"
 
 [workspace.dependencies]
 wgpu = "28.0.0"
 winit = "0.30"
 glam = "0.32.1"
-oxide_ecs = { path = "crates/oxide_ecs" }
-oxide_ecs_derive = { path = "crates/oxide_ecs_derive" }
-oxide_asset = { path = "crates/oxide_asset" }
-oxide_input = { path = "crates/oxide_input" }
-oxide_transform = { path = "crates/oxide_transform" }
+oxide_ecs = { version = "0.1.0", path = "crates/oxide_ecs" }
+oxide_ecs_derive = { version = "0.1.0", path = "crates/oxide_ecs_derive" }
+oxide_asset = { package = "oxide-core-asset", version = "0.1.0", path = "crates/oxide_asset" }
+oxide_input = { package = "oxide-core-input", version = "0.1.0", path = "crates/oxide_input" }
+oxide_transform = { package = "oxide-core-transform", version = "0.1.0", path = "crates/oxide_transform" }
+oxide_math = { package = "oxide-core-math", version = "0.1.0", path = "crates/oxide_math" }
+oxide_renderer = { package = "oxide-core-renderer", version = "0.1.0", path = "crates/oxide_renderer" }
+oxide_engine = { package = "oxide-core-engine", version = "0.1.0", path = "crates/oxide_engine" }
 bytemuck = { version = "1.21", features = ["derive"] }
 thiserror = "2.0"
 tracing = "0.1"

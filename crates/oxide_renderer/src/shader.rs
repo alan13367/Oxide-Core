@@ -67,9 +67,9 @@ pub fn load_wgsl(device: &Arc<Device>, source: &'static str) -> ShaderModule {
     })
 }
 
-pub const BASIC_SHADER: &str = include_str!("../../../shaders/basic.wgsl");
-pub const LIT_SHADER: &str = include_str!("../../../shaders/lit.wgsl");
-pub const UNLIT_SHADER: &str = include_str!("../../../shaders/unlit.wgsl");
-pub const SKY_GRADIENT_SHADER: &str = include_str!("../../../shaders/sky_gradient.wgsl");
-pub const SPRITE_UI_SHADER: &str = include_str!("../../../shaders/sprite_ui.wgsl");
-pub const FALLBACK_SHADER: &str = include_str!("../../../shaders/fallback.wgsl");
+pub const BASIC_SHADER: &str = include_str!("../shaders/basic.wgsl");
+pub const LIT_SHADER: &str = include_str!("../shaders/lit.wgsl");
+pub const UNLIT_SHADER: &str = include_str!("../shaders/unlit.wgsl");
+pub const SKY_GRADIENT_SHADER: &str = include_str!("../shaders/sky_gradient.wgsl");
+pub const SPRITE_UI_SHADER: &str = include_str!("../shaders/sprite_ui.wgsl");
+pub const FALLBACK_SHADER: &str = include_str!("../shaders/fallback.wgsl");

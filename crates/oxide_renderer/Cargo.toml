@@ -1,11 +1,16 @@
 [package]
-name = "oxide_renderer"
+name = "oxide-core-renderer"
 description = "Oxide Core renderer - wgpu-based rendering abstraction"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "oxide_renderer"
 
 [dependencies]
 wgpu.workspace = true

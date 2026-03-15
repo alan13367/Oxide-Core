@@ -192,6 +192,17 @@ See `docs/shader_material_roadmap.md` for roadmap, implementation status, and AP
 
 ## Crates
 
+### crates.io package names
+
+- `oxide-core-engine` (library crate name: `oxide_engine`)
+- `oxide-core-renderer` (library crate name: `oxide_renderer`)
+- `oxide-core-asset` (library crate name: `oxide_asset`)
+- `oxide-core-input` (library crate name: `oxide_input`)
+- `oxide-core-transform` (library crate name: `oxide_transform`)
+- `oxide-core-math` (library crate name: `oxide_math`)
+- `oxide_ecs`
+- `oxide_ecs_derive`
+
 | Crate | Description |
 |-------|-------------|
 | `oxide_engine` | Facade crate exposing prelude and high-level engine APIs |

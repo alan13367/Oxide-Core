@@ -1,11 +1,16 @@
 [package]
-name = "oxide_math"
+name = "oxide-core-math"
 description = "Oxide Core math - glam-based math types for game development"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "oxide_math"
 
 [dependencies]
 glam.workspace = true

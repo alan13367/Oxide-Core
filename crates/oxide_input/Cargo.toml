@@ -1,11 +1,16 @@
 [package]
-name = "oxide_input"
+name = "oxide-core-input"
 description = "Oxide Core keyboard and mouse input primitives"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "oxide_input"
 
 [dependencies]
 oxide_ecs.workspace = true

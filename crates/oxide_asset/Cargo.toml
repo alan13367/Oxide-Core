@@ -1,12 +1,17 @@
 [package]
-name = "oxide_asset"
+name = "oxide-core-asset"
 description = "Oxide Core asset handles and runtime asset caches"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "oxide_asset"
 
 [dependencies]
-oxide_renderer = { path = "../oxide_renderer" }
+oxide_renderer.workspace = true
 thiserror.workspace = true
