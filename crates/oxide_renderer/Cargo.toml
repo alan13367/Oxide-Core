@@ -13,6 +13,7 @@ homepage.workspace = true
 name = "oxide_renderer"
 
 [dependencies]
+oxide_ecs.workspace = true
 wgpu.workspace = true
 winit.workspace = true
 glam.workspace = true

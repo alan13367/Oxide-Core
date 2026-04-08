@@ -7,7 +7,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Rendering**: wgpu-based abstraction with Metal as primary backend
 - **ECS**: custom `oxide_ecs` runtime for entity-component-system architecture
 - **Math**: glam for fast 3D math operations
-- **Physics**: optional in-house 3D backend via `oxide_physics` (fixed-step simulation, broadphase filtering, dynamic-dynamic collisions, OBB cuboid support)
+- **Physics**: optional in-house 3D backend via `oxide_physics` (fixed-step simulation, spatial-hash broadphase, warm-started contact manifolds, collision layers/events, OBB cuboid support, ray/sphere cast queries)
 - **Materials + Shaders**: built-in shader pack plus custom WGSL (inline/file) with fallback support
 - **Descriptor Pipeline**: JSON, RON, and TOML material descriptors for built-in and project-level shader assets
 - **Hot-Reloading**: Automatically reload shader assets during development
@@ -177,6 +177,14 @@ app::<MyApp>()
     .add_plugin(PhysicsPlugin)
     .run();
 ```
+
+Current physics runtime highlights include:
+
+- Contact manifold generation with warm-started sequential impulses
+- Spatial-hash broadphase candidate generation with collision-layer filtering
+- Joint support (`Fixed`, `Hinge`, `BallSocket`, `Spring`)
+- Query API (`raycast`, `raycast_all`, `sphere_cast`, `overlaps_sphere`, `overlaps_box`)
+- Collision event lifecycle (`Started`, `Persisted`, `Ended`)
 
 ## Shader Workflow
 

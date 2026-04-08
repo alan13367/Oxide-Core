@@ -1,5 +1,6 @@
 //! Oxide Core renderer prelude
 
+pub use crate::debug_lines::DebugLines;
 pub use crate::depth::DepthTexture;
 pub use crate::descriptor::{
     load_material_descriptor, MaterialDescriptor, MaterialType, ShaderDescriptor,

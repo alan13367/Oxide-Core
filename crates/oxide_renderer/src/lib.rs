@@ -1,6 +1,7 @@
 //! Oxide Core renderer - wgpu-based rendering abstraction
 
 pub mod adapter;
+pub mod debug_lines;
 pub mod depth;
 pub mod descriptor;
 pub mod device;

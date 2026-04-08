@@ -12,8 +12,13 @@ homepage.workspace = true
 [lib]
 name = "oxide_physics"
 
+[features]
+default = []
+debug-render = ["oxide_renderer"]
+
 [dependencies]
 oxide_engine.workspace = true
 oxide_ecs.workspace = true
+oxide_renderer = { workspace = true, optional = true }
 glam.workspace = true
 tracing.workspace = true

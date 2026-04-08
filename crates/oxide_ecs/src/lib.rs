@@ -956,7 +956,8 @@ pub mod world {
                 Some(storage) => storage
                     .as_any_mut()
                     .downcast_mut::<Storage<T>>()
-                    .expect("storage type mismatch") as *mut Storage<T>,
+                    .expect("storage type mismatch")
+                    as *mut Storage<T>,
                 None => std::ptr::null_mut(),
             };
 
