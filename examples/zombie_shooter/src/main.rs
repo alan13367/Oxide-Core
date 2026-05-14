@@ -1270,7 +1270,7 @@ fn reset_game(world: &mut World, state: &mut ShooterState, physics: &mut Physics
     state.fire_timer = 0.0;
     state.muzzle_flash_timer = 0.0;
     state.ammo = state.max_ammo;
-    state.reserve_ammo = 5s;
+    state.reserve_ammo = 5;
     state.player_health = 100.0;
     state.kills = 0;
     state.wave = 1;
