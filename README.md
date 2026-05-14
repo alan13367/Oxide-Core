@@ -12,6 +12,8 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Focused Runtime Crates**: camera, lighting, scene, UI, editor, audio, physics, asset, input, transform, renderer, and ECS code live outside the façade crate behind Oxide-owned APIs
 - **Materials + Shaders**: built-in shader pack plus custom WGSL (inline/file) with fallback support
 - **Automatic Scene Renderer**: optional plugin that renders `RenderMesh` scene entities without app-owned pipelines
+- **Native Sprites**: engine-owned RGBA sprite assets plus billboard components for actors, props, weapons, and overlay sprites
+- **Terrain + World Authoring**: heightfield terrain and configurable world descriptors for code-first maps
 - **Game UI + Text**: camera-locked panels, buttons, bars, counters, reticles, native styled text widgets, and custom TrueType/OpenType font registration
 - **Scene Editor Model**: hierarchy/inspector resource with spawn, select, duplicate, delete, transform, and tint editing APIs
 - **Descriptor Pipeline**: JSON, RON, and TOML material descriptors for built-in and project-level shader assets
@@ -41,7 +43,7 @@ The workspace includes several examples demonstrating the engine's rendering cap
 cargo run -p hello_window         # Interactive lit scene
 cargo run -p physics_example      # In-house physics demo (falling/collision)
 cargo run -p minimal_game         # Minimal code-first game template
-cargo run -p zombie_shooter       # FPS zombie shooter prototype
+cargo run -p zombie_shooter       # FPS zombie shooter with sprites, terrain, UI, audio, and physics
 cargo run -p unlit_example        # Basic unlit rendering
 cargo run -p sky_gradient_example # Skybox/gradient material demo
 cargo run -p sprite_ui_example    # 2D Orthographic overlay material
@@ -100,7 +102,51 @@ fn main() {
 
 Use `App::prepare` and `App::queue` only when a project needs a custom render pass or overlay on top of the automatic scene renderer.
 
-### 2. Ergonomic Systems + Deferred Commands
+### 2. Register Native Sprites And Worlds
+
+Runtime sprite identity is Oxide-native: register a `SpriteImage` in
+`SpriteAssets`, then spawn entities with `SpriteBillboard`. The automatic scene
+renderer batches those sprites as world billboards or overlay sprites.
+
+```rust
+register_sprite(
+    &mut world,
+    "player.weapon",
+    SpriteImage::solid(32, 16, [255, 255, 255, 255])?,
+);
+
+world.spawn((
+    Name("Weapon".to_string()),
+    // Overlay sprites use clip-space X/Y. (-1, -1) is bottom-left.
+    TransformComponent::from_position(Vec3::new(0.5, -0.58, 0.0)),
+    GlobalTransform::default(),
+    SpriteBillboard::new("player.weapon", Vec2::new(0.64, 0.38))
+        .with_facing(SpriteFacing::Camera)
+        .with_depth(SpriteDepthMode::Overlay),
+));
+```
+
+Use `TerrainDescriptor` and `SceneWorldDescriptor` for data-driven terrain and
+blockout geometry:
+
+```rust
+let world_descriptor = SceneWorldDescriptor {
+    terrain: TerrainDescriptor {
+        width: 48.0,
+        depth: 48.0,
+        columns: 56,
+        rows: 56,
+        height_scale: 1.0,
+        waves: vec![TerrainWaveDescriptor::default()],
+        ..Default::default()
+    },
+    objects: Vec::new(),
+};
+
+spawn_world_descriptor(&mut world, &world_descriptor);
+```
+
+### 3. Ergonomic Systems + Deferred Commands
 
 You can now define systems by declaring dependencies directly in the function signature:
 
@@ -119,7 +165,7 @@ fn player_movement(
 }
 ```
 
-### 3. State-based Execution
+### 4. State-based Execution
 
 ```rust
 #[derive(Clone, PartialEq, Eq)]
@@ -133,7 +179,7 @@ app::<MyApp>()
     .run();
 ```
 
-### 4. Async glTF Scene Spawn Pipeline
+### 5. Async glTF Scene Spawn Pipeline
 
 `DefaultPlugins` registers asset resources and a glTF resolve/spawn system. Request a load, then consume spawned roots once ready:
 
@@ -150,7 +196,7 @@ if let Some(roots) = take_spawned_scene_roots(&mut self.world, scene_handle) {
 }
 ```
 
-### 5. Physics Plugin Integration
+### 6. Physics Plugin Integration
 
 Physics is provided by `oxide_physics` and intentionally exported through `oxide_physics::prelude`:
 
@@ -232,7 +278,7 @@ See `docs/scene_authoring.md` for the automatic scene renderer and editor model.
 | `oxide_audio` | Audio playback, generated tones, WAV clips, and software mixing |
 | `oxide_camera` | Camera components, FPS controller system, and GPU camera buffer helpers |
 | `oxide_light` | Light components, GPU light uniforms, and light buffer update helpers |
-| `oxide_scene` | Scene descriptors, renderable scene components, transform re-exports, and automatic scene renderer |
+| `oxide_scene` | Scene descriptors, sprites, terrain/world descriptors, renderable scene components, transform re-exports, and automatic scene renderer |
 | `oxide_ui` | Native game UI widgets, text/font rendering, egui bridge, runtime UI, and debug overlay data |
 | `oxide_editor` | Runtime scene editor resource and egui hierarchy/inspector surface |
 | `oxide_transform` | Transform + hierarchy components and dirty-aware propagation |

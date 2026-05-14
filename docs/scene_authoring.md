@@ -5,8 +5,9 @@ describe entities with ECS components, let the engine render common scene
 primitives automatically, and layer editor tooling over the same world data.
 
 The canonical runtime types live in focused crates: `oxide_scene` owns
-`SceneDescriptor`, `RenderMesh`, and `SceneRenderer`; `oxide_ui` owns `GameUi`,
-text rendering, fonts, runtime UI, and debug overlay data; `oxide_editor` owns
+`SceneDescriptor`, `RenderMesh`, `SpriteAssets`, `SpriteBillboard`, `Terrain`,
+`SceneWorldDescriptor`, and `SceneRenderer`; `oxide_ui` owns `GameUi`, text
+rendering, fonts, runtime UI, and debug overlay data; `oxide_editor` owns
 `SceneEditor`. `oxide_engine` provides plugin wiring and prelude re-exports.
 
 ## Automatic Scene Rendering
@@ -17,6 +18,8 @@ runner detects it and automatically:
 - updates camera and light GPU buffers during prepare,
 - collects `RenderMesh` + `TransformComponent`/`GlobalTransform` entities,
 - batches cube and sphere primitives into instance buffers,
+- turns `Terrain` components into heightfield meshes,
+- batches `SpriteBillboard` entities into world or overlay sprite passes,
 - queues the scene pass before `App::queue`,
 - resizes the depth texture when the window resizes.
 
@@ -42,10 +45,83 @@ app::<MyGame>()
 
 - `SceneDescriptor` is the data format for small native scenes and prefabs.
 - `RenderMesh` describes a primitive, material intent, and tint.
+- `SpriteAssets` stores engine-native RGBA sprite images by `SpriteId`.
+- `SpriteBillboard` attaches a registered sprite to an entity as a world
+  billboard, fixed-orientation sprite, or overlay weapon/HUD sprite.
+- `Terrain` stores a heightfield mesh with tint/material intent.
+- `TerrainDescriptor` and `SceneWorldDescriptor` describe terrain and blockout
+  objects for code-first maps.
 - `SceneMaterialDescriptor` includes a `color` field used by the automatic
   renderer.
 - `Name`, `Parent`, `Children`, `TransformComponent`, and `GlobalTransform`
   provide scene identity and hierarchy.
+
+## Native Sprites
+
+Sprites are runtime-native Oxide assets. Import tools or game code create
+`SpriteImage` RGBA data, register it under a stable ID, and entities reference
+that ID through `SpriteBillboard`.
+
+```rust
+let image = SpriteImage::from_ascii(
+    &[" A ", "AAA", " A "],
+    &[(' ', [0, 0, 0, 0]), ('A', [80, 210, 70, 255])],
+)?;
+register_sprite(world, "enemy.basic", image);
+
+world.spawn((
+    Name("Enemy".to_string()),
+    TransformComponent::from_position(Vec3::new(0.0, 0.9, -6.0)),
+    GlobalTransform::default(),
+    SpriteBillboard::new("enemy.basic", Vec2::new(1.2, 1.8))
+        .with_facing(SpriteFacing::YBillboard)
+        .with_depth(SpriteDepthMode::World),
+));
+```
+
+Use `SpriteDepthMode::Overlay` for first-person weapons or screen-space props
+that should draw over the scene. Overlay sprite transform positions are
+clip-space coordinates, so `Vec3::new(0.5, -0.58, 0.0)` places a sprite near the
+lower-right of the screen. Re-registering the same `SpriteId` increments its
+revision; the scene renderer refreshes the GPU texture automatically.
+
+## Terrain And Worlds
+
+`Terrain` is a heightfield component rendered by `SceneRenderer`. `Terrain`
+can be edited directly with `set_height`, generated with `from_height_fn`, or
+created from a serializable `TerrainDescriptor`.
+
+```rust
+let descriptor = SceneWorldDescriptor {
+    terrain: TerrainDescriptor {
+        width: 64.0,
+        depth: 64.0,
+        columns: 64,
+        rows: 64,
+        height_scale: 1.4,
+        waves: vec![TerrainWaveDescriptor {
+            direction: [1.0, 0.35],
+            frequency: 5.0,
+            amplitude: 0.08,
+            phase: 0.0,
+        }],
+        ..Default::default()
+    },
+    objects: vec![WorldObjectDescriptor {
+        name: "Cover".to_string(),
+        position: [4.0, 0.6, -8.0],
+        size: [2.5, 1.2, 2.5],
+        tint: [0.38, 0.33, 0.27, 1.0],
+        solid: true,
+    }],
+};
+
+let spawned = spawn_world_descriptor(world, &descriptor);
+world.insert_resource(spawned);
+```
+
+Physics stays explicit: games decide which spawned world objects are solid and
+attach `oxide_physics` colliders that match their gameplay needs.
 
 ## Game UI
 

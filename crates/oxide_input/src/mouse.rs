@@ -50,6 +50,11 @@ impl MouseInput {
         self.position = Some(position);
     }
 
+    pub fn process_delta(&mut self, x: f64, y: f64) {
+        self.delta.x += x;
+        self.delta.y += y;
+    }
+
     pub fn process_button(&mut self, button: MouseButton, pressed: bool) {
         match button {
             MouseButton::Left => self.left_pressed = pressed,
@@ -74,5 +79,20 @@ impl MouseInput {
 
     pub fn cursor_grabbed(&self) -> bool {
         self.cursor_grabbed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_motion_accumulates_without_cursor_position() {
+        let mut mouse = MouseInput::default();
+
+        mouse.process_delta(12.0, -4.0);
+        mouse.process_delta(3.5, 2.0);
+
+        assert_eq!(mouse.delta(), (15.5, -2.0));
     }
 }

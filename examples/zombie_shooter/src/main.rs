@@ -9,6 +9,9 @@ const GRAVITY: f32 = -18.0;
 const MOUSE_SENSITIVITY: f32 = 0.0022;
 const TITLE_FONT: &str = "zombie:title";
 const HUD_FONT: &str = "zombie:hud";
+const GUN_SPRITE: &str = "zombie:gun";
+const GUN_FIRE_SPRITE: &str = "zombie:gun_fire";
+const ZOMBIE_SPRITE: &str = "zombie:walker";
 
 #[derive(Clone, Copy, Debug)]
 struct Health {
@@ -53,6 +56,20 @@ impl Zombie {
             attack_timer: 0.0,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ZombieHitZone {
+    Body,
+    Head,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ZombieShotHit {
+    entity: Entity,
+    point: Vec3,
+    normal: Vec3,
+    zone: ZombieHitZone,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -123,6 +140,7 @@ impl App for ZombieShooter {
         let camera_entity = spawn_camera(&mut world);
         let gun_entity = spawn_gun(&mut world);
         install_zombie_fonts(&mut world);
+        install_zombie_sprites(&mut world);
 
         world.insert_resource(ShooterState {
             player_entity,
@@ -209,6 +227,93 @@ fn install_zombie_fonts(world: &mut World) {
     ) {
         tracing::warn!("Falling back to built-in HUD font: {err}");
     }
+}
+
+fn install_zombie_sprites(world: &mut World) {
+    for (id, image) in [
+        (GUN_SPRITE, gun_sprite(false)),
+        (GUN_FIRE_SPRITE, gun_sprite(true)),
+        (ZOMBIE_SPRITE, zombie_sprite()),
+    ] {
+        match image {
+            Ok(image) => {
+                register_sprite(world, id, image);
+            }
+            Err(err) => {
+                tracing::warn!("Failed to register sprite {id}: {err}");
+            }
+        }
+    }
+}
+
+fn zombie_sprite() -> Result<SpriteImage, SpriteImageError> {
+    SpriteImage::from_ascii(
+        &[
+            "      gggg      ",
+            "     gGGGGg     ",
+            "    gGEEGGg     ",
+            "    gGGGGGg     ",
+            "     gDDg       ",
+            "   gggGGggg     ",
+            "  gGgGGGGgGg    ",
+            " gGggGGGGggGg   ",
+            " gGgGGGGGGgGg   ",
+            "  ggGGGGGGgg    ",
+            "    gGggGg      ",
+            "   gGg  gGg     ",
+            "  gGg    gGg    ",
+            "  gg      gg    ",
+            " gG        Gg   ",
+            "                ",
+        ],
+        &[
+            (' ', [0, 0, 0, 0]),
+            ('g', [45, 128, 42, 255]),
+            ('G', [82, 191, 70, 255]),
+            ('E', [234, 244, 196, 255]),
+            ('D', [73, 46, 42, 255]),
+        ],
+    )
+}
+
+fn gun_sprite(firing: bool) -> Result<SpriteImage, SpriteImageError> {
+    let muzzle = if firing { 'F' } else { ' ' };
+    let rows = [
+        "                                ",
+        "                                ",
+        "                                ",
+        "                    bbbb        ",
+        "                 bbbbbbbbbb     ",
+        "              bbbbbbbbbbbbbb    ",
+        "          dddddddddbbbbbbbbb    ",
+        "      dddddddddddddddddbbb      ",
+        "   DDDDDDDDDDDDDDDDDDDDD       ",
+        "  DDDDDDDDDDDDDDDDDDDDD        ",
+        "      DDDDDDDDDDDD             ",
+        "          DDDDDDD              ",
+        "             DDDD              ",
+        "              DD               ",
+        "                                ",
+        "                                ",
+    ];
+    let mut rows: Vec<String> = rows.iter().map(|row| row.to_string()).collect();
+    if firing {
+        rows[6].replace_range(29..30, &muzzle.to_string());
+        rows[7].replace_range(28..29, &muzzle.to_string());
+        rows[8].replace_range(27..28, &muzzle.to_string());
+    }
+    let row_refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+
+    SpriteImage::from_ascii(
+        &row_refs,
+        &[
+            (' ', [0, 0, 0, 0]),
+            ('D', [16, 18, 21, 255]),
+            ('d', [39, 43, 48, 255]),
+            ('b', [74, 78, 82, 255]),
+            ('F', [255, 218, 80, 255]),
+        ],
+    )
 }
 
 fn play_menu_sound(world: &World) {
@@ -483,37 +588,182 @@ fn update_gun(
         return;
     };
 
-    if let Some(hit) = physics.raycast(camera.0.position, camera.0.forward(), 80.0) {
-        spawn_impact_marker(world, hit.point + hit.normal * 0.03);
-        let mut health_ratio = None;
-        let mut hit_zombie = false;
-        if let Some(health) = world.get_mut::<Health>(hit.entity) {
-            health.damage(34.0);
-            health_ratio = Some((health.current / health.max).clamp(0.0, 1.0));
-            hit_zombie = true;
-            if health.is_dead() {
-                state.kills = state.kills.saturating_add(1);
-            }
-        }
-        if hit_zombie {
-            play_hit_sound(world);
-        }
-        if let Some(ratio) = health_ratio {
-            if let Some(render_mesh) = world.get_mut::<RenderMesh>(hit.entity) {
-                render_mesh.tint = [0.72 - ratio * 0.4, 0.16 + ratio * 0.56, 0.12, 1.0];
-            }
-        }
+    let shot_origin = camera.0.position;
+    let shot_direction = camera.0.forward();
+    let max_distance = 80.0;
 
-        if let Some(body) = world
-            .get::<RigidBodyComponent>(hit.entity)
-            .and_then(|body| body.handle)
-            .and_then(|handle| physics.body_mut(handle))
+    if let Some(hit) =
+        find_zombie_shot_hit(world, physics, shot_origin, shot_direction, max_distance)
+    {
+        spawn_impact_marker(world, hit.point + hit.normal * 0.03);
+        if let Some(ratio) =
+            damage_zombie(world, physics, state, hit.entity, shot_direction, hit.zone)
         {
-            body.apply_impulse(camera.0.forward() * 20.0);
+            play_hit_sound(world);
+            if let Some(sprite) = world.get_mut::<SpriteBillboard>(hit.entity) {
+                sprite.tint = [0.72 - ratio * 0.4, 0.16 + ratio * 0.56, 0.12, 1.0];
+            }
+        }
+    } else if let Some(hit) = physics.raycast(shot_origin, shot_direction, max_distance) {
+        spawn_impact_marker(world, hit.point + hit.normal * 0.03);
+        if let Some(ratio) = damage_zombie(
+            world,
+            physics,
+            state,
+            hit.entity,
+            shot_direction,
+            ZombieHitZone::Body,
+        ) {
+            play_hit_sound(world);
+            if let Some(sprite) = world.get_mut::<SpriteBillboard>(hit.entity) {
+                sprite.tint = [0.72 - ratio * 0.4, 0.16 + ratio * 0.56, 0.12, 1.0];
+            }
         }
     }
 
     update_gun_tint(world, state);
+}
+
+fn damage_zombie(
+    world: &mut World,
+    physics: &mut PhysicsWorld,
+    state: &mut ShooterState,
+    entity: Entity,
+    direction: Vec3,
+    zone: ZombieHitZone,
+) -> Option<f32> {
+    let damage = match zone {
+        ZombieHitZone::Body => 34.0,
+        ZombieHitZone::Head => 68.0,
+    };
+
+    let health_ratio = {
+        let health = world.get_mut::<Health>(entity)?;
+        health.damage(damage);
+        let ratio = (health.current / health.max).clamp(0.0, 1.0);
+        if health.is_dead() {
+            state.kills = state.kills.saturating_add(1);
+        }
+        ratio
+    };
+
+    if let Some(body) = world
+        .get::<RigidBodyComponent>(entity)
+        .and_then(|body| body.handle)
+        .and_then(|handle| physics.body_mut(handle))
+    {
+        let impulse = if zone == ZombieHitZone::Head {
+            28.0
+        } else {
+            20.0
+        };
+        body.apply_impulse(direction.normalize_or_zero() * impulse);
+    }
+
+    Some(health_ratio)
+}
+
+fn find_zombie_shot_hit(
+    world: &mut World,
+    physics: &PhysicsWorld,
+    origin: Vec3,
+    direction: Vec3,
+    max_distance: f32,
+) -> Option<ZombieShotHit> {
+    let direction = direction.normalize_or_zero();
+    if direction.length_squared() <= f32::EPSILON {
+        return None;
+    }
+
+    let blocker_distance = physics
+        .raycast_all(origin, direction, max_distance)
+        .into_iter()
+        .filter(|hit| world.get::<Zombie>(hit.entity).is_none())
+        .map(|hit| hit.distance)
+        .fold(max_distance, f32::min);
+
+    let zombie_entities: Vec<Entity> = {
+        let mut query = world.query::<(Entity, &Zombie)>();
+        query.iter(world).map(|(entity, _)| entity).collect()
+    };
+
+    let mut closest: Option<ZombieShotHit> = None;
+    let mut closest_distance = blocker_distance;
+
+    for entity in zombie_entities {
+        if world
+            .get::<Health>(entity)
+            .map(|health| health.is_dead())
+            .unwrap_or(true)
+        {
+            continue;
+        }
+
+        let Some(transform) = world.get::<TransformComponent>(entity) else {
+            continue;
+        };
+        let Some(sprite) = world.get::<SpriteBillboard>(entity) else {
+            continue;
+        };
+
+        let scale = transform.transform.scale;
+        let center = transform.transform.position;
+        let visual_width = sprite.size.x * scale.x.abs().max(0.001);
+        let visual_height = sprite.size.y * scale.y.abs().max(0.001);
+        let body_center = center - Vec3::Y * visual_height * 0.05;
+        let head_center = center + Vec3::Y * visual_height * 0.36;
+        let body_radius = visual_width * 0.55;
+        let head_radius = visual_width * 0.36;
+
+        for (zone, hit_center, radius) in [
+            (ZombieHitZone::Head, head_center, head_radius),
+            (ZombieHitZone::Body, body_center, body_radius),
+        ] {
+            let Some((distance, point, normal)) =
+                ray_sphere_hit(origin, direction, hit_center, radius, closest_distance)
+            else {
+                continue;
+            };
+            closest_distance = distance;
+            closest = Some(ZombieShotHit {
+                entity,
+                point,
+                normal,
+                zone,
+            });
+        }
+    }
+
+    closest
+}
+
+fn ray_sphere_hit(
+    origin: Vec3,
+    direction: Vec3,
+    center: Vec3,
+    radius: f32,
+    max_distance: f32,
+) -> Option<(f32, Vec3, Vec3)> {
+    let offset = origin - center;
+    let half_b = offset.dot(direction);
+    let c = offset.length_squared() - radius * radius;
+    let discriminant = half_b * half_b - c;
+    if discriminant < 0.0 {
+        return None;
+    }
+
+    let root = discriminant.sqrt();
+    let mut distance = -half_b - root;
+    if distance < 0.0 {
+        distance = -half_b + root;
+    }
+    if !(0.0..=max_distance).contains(&distance) {
+        return None;
+    }
+
+    let point = origin + direction * distance;
+    let normal = (point - center).normalize_or_zero();
+    Some((distance, point, normal))
 }
 
 fn reload_weapon(state: &mut ShooterState) -> bool {
@@ -577,8 +827,8 @@ fn update_zombies(
         }
 
         if did_attack {
-            if let Some(render_mesh) = world.get_mut::<RenderMesh>(entity) {
-                render_mesh.tint = [1.0, 0.16, 0.08, 1.0];
+            if let Some(sprite) = world.get_mut::<SpriteBillboard>(entity) {
+                sprite.tint = [1.0, 0.16, 0.08, 1.0];
             }
         }
 
@@ -705,6 +955,7 @@ fn update_game_ui(world: &mut World) {
                 (zombie_count as f32 / (3 + state.wave.min(5)) as f32).clamp(0.0, 1.0);
 
             ui.reticle("reticle", 0.045, 0.004, [1.0, 0.95, 0.62, 1.0]);
+            draw_weapon_sprite(ui, state.muzzle_flash_timer > 0.0);
             ui.text(
                 "health_label",
                 GameUiAnchor::TopLeft,
@@ -860,6 +1111,90 @@ fn update_game_ui(world: &mut World) {
     }
 }
 
+fn draw_weapon_sprite(ui: &mut GameUi, firing: bool) {
+    let rows = weapon_ui_rows(firing);
+    let width = rows[0].chars().count() as f32;
+    let height = rows.len() as f32;
+    let pixel = [0.01, 0.016];
+    let center = [0.22, 0.19];
+
+    for (row, pixels) in rows.iter().enumerate() {
+        for (column, ch) in pixels.chars().enumerate() {
+            let Some(color) = weapon_pixel_color(ch) else {
+                continue;
+            };
+            let x = center[0] + (column as f32 + 0.5 - width * 0.5) * pixel[0];
+            let y = center[1] + (height * 0.5 - row as f32 - 0.5) * pixel[1];
+            ui.panel(
+                format!("weapon_pixel_{row}_{column}"),
+                GameUiAnchor::BottomCenter,
+                [x, y],
+                pixel,
+                color,
+            );
+        }
+    }
+}
+
+fn weapon_ui_rows(firing: bool) -> Vec<String> {
+    let mut rows = vec![vec![' '; 34]; 24];
+
+    weapon_span(&mut rows, 4, 12, 22, 'm');
+    weapon_span(&mut rows, 5, 9, 25, 'M');
+    weapon_span(&mut rows, 6, 6, 29, 'K');
+    weapon_span(&mut rows, 7, 5, 32, 'K');
+    weapon_span(&mut rows, 8, 8, 32, 'K');
+    weapon_span(&mut rows, 9, 10, 32, 'K');
+    weapon_span(&mut rows, 10, 13, 33, 'k');
+    weapon_span(&mut rows, 11, 15, 33, 'k');
+    weapon_span(&mut rows, 12, 17, 33, 'K');
+    weapon_span(&mut rows, 13, 19, 33, 'K');
+    weapon_span(&mut rows, 14, 20, 33, 'K');
+    weapon_span(&mut rows, 15, 21, 33, 'K');
+    weapon_span(&mut rows, 16, 22, 33, 'K');
+    weapon_span(&mut rows, 17, 22, 31, 'K');
+    weapon_span(&mut rows, 18, 21, 29, 'k');
+    weapon_span(&mut rows, 19, 21, 28, 'k');
+    weapon_span(&mut rows, 20, 22, 28, 'K');
+    weapon_span(&mut rows, 21, 23, 28, 'K');
+    weapon_span(&mut rows, 22, 24, 28, 'K');
+
+    if firing {
+        weapon_span(&mut rows, 6, 2, 5, 'F');
+        weapon_span(&mut rows, 7, 1, 4, 'f');
+        weapon_span(&mut rows, 8, 3, 6, 'F');
+    }
+
+    rows.into_iter()
+        .map(|row| row.into_iter().collect())
+        .collect()
+}
+
+fn weapon_span(rows: &mut [Vec<char>], row: usize, start: usize, end: usize, ch: char) {
+    let Some(row) = rows.get_mut(row) else {
+        return;
+    };
+    let width = row.len();
+    for pixel in row.iter_mut().take(end.min(width)).skip(start.min(width)) {
+        *pixel = ch;
+    }
+}
+
+fn weapon_pixel_color(ch: char) -> Option<[f32; 4]> {
+    match ch {
+        'K' => Some([0.035, 0.04, 0.045, 1.0]),
+        'k' => Some([0.02, 0.024, 0.028, 1.0]),
+        'M' => Some([0.28, 0.29, 0.3, 1.0]),
+        'm' => Some([0.43, 0.44, 0.45, 1.0]),
+        'D' => Some([0.035, 0.04, 0.045, 1.0]),
+        'd' => Some([0.16, 0.17, 0.18, 1.0]),
+        'b' => Some([0.34, 0.35, 0.36, 1.0]),
+        'F' => Some([1.0, 0.82, 0.16, 1.0]),
+        'f' => Some([1.0, 0.35, 0.08, 1.0]),
+        _ => None,
+    }
+}
+
 fn menu_title_style() -> GameTextStyle {
     GameTextStyle::new(0.046, [0.93, 1.0, 0.78, 1.0])
         .with_font(TITLE_FONT)
@@ -935,7 +1270,7 @@ fn reset_game(world: &mut World, state: &mut ShooterState, physics: &mut Physics
     state.fire_timer = 0.0;
     state.muzzle_flash_timer = 0.0;
     state.ammo = state.max_ammo;
-    state.reserve_ammo = 48;
+    state.reserve_ammo = 5s;
     state.player_health = 100.0;
     state.kills = 0;
     state.wave = 1;
@@ -958,87 +1293,105 @@ fn spawn_lighting(world: &mut World) {
 }
 
 fn spawn_arena(world: &mut World) {
-    spawn_static_block(
-        world,
-        "Concrete Floor",
-        Vec3::new(0.0, -0.1, 0.0),
-        Vec3::new(ARENA_HALF_SIZE * 2.0, 0.2, ARENA_HALF_SIZE * 2.0),
-        [0.34, 0.38, 0.34, 1.0],
-    );
+    let descriptor = zombie_world_descriptor();
+    let spawned = spawn_world_descriptor(world, &descriptor);
 
-    spawn_static_block(
-        world,
-        "North Wall",
-        Vec3::new(0.0, 2.0, -ARENA_HALF_SIZE),
-        Vec3::new(ARENA_HALF_SIZE * 2.0, 4.0, 0.5),
-        [0.22, 0.27, 0.32, 1.0],
-    );
-    spawn_static_block(
-        world,
-        "South Wall",
-        Vec3::new(0.0, 2.0, ARENA_HALF_SIZE),
-        Vec3::new(ARENA_HALF_SIZE * 2.0, 4.0, 0.5),
-        [0.22, 0.27, 0.32, 1.0],
-    );
-    spawn_static_block(
-        world,
-        "West Wall",
-        Vec3::new(-ARENA_HALF_SIZE, 2.0, 0.0),
-        Vec3::new(0.5, 4.0, ARENA_HALF_SIZE * 2.0),
-        [0.22, 0.27, 0.32, 1.0],
-    );
-    spawn_static_block(
-        world,
-        "East Wall",
-        Vec3::new(ARENA_HALF_SIZE, 2.0, 0.0),
-        Vec3::new(0.5, 4.0, ARENA_HALF_SIZE * 2.0),
-        [0.22, 0.27, 0.32, 1.0],
-    );
+    if let Some(terrain) = spawned.terrain {
+        world.entity_mut(terrain).insert((
+            RigidBodyComponent::static_body(),
+            ColliderComponent::cuboid(Vec3::new(ARENA_HALF_SIZE, 0.1, ARENA_HALF_SIZE)),
+            CollisionLayers::in_layer(collision_layer::STATIC),
+        ));
+    }
 
-    for (i, position) in [
-        Vec3::new(-8.0, 0.6, -6.0),
-        Vec3::new(7.0, 0.6, -4.0),
-        Vec3::new(-5.0, 0.6, 7.0),
-        Vec3::new(10.0, 0.6, 8.0),
-    ]
-    .into_iter()
-    .enumerate()
+    for (object, entity) in descriptor
+        .objects
+        .iter()
+        .zip(spawned.objects.iter().copied())
     {
-        spawn_static_block(
-            world,
-            &format!("Cover {}", i + 1),
-            position,
-            Vec3::new(2.5, 1.2, 2.5),
-            [0.38, 0.33, 0.27, 1.0],
-        );
+        if object.solid {
+            let size = Vec3::from_array(object.size);
+            world.entity_mut(entity).insert((
+                RigidBodyComponent::static_body(),
+                ColliderComponent::cuboid(size * 0.5),
+                CollisionLayers::in_layer(collision_layer::STATIC),
+            ));
+        }
     }
 }
 
-fn spawn_static_block(
-    world: &mut World,
+fn zombie_world_descriptor() -> SceneWorldDescriptor {
+    let wall = [0.22, 0.27, 0.32, 1.0];
+    let cover = [0.38, 0.33, 0.27, 1.0];
+    SceneWorldDescriptor {
+        terrain: TerrainDescriptor {
+            width: ARENA_HALF_SIZE * 2.0,
+            depth: ARENA_HALF_SIZE * 2.0,
+            columns: 56,
+            rows: 56,
+            height_scale: 1.0,
+            tint: [0.34, 0.4, 0.34, 1.0],
+            waves: vec![
+                TerrainWaveDescriptor {
+                    direction: [1.0, 0.25],
+                    frequency: 5.0,
+                    amplitude: 0.05,
+                    phase: 0.2,
+                },
+                TerrainWaveDescriptor {
+                    direction: [-0.2, 1.0],
+                    frequency: 8.0,
+                    amplitude: 0.025,
+                    phase: 1.4,
+                },
+            ],
+        },
+        objects: vec![
+            world_object(
+                "North Wall",
+                [0.0, 2.0, -ARENA_HALF_SIZE],
+                [ARENA_HALF_SIZE * 2.0, 4.0, 0.5],
+                wall,
+            ),
+            world_object(
+                "South Wall",
+                [0.0, 2.0, ARENA_HALF_SIZE],
+                [ARENA_HALF_SIZE * 2.0, 4.0, 0.5],
+                wall,
+            ),
+            world_object(
+                "West Wall",
+                [-ARENA_HALF_SIZE, 2.0, 0.0],
+                [0.5, 4.0, ARENA_HALF_SIZE * 2.0],
+                wall,
+            ),
+            world_object(
+                "East Wall",
+                [ARENA_HALF_SIZE, 2.0, 0.0],
+                [0.5, 4.0, ARENA_HALF_SIZE * 2.0],
+                wall,
+            ),
+            world_object("Cover 1", [-8.0, 0.6, -6.0], [2.5, 1.2, 2.5], cover),
+            world_object("Cover 2", [7.0, 0.6, -4.0], [2.5, 1.2, 2.5], cover),
+            world_object("Cover 3", [-5.0, 0.6, 7.0], [2.5, 1.2, 2.5], cover),
+            world_object("Cover 4", [10.0, 0.6, 8.0], [2.5, 1.2, 2.5], cover),
+        ],
+    }
+}
+
+fn world_object(
     name: &str,
-    position: Vec3,
-    size: Vec3,
+    position: [f32; 3],
+    size: [f32; 3],
     tint: [f32; 4],
-) -> Entity {
-    let entity = world
-        .spawn((
-            Name(name.to_string()),
-            TransformComponent::new(Transform {
-                position,
-                scale: size,
-                ..Default::default()
-            }),
-            GlobalTransform::default(),
-            RenderMesh::new(MeshPrimitive::Cube, RenderMaterial::default()).with_tint(tint),
-        ))
-        .id();
-    world.entity_mut(entity).insert((
-        RigidBodyComponent::static_body(),
-        ColliderComponent::cuboid(size * 0.5),
-        CollisionLayers::in_layer(collision_layer::STATIC),
-    ));
-    entity
+) -> WorldObjectDescriptor {
+    WorldObjectDescriptor {
+        name: name.to_string(),
+        position,
+        size,
+        tint,
+        solid: true,
+    }
 }
 
 fn spawn_player(world: &mut World) -> Entity {
@@ -1073,12 +1426,13 @@ fn spawn_gun(world: &mut World) -> Entity {
             Name("Gun".to_string()),
             TransformComponent::new(Transform {
                 position: Vec3::new(0.25, 1.8, 7.4),
-                scale: Vec3::new(0.18, 0.14, 0.7),
+                scale: Vec3::ONE,
                 ..Default::default()
             }),
             GlobalTransform::default(),
-            RenderMesh::new(MeshPrimitive::Cube, RenderMaterial::default())
-                .with_tint([0.08, 0.09, 0.1, 1.0]),
+            SpriteBillboard::new(GUN_SPRITE, Vec2::new(0.52, 0.3))
+                .with_facing(SpriteFacing::Camera)
+                .with_depth(SpriteDepthMode::World),
         ))
         .id()
 }
@@ -1089,26 +1443,33 @@ fn update_gun_transform(
     camera_position: Vec3,
     view_rotation: Quat,
 ) {
+    let recoil = if state.muzzle_flash_timer > 0.0 {
+        -0.035
+    } else {
+        0.0
+    };
     let forward = view_rotation * Vec3::NEG_Z;
     let right = view_rotation * Vec3::X;
     let up = view_rotation * Vec3::Y;
-    let gun_position = camera_position + forward * 0.55 + right * 0.24 - up * 0.2;
+    let gun_position = camera_position + forward * 0.95 + right * 0.34 - up * (0.28 - recoil);
 
     if let Some(transform) = world.get_mut::<TransformComponent>(state.gun_entity) {
         transform.set_transform(Transform {
             position: gun_position,
             rotation: view_rotation,
-            scale: Vec3::new(0.18, 0.14, 0.7),
+            scale: Vec3::ONE,
         });
     }
 }
 
 fn update_gun_tint(world: &mut World, state: &ShooterState) {
-    if let Some(render_mesh) = world.get_mut::<RenderMesh>(state.gun_entity) {
-        render_mesh.tint = if state.muzzle_flash_timer > 0.0 {
-            [1.0, 0.82, 0.22, 1.0]
+    if let Some(sprite) = world.get_mut::<SpriteBillboard>(state.gun_entity) {
+        if state.muzzle_flash_timer > 0.0 {
+            sprite.sprite = SpriteId::from(GUN_FIRE_SPRITE);
+            sprite.tint = [1.0, 0.95, 0.74, 1.0];
         } else {
-            [0.08, 0.09, 0.1, 1.0]
+            sprite.sprite = SpriteId::from(GUN_SPRITE);
+            sprite.tint = [1.0, 1.0, 1.0, 1.0];
         };
     }
 }
@@ -1134,14 +1495,10 @@ fn spawn_zombie(world: &mut World, position: Vec3, wave: u32) -> Entity {
                 ..Default::default()
             }),
             GlobalTransform::default(),
-            RenderMesh::new(
-                MeshPrimitive::Sphere {
-                    segments: 16,
-                    rings: 16,
-                },
-                RenderMaterial::default(),
-            )
-            .with_tint([0.32, 0.72, 0.28, 1.0]),
+            SpriteBillboard::new(ZOMBIE_SPRITE, Vec2::new(1.25, 1.85))
+                .with_tint([0.9, 1.0, 0.86, 1.0])
+                .with_facing(SpriteFacing::YBillboard)
+                .with_depth(SpriteDepthMode::World),
         ))
         .id();
     world.entity_mut(entity).insert((

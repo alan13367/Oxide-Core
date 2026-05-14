@@ -33,13 +33,16 @@ pub use crate::render::RenderFrame;
 pub use crate::scene::{
     attach_child, detach_child, initialize_scene_editor, initialize_scene_renderer,
     install_scene_renderer, load_scene_descriptor, mark_subtree_dirty, prepare_scene_renderer,
-    queue_scene_renderer, resize_scene_renderer, show_scene_authoring_egui, show_scene_editor_egui,
-    spawn_scene_descriptor, transform_propagate_system, with_scene_editor, Children,
-    GlobalTransform, MeshPrimitive, MeshRenderer, Name, Parent, RenderMaterial, RenderMesh,
-    SceneAuthoringPlugins, SceneBuiltinShader, SceneDescriptor, SceneEditor, SceneEditorPlugin,
-    SceneEntityDescriptor, SceneEntityKind, SceneEntitySummary, SceneMaterialDescriptor,
-    SceneMeshPrimitive, SceneRenderer, SceneRendererPlugin, SceneRendererStats, SceneSpawnResult,
-    SceneTransform, TransformComponent,
+    queue_scene_renderer, register_sprite, resize_scene_renderer, show_scene_authoring_egui,
+    show_scene_editor_egui, spawn_scene_descriptor, spawn_world_descriptor,
+    transform_propagate_system, with_scene_editor, Children, GlobalTransform, MeshPrimitive,
+    MeshRenderer, Name, Parent, RenderMaterial, RenderMesh, SceneAuthoringPlugins,
+    SceneBuiltinShader, SceneDescriptor, SceneEditor, SceneEditorPlugin, SceneEntityDescriptor,
+    SceneEntityKind, SceneEntitySummary, SceneMaterialDescriptor, SceneMeshPrimitive,
+    SceneRenderer, SceneRendererPlugin, SceneRendererStats, SceneSpawnResult, SceneTransform,
+    SceneWorldDescriptor, SceneWorldSpawnResult, SpriteAssets, SpriteBillboard, SpriteDepthMode,
+    SpriteFacing, SpriteId, SpriteImage, SpriteImageError, Terrain, TerrainDescriptor,
+    TerrainWaveDescriptor, TransformComponent, WorldObjectDescriptor,
 };
 #[cfg(feature = "gltf-import")]
 pub use crate::scene::{

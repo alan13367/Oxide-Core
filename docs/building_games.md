@@ -19,6 +19,10 @@ the engine prelude for normal game code.
 - Use `SceneDescriptor` for small data-driven scenes and prefabs.
 - Use `RenderMesh` to describe render intent without storing GPU buffers in
   gameplay components.
+- Use `SpriteAssets` and `SpriteBillboard` for native custom sprites such as
+  2D enemies, pickups, muzzle flashes, first-person weapons, and overlay props.
+- Use `Terrain`, `TerrainDescriptor`, and `SceneWorldDescriptor` for
+  configurable heightfield terrain plus reusable world blockout data.
 - Use `SceneRendererPlugin` directly if you only want automatic rendering.
   The app runner prepares and queues it automatically when a `SceneRenderer`
   resource exists.
@@ -34,10 +38,10 @@ the engine prelude for normal game code.
 See `examples/minimal_game` for the smallest end-to-end template. It spawns a
 starter scene and does not own a render pipeline, camera buffer, light buffer,
 depth texture, or primitive GPU mesh itself. See `examples/zombie_shooter` for
-a larger code-first gameplay slice with terrain blockout, jumping, hitscan
-shooting, zombie AI, start/pause/game-over screens, health/ammo HUD widgets,
-native text labels, menu cursor release/capture, audio feedback, and wave
-spawning.
+a larger code-first gameplay slice with native zombie/weapon sprites,
+descriptor-authored terrain/world geometry, jumping, hitscan shooting, zombie
+AI, start/pause/game-over screens, health/ammo HUD widgets, native text labels,
+menu cursor release/capture, audio feedback, and wave spawning.
 
 ```rust
 app::<MyGame>()
@@ -54,6 +58,33 @@ if let Some(audio) = world
     .then(|| world.resource::<Audio>())
 {
     audio.play_tone(AudioTone::sine(660.0, 0.08, 0.18));
+}
+```
+
+Native sprites are registered once and referenced by stable IDs from gameplay
+components:
+
+```rust
+register_sprite(&mut world, "zombie.walker", zombie_sprite_image()?);
+
+world.spawn((
+    Name("Zombie".to_string()),
+    TransformComponent::from_position(Vec3::new(0.0, 0.9, -8.0)),
+    GlobalTransform::default(),
+    SpriteBillboard::new("zombie.walker", Vec2::new(1.25, 1.85))
+        .with_facing(SpriteFacing::YBillboard),
+));
+```
+
+Worlds can be authored as data and then given physics colliders by the game:
+
+```rust
+let spawned = spawn_world_descriptor(&mut world, &my_world_descriptor);
+if let Some(terrain) = spawned.terrain {
+    world.entity_mut(terrain).insert((
+        RigidBodyComponent::static_body(),
+        ColliderComponent::cuboid(Vec3::new(32.0, 0.1, 32.0)),
+    ));
 }
 ```
 

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalPosition,
-    event::{ElementState, WindowEvent},
+    event::{DeviceEvent, DeviceId, ElementState, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     window::WindowId,
 };
@@ -528,6 +528,12 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
                 }
 
                 if let (Some(app), Some(window)) = (self.app.as_mut(), self.window.as_ref()) {
+                    let cursor_grabbed = app.world().contains_resource::<MouseInput>()
+                        && app.world().resource::<MouseInput>().cursor_grabbed();
+                    if !cursor_grabbed {
+                        return;
+                    }
+
                     let size = window.size();
                     let center =
                         PhysicalPosition::new(size.width as f64 * 0.5, size.height as f64 * 0.5);
@@ -547,11 +553,42 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
 
                 if let Some(app) = self.app.as_mut() {
                     let mouse = app.world_mut().resource_mut::<MouseInput>();
-                    mouse.process_move(position);
+                    if !mouse.cursor_grabbed() {
+                        mouse.process_move(position);
+                    }
                 }
             }
             _ => {}
         }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        if !self.window_focused {
+            return;
+        }
+
+        let DeviceEvent::MouseMotion { delta } = event else {
+            return;
+        };
+
+        let Some(app) = self.app.as_mut() else {
+            return;
+        };
+        if !app.world().contains_resource::<MouseInput>() {
+            return;
+        }
+        if !app.world().resource::<MouseInput>().cursor_grabbed() {
+            return;
+        }
+
+        app.world_mut()
+            .resource_mut::<MouseInput>()
+            .process_delta(delta.0, delta.1);
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {

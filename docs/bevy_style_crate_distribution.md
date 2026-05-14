@@ -16,8 +16,9 @@ engine frameworks.
 - `oxide_camera`: camera components, FPS controller logic, and GPU camera
   buffers.
 - `oxide_light`: light components and GPU light buffers/uniforms.
-- `oxide_scene`: scene descriptors, renderable scene components, transform
-  hierarchy re-exports, and automatic scene rendering.
+- `oxide_scene`: scene descriptors, renderable scene components, native
+  sprites, terrain/world descriptors, transform hierarchy re-exports, and
+  automatic scene rendering.
 - `oxide_ui`: native game UI widgets, text/font rendering, egui bridge helpers,
   runtime UI data, and debug overlay data.
 - `oxide_editor`: runtime scene editor resource and egui hierarchy/inspector.
