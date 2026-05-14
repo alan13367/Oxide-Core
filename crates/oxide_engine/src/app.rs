@@ -11,17 +11,21 @@ use winit::{
     window::WindowId,
 };
 
-use crate::asset::{AssetServerResource, MaterialAssets};
 #[cfg(feature = "gltf-import")]
 use crate::asset::GltfSceneAssets;
-use crate::ecs::{CommandQueue, IntoSystem, System, Time, WindowResource, World};
+use crate::asset::{AssetServerResource, MaterialAssets};
+use crate::ecs::{CommandQueue, IntoSystem, RendererResource, System, Time, WindowResource, World};
 use crate::event::{window_event_to_engine, EngineEvent};
 use crate::input::{KeyboardInput, MouseInput};
 use crate::render::RenderFrame;
 #[cfg(feature = "gltf-import")]
 use crate::scene::{gltf_scene_spawn_system, PendingGltfSceneSpawns, SpawnedGltfScenes};
-use crate::scene::transform_propagate_system;
-use crate::ui::{handle_egui_event, EguiManager};
+use crate::scene::{
+    prepare_scene_renderer, queue_scene_renderer, resize_scene_renderer, transform_propagate_system,
+};
+use crate::ui::{
+    handle_egui_event, prepare_game_text_renderer, queue_game_text_renderer, EguiManager,
+};
 use crate::window::Window;
 use oxide_renderer::Renderer;
 
@@ -162,6 +166,74 @@ fn initialize_asset_resources(world: &mut World, _window: &Window) {
     }
 }
 
+fn resize_engine_render_resources(world: &mut World, width: u32, height: u32) {
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    if world.contains_resource::<WindowResource>() {
+        world.resource_mut::<WindowResource>().update(width, height);
+    }
+
+    if world.contains_resource::<RendererResource>() {
+        world
+            .resource_mut::<RendererResource>()
+            .renderer
+            .resize(width, height);
+    }
+
+    resize_scene_renderer(world, width, height);
+}
+
+fn sync_cursor_capture(
+    world: &mut World,
+    window: &Window,
+    focused: bool,
+    force: bool,
+    synced_cursor_grabbed: &mut Option<bool>,
+) {
+    let cursor_grabbed = if world.contains_resource::<MouseInput>() {
+        world.resource::<MouseInput>().cursor_grabbed()
+    } else {
+        false
+    };
+
+    if !focused {
+        if let Err(err) = window.set_cursor_grabbed(false) {
+            tracing::warn!("Failed to release cursor: {err}");
+        }
+        window.set_cursor_visible(true);
+        *synced_cursor_grabbed = None;
+        return;
+    }
+
+    if !force && *synced_cursor_grabbed == Some(cursor_grabbed) {
+        return;
+    }
+
+    if cursor_grabbed {
+        window.set_cursor_visible(false);
+        if let Err(err) = window.set_cursor_grabbed(true) {
+            tracing::warn!("Failed to grab cursor: {err}");
+        }
+        let size = window.size();
+        let center = PhysicalPosition::new(size.width as f64 * 0.5, size.height as f64 * 0.5);
+        if let Err(err) = window.set_cursor_position(center) {
+            tracing::warn!("Failed to center cursor: {err}");
+        }
+        if world.contains_resource::<MouseInput>() {
+            world.resource_mut::<MouseInput>().set_position(center);
+        }
+    } else {
+        if let Err(err) = window.set_cursor_grabbed(false) {
+            tracing::warn!("Failed to release cursor: {err}");
+        }
+        window.set_cursor_visible(true);
+    }
+
+    *synced_cursor_grabbed = Some(cursor_grabbed);
+}
+
 pub struct DefaultPlugins;
 
 impl<T: App> PluginGroup<T> for DefaultPlugins {
@@ -259,6 +331,8 @@ pub struct AppRunner<T: App> {
     window: Option<Window>,
     systems: RunnerSystems,
     startup_ran: bool,
+    window_focused: bool,
+    synced_cursor_grabbed: Option<bool>,
 }
 
 impl<T: App> Default for AppRunner<T> {
@@ -278,6 +352,8 @@ impl<T: App> AppRunner<T> {
             window: None,
             systems,
             startup_ran: false,
+            window_focused: true,
+            synced_cursor_grabbed: None,
         }
     }
 
@@ -336,8 +412,21 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
             return;
         }
 
-        if let Some(app) = self.app.as_mut() {
+        if let (Some(app), Some(window)) = (self.app.as_mut(), self.window.as_ref()) {
             if let Some(engine_event) = window_event_to_engine(&event) {
+                if let EngineEvent::Resized { width, height } = &engine_event {
+                    resize_engine_render_resources(app.world_mut(), *width, *height);
+                }
+                if let EngineEvent::Focused(focused) = &engine_event {
+                    self.window_focused = *focused;
+                    sync_cursor_capture(
+                        app.world_mut(),
+                        window,
+                        *focused,
+                        true,
+                        &mut self.synced_cursor_grabbed,
+                    );
+                }
                 app.on_event(engine_event);
             }
         }
@@ -361,12 +450,23 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
                     app.update();
                     RunnerSystems::run(&mut self.systems.update, app.world_mut());
                     RunnerSystems::run(&mut self.systems.post_update, app.world_mut());
+                    if let Some(window) = self.window.as_ref() {
+                        sync_cursor_capture(
+                            app.world_mut(),
+                            window,
+                            self.window_focused,
+                            false,
+                            &mut self.synced_cursor_grabbed,
+                        );
+                    }
 
                     app.extract();
                     RunnerSystems::run(&mut self.systems.extract, app.world_mut());
 
                     app.prepare();
                     RunnerSystems::run(&mut self.systems.prepare, app.world_mut());
+                    prepare_scene_renderer(app.world_mut());
+                    prepare_game_text_renderer(app.world_mut());
 
                     let frame_parts = {
                         let renderer = &app
@@ -388,6 +488,8 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
 
                     if let Some((surface_texture, device, queue)) = frame_parts {
                         let mut frame = RenderFrame::new(&device, surface_texture);
+                        queue_scene_renderer(app.world_mut(), &mut frame);
+                        queue_game_text_renderer(app.world_mut(), &mut frame);
                         app.queue(&mut frame);
                         frame.present(&queue);
                     }

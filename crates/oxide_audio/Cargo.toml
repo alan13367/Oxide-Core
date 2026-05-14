@@ -1,0 +1,18 @@
+[package]
+name = "oxide-core-audio"
+description = "Oxide Core audio playback and mixing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "oxide_audio"
+
+[dependencies]
+cpal = "0.16"
+thiserror.workspace = true
+tracing.workspace = true

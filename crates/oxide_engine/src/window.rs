@@ -4,7 +4,7 @@ use std::sync::Arc;
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
     event_loop::ActiveEventLoop,
-    window::{Window as WinitWindow, WindowId},
+    window::{CursorGrabMode, Window as WinitWindow, WindowId},
 };
 
 #[derive(Clone)]
@@ -45,6 +45,24 @@ impl Window {
 
     pub fn set_cursor_visible(&self, visible: bool) {
         self.inner.set_cursor_visible(visible);
+    }
+
+    pub fn set_cursor_grabbed(&self, grabbed: bool) -> Result<(), winit::error::ExternalError> {
+        if grabbed {
+            self.inner
+                .set_cursor_grab(CursorGrabMode::Locked)
+                .or_else(|_| self.inner.set_cursor_grab(CursorGrabMode::Confined))
+        } else {
+            self.inner.set_cursor_grab(CursorGrabMode::None)
+        }
+    }
+
+    pub fn center_cursor(&self) -> Result<(), winit::error::ExternalError> {
+        let size = self.size();
+        self.set_cursor_position(PhysicalPosition::new(
+            size.width as f64 * 0.5,
+            size.height as f64 * 0.5,
+        ))
     }
 
     pub fn set_cursor_position(

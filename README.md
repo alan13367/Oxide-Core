@@ -8,7 +8,12 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **ECS**: custom `oxide_ecs` runtime for entity-component-system architecture
 - **Math**: glam for fast 3D math operations
 - **Physics**: optional in-house 3D backend via `oxide_physics` (fixed-step simulation, spatial-hash broadphase, warm-started contact manifolds, collision layers/events, OBB cuboid support, ray/sphere cast queries)
+- **Audio**: `oxide_audio` playback, software mixing, generated tones, and WAV clip loading via an engine `AudioPlugin`
+- **Focused Runtime Crates**: camera, lighting, scene, UI, editor, audio, physics, asset, input, transform, renderer, and ECS code live outside the façade crate behind Oxide-owned APIs
 - **Materials + Shaders**: built-in shader pack plus custom WGSL (inline/file) with fallback support
+- **Automatic Scene Renderer**: optional plugin that renders `RenderMesh` scene entities without app-owned pipelines
+- **Game UI + Text**: camera-locked panels, buttons, bars, counters, reticles, native styled text widgets, and custom TrueType/OpenType font registration
+- **Scene Editor Model**: hierarchy/inspector resource with spawn, select, duplicate, delete, transform, and tint editing APIs
 - **Descriptor Pipeline**: JSON, RON, and TOML material descriptors for built-in and project-level shader assets
 - **Hot-Reloading**: Automatically reload shader assets during development
 - **Robust Validation**: Static checks to ensure custom shaders comply with engine bindings
@@ -35,6 +40,8 @@ The workspace includes several examples demonstrating the engine's rendering cap
 ```bash
 cargo run -p hello_window         # Interactive lit scene
 cargo run -p physics_example      # In-house physics demo (falling/collision)
+cargo run -p minimal_game         # Minimal code-first game template
+cargo run -p zombie_shooter       # FPS zombie shooter prototype
 cargo run -p unlit_example        # Basic unlit rendering
 cargo run -p sky_gradient_example # Skybox/gradient material demo
 cargo run -p sprite_ui_example    # 2D Orthographic overlay material
@@ -44,76 +51,54 @@ cargo run -p sprite_ui_example    # 2D Orthographic overlay material
 
 Oxide Core uses a data-driven architecture powered by an Entity-Component-System (ECS). Applications are built by implementing the `App` trait and launched with the fluent app builder.
 
-### 1. Implement the `App` Trait
+### 1. Start With Scene Authoring Plugins
 
-The `App` trait provides a complete lifecycle for setting up resources, running the simulation, rendering the frame, and handling window events:
+For code-first games, use `DefaultPlugins` plus `SceneAuthoringPlugins`. The engine will render `RenderMesh` entities automatically, so small games do not need to own a `wgpu::RenderPipeline`, camera buffer, light buffer, depth texture, or primitive GPU mesh.
 
 ```rust
 use oxide_engine::prelude::*;
 
 struct MyApp {
     world: World,
-    pipeline: wgpu::RenderPipeline,
-    // ... other resources
 }
 
 impl App for MyApp {
-    // 1. Setup fundamental ECS resources
     fn configure(world: &mut World) {
         world.init_resource::<Time>();
         world.init_resource::<KeyboardInput>();
         world.init_resource::<MouseInput>();
     }
 
-    // 2. Initialize application state, spawn entities, build pipelines
     fn init(window: &Window, renderer: Renderer) -> Self {
         let mut world = World::new();
         Self::configure(&mut world);
-        
         world.insert_resource(RendererResource::new(renderer));
-        
-        // Spawn ECS entities here...
-        
-        Self { world, /* ... */ }
+        world.insert_resource(WindowResource::new(window.size().width, window.size().height));
+
+        let scene = SceneDescriptor::starter_scene();
+        let roots = spawn_scene_descriptor(&mut world, &scene);
+        world.insert_resource(SceneSpawnResult { entities: roots });
+
+        Self { world }
     }
 
-    // Required accessors
     fn world(&self) -> &World { &self.world }
     fn world_mut(&mut self) -> &mut World { &mut self.world }
-    
-    // 3. Update ECS state (called every frame)
-    fn update(&mut self) {
-        let time = self.world.resource::<Time>();
-        // Query components and run logic...
-    }
-
-    // 4. Extract transient render data from the main world
-    fn extract(&mut self) {}
-
-    // 5. Prepare GPU data (uniform/storage buffers, bind groups, etc.)
-    fn prepare(&mut self) {}
-
-    // 6. Queue draw calls into the engine-provided frame context
-    fn queue(&mut self, frame: &mut RenderFrame) {
-        // Build render passes using frame.encoder and frame.view
-    }
-
-    // 7. Handle system and windowing events
-    fn on_event(&mut self, event: EngineEvent) {
-        if let EngineEvent::Resized { width, height } = event {
-            // Resize renderer and depth textures
-        }
-    }
+    fn update(&mut self) {}
+    fn on_event(&mut self, _event: EngineEvent) {}
 }
 
 fn main() {
     tracing_subscriber::fmt::init();
     app::<MyApp>()
         .add_plugins(DefaultPlugins)
+        .add_plugins(SceneAuthoringPlugins)
         .add_system(AppStage::PreUpdate, camera_controller_system)
         .run();
 }
 ```
+
+Use `App::prepare` and `App::queue` only when a project needs a custom render pass or overlay on top of the automatic scene renderer.
 
 ### 2. Ergonomic Systems + Deferred Commands
 
@@ -214,6 +199,8 @@ if let Some(mut watcher) = self.world.get_non_send_resource_mut::<AssetWatcher>(
 ```
 
 See `docs/shader_material_roadmap.md` for roadmap, implementation status, and API semver guarantees.
+See `docs/building_games.md` for the current game authoring path.
+See `docs/scene_authoring.md` for the automatic scene renderer and editor model.
 
 ## Crates
 
@@ -222,6 +209,12 @@ See `docs/shader_material_roadmap.md` for roadmap, implementation status, and AP
 - `oxide-core-engine` (library crate name: `oxide_engine`)
 - `oxide-core-renderer` (library crate name: `oxide_renderer`)
 - `oxide-core-asset` (library crate name: `oxide_asset`)
+- `oxide-core-audio` (library crate name: `oxide_audio`)
+- `oxide-core-camera` (library crate name: `oxide_camera`)
+- `oxide-core-light` (library crate name: `oxide_light`)
+- `oxide-core-scene` (library crate name: `oxide_scene`)
+- `oxide-core-ui` (library crate name: `oxide_ui`)
+- `oxide-core-editor` (library crate name: `oxide_editor`)
 - `oxide-core-input` (library crate name: `oxide_input`)
 - `oxide-core-transform` (library crate name: `oxide_transform`)
 - `oxide-core-math` (library crate name: `oxide_math`)
@@ -231,17 +224,23 @@ See `docs/shader_material_roadmap.md` for roadmap, implementation status, and AP
 
 | Crate | Description |
 |-------|-------------|
-| `oxide_engine` | Facade crate exposing prelude and high-level engine APIs |
+| `oxide_engine` | Facade crate for app lifecycle, plugin wiring, window/event loop integration, and compatibility prelude |
 | `oxide_input` | Layout-stable keyboard/mouse input resources (`PhysicalKey`-based) |
-| `oxide_ecs` | Custom ECS runtime (world, entities, storage, resources, queries) |
+| `oxide_ecs` | Custom ECS runtime (world, entities, storage, resources, queries, events) |
 | `oxide_ecs_derive` | Proc-macro derives for ECS traits (`Component`, `Resource`, `ScheduleLabel`) |
 | `oxide_asset` | Generic asset handles, typed storage, and async asset loading primitives |
+| `oxide_audio` | Audio playback, generated tones, WAV clips, and software mixing |
+| `oxide_camera` | Camera components, FPS controller system, and GPU camera buffer helpers |
+| `oxide_light` | Light components, GPU light uniforms, and light buffer update helpers |
+| `oxide_scene` | Scene descriptors, renderable scene components, transform re-exports, and automatic scene renderer |
+| `oxide_ui` | Native game UI widgets, text/font rendering, egui bridge, runtime UI, and debug overlay data |
+| `oxide_editor` | Runtime scene editor resource and egui hierarchy/inspector surface |
 | `oxide_transform` | Transform + hierarchy components and dirty-aware propagation |
 | `oxide_renderer` | Low-level wgpu rendering abstraction and material descriptors |
 | `oxide_math` | Math types and utilities leveraging `glam` |
 | `oxide_physics` | In-house 3D physics crate with ECS-first components, systems, and `PhysicsPlugin` |
 
-The crate layout is being evolved toward a Bevy-style distribution of focused domain crates plus a stable facade. See `docs/bevy_style_crate_distribution.md` for the active structure plan, and `docs/dependency_policy.md` for dependency boundary rules.
+The crate layout is being evolved toward a Bevy-style distribution of focused domain crates plus a stable facade. See `docs/bevy_style_crate_distribution.md` for the active structure plan, `docs/dependency_policy.md` for dependency boundary rules, and `docs/asset_pipeline.md` for the importer-to-runtime asset direction.
 
 ## License
 

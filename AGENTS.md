@@ -10,6 +10,7 @@ Oxide Core is a high-performance 3D game engine built from scratch in Rust. It i
 - **Systems**: `IntoSystem` + `SystemParam` (`Res`, `ResMut`, `Query`, `Commands`) for ergonomic signatures
 - **Math**: `glam` for efficient 3D linear algebra
 - **Physics**: in-house `oxide_physics` runtime for rigid body simulation
+- **Audio**: `oxide_audio` for Oxide-owned audio playback, WAV clips, generated tones, and software mixing over the `cpal` platform backend
 - **Windowing**: `winit` for cross-platform windowing and event handling
 - **Diagnostics**: `tracing` and `tracing-subscriber` for logging and instrumentation
 - **Serialization**: `serde` and `serde_json` for material descriptors
@@ -18,15 +19,21 @@ Oxide Core is a high-performance 3D game engine built from scratch in Rust. It i
 ## Project Architecture
 The workspace is divided into several specialized crates:
 
-- **`oxide_engine`**: The core orchestration layer. It defines the `App` trait, plugin APIs (`Plugin`, `DefaultPlugins`), manages the main loop via `winit`, integrates `oxide_ecs`, handles input/events, and provides an `AssetWatcher` for hot-reloading.
+- **`oxide_engine`**: The core orchestration/facade layer. It defines the `App` trait, plugin APIs (`Plugin`, `DefaultPlugins`, `SceneAuthoringPlugins`), manages the main loop via `winit`, integrates `oxide_ecs`, handles input/events, provides an `AssetWatcher` for hot-reloading, and owns engine-facing plugin wiring/re-exports for scene, UI, editor, camera, light, audio, and renderer systems.
 - **`oxide_renderer`**: A low-level abstraction over `wgpu`. It handles device/queue initialization, swapchain management (Surface), and provides primitives for meshes, pipelines, descriptor-driven materials, and shaders.
 - **`oxide_math`**: Provides math types and utilities, re-exporting `glam` types and adding engine-specific transforms and camera math.
 - **`oxide_asset`**: Generic typed handles, handle-indexed asset storage, and async loading primitives. Renderer-specific caches and imported asset types should live in renderer or engine-facing crates.
+- **`oxide_audio`**: Audio playback, generated tones, WAV clip loading, software mixing, volume control, and sound instance handles. Engine integration lives in `oxide_engine::audio::AudioPlugin`.
+- **`oxide_camera`**: Camera components, FPS controller system, and GPU camera buffer helpers. Engine integration is a compatibility re-export.
+- **`oxide_light`**: Ambient/directional/point light components plus GPU light uniform/buffer helpers. Engine integration is a compatibility re-export.
+- **`oxide_scene`**: Scene descriptors, renderable scene components, transform hierarchy re-exports, and the automatic `SceneRenderer`. Engine integration lives in `oxide_engine::scene::SceneRendererPlugin`.
+- **`oxide_ui`**: Native `GameUi`, text/font rendering, egui bridge helpers, runtime UI data, and debug overlay data. Engine integration lives in `oxide_engine::ui` plugin wrappers.
+- **`oxide_editor`**: Runtime `SceneEditor` model and egui hierarchy/inspector surface. Engine integration lives in `oxide_engine::scene::SceneEditorPlugin`.
 - **`oxide_physics`**: In-house 3D physics crate providing ECS components/resources/systems and a `PhysicsPlugin` for `AppStage::Update` (fixed-step simulation, spatial-hash broadphase, warm-started manifold solver, collision layers/events, joints, and OBB-aware cuboid collisions).
-- **`examples/`**: Contains demonstration projects. The primary example is `hello_window`, which serves as a full-featured interactive 3D scene with FPS-style camera controls. Other examples include `physics_example`, `unlit_example`, `sky_gradient_example`, and `sprite_ui_example`.
+- **`examples/`**: Contains demonstration projects. The primary example is `hello_window`, which serves as a full-featured interactive 3D scene with FPS-style camera controls. Other examples include `minimal_game`, `zombie_shooter`, `physics_example`, `unlit_example`, `sky_gradient_example`, and `sprite_ui_example`.
 
 ### Published package names (crates.io)
-- `oxide-core-engine`, `oxide-core-renderer`, `oxide-core-asset`, `oxide-core-input`, `oxide-core-transform`, `oxide-core-math`, `oxide-core-physics`
+- `oxide-core-engine`, `oxide-core-renderer`, `oxide-core-asset`, `oxide-core-audio`, `oxide-core-camera`, `oxide-core-light`, `oxide-core-scene`, `oxide-core-ui`, `oxide-core-editor`, `oxide-core-input`, `oxide-core-transform`, `oxide-core-math`, `oxide-core-physics`
 - `oxide_ecs`, `oxide_ecs_derive`
 
 ## Building and Running
@@ -63,6 +70,7 @@ Engine users implement the `App` trait found in `oxide_engine::app`. The lifecyc
 4. `update`: Process input and update ECS world state (called every frame). Hot-reloading checks can be performed here using `AssetWatcher`.
 5. `extract` / `prepare` / `queue`: Render pipeline stages executed each frame.
 6. `on_event`: Respond to windowing or system events.
+7. If `SceneRendererPlugin` is installed, the runner automatically prepares and queues `RenderMesh` scene entities and resizes the scene depth texture. If `GameUiPlugin` is installed, it also installs the native overlay text renderer and `GameFonts` registry used by `GameUi` text widgets.
 
 ### ECS Runtime Notes
 - **Deferred Commands**: `Commands` queue world mutations and apply them at stage boundaries.
@@ -70,12 +78,13 @@ Engine users implement the `App` trait found in `oxide_engine::app`. The lifecyc
 - **Mixed Query Support**: `Query<(&mut A, &B)>` and `Query<(&A, &mut B)>` are supported in system params.
 - **Entity-Aware Query Support**: `Query<(Entity, &T)>` and `Query<(Entity, &mut T)>` are supported for systems that need stable entity identity.
 - **Async glTF Spawn Flow**: Queue loads via `request_gltf_scene_spawn(...)`; `gltf_scene_spawn_system` resolves handles and spawns hierarchy roots retrievable through `take_spawned_scene_roots(...)`.
+- **Game Authoring Path**: Prefer `SceneDescriptor`, `RenderMesh`, `SceneAuthoringPlugins`, `SceneRendererPlugin`, `GameUiPlugin`, `GameFonts`, `GameTextStyle`, `AudioPlugin`, `Audio`, `SceneEditorPlugin`, `Events<T>`, `Timer`, `RuntimeUiPlugin`, and `DevOverlayPlugin` for new examples and game-facing features. See `docs/building_games.md` and `docs/scene_authoring.md`.
 
 ### Coding Style
 - **ECS-First**: Prefer storing data in Components and logic in Systems or `App` trait implementations.
 - **Safety**: Leverage Rust's type system to ensure thread safety and memory management.
 - **Explicit Imports**: Use `oxide_engine::prelude::*` for common types, but prefer explicit imports for crate-internal modules.
-- **Error Handling**: Use `thiserror` for defining custom error types in library crates (`oxide_renderer`, `oxide_engine`).
+- **Error Handling**: Use `thiserror` for defining custom error types in library crates (`oxide_renderer`, `oxide_engine`, `oxide_ui`, etc.).
 - **Resource Management**: Large GPU resources (Buffers, Textures) should be managed through the `Renderer` or stored as ECS Resources.
 
 ### Materials and Shaders

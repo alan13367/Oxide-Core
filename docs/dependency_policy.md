@@ -23,6 +23,8 @@ Utility and platform dependencies are allowed when they stay behind Oxide-owned
 APIs:
 
 - OS/window/GPU abstraction crates such as `winit` and `wgpu`.
+- OS audio abstraction crates such as `cpal`, kept behind Oxide-owned audio
+  APIs.
 - Math, serialization, diagnostics, image, and asset-import utilities.
 - Development and editor tooling, preferably behind features.
 

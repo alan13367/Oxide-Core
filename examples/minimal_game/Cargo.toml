@@ -1,0 +1,13 @@
+[package]
+name = "minimal_game"
+description = "Oxide Core example - minimal game template"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+oxide_engine.workspace = true
+oxide_physics = { workspace = true, features = ["engine-plugin"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+wgpu.workspace = true

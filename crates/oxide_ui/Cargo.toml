@@ -1,0 +1,28 @@
+[package]
+name = "oxide-core-ui"
+description = "Oxide Core native game UI, text rendering, fonts, egui integration, and debug overlays"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "oxide_ui"
+
+[dependencies]
+oxide_camera.workspace = true
+oxide_ecs.workspace = true
+oxide_math.workspace = true
+oxide_scene.workspace = true
+oxide_transform.workspace = true
+ab_glyph = "0.2.32"
+bytemuck.workspace = true
+egui = "0.33"
+egui-winit = "0.33"
+glam.workspace = true
+thiserror.workspace = true
+wgpu.workspace = true
+winit.workspace = true

@@ -5,12 +5,10 @@ use std::path::PathBuf;
 #[cfg(feature = "gltf-import")]
 use std::sync::Arc;
 
-use oxide_asset::{
-    AssetServer as CoreAssetServer, Assets as CoreAssets, Handle as CoreHandle,
-};
 #[cfg(feature = "gltf-import")]
 use oxide_asset::AssetServerError as CoreAssetServerError;
-use oxide_ecs::Resource;
+use oxide_asset::{AssetServer as CoreAssetServer, Assets as CoreAssets, Handle as CoreHandle};
+use oxide_ecs::{Component, Resource};
 #[cfg(feature = "gltf-import")]
 use oxide_renderer::gltf::{load_gltf, GltfScene};
 use oxide_renderer::material::MaterialPipeline;
@@ -31,6 +29,9 @@ pub struct AssetServerResource {
 pub struct MaterialAssets {
     pub assets: CoreAssets<MaterialPipeline>,
 }
+
+pub type MeshHandle = CoreHandle<Mesh3D>;
+pub type MaterialHandle = CoreHandle<MaterialPipeline>;
 
 /// ECS resource storing handle-indexed glTF scenes.
 #[cfg(feature = "gltf-import")]
@@ -79,13 +80,13 @@ impl Default for MeshCache {
 }
 
 /// Component that references a mesh for rendering.
-#[derive(Clone, Debug)]
+#[derive(Component, Clone, Debug)]
 pub struct MeshFilter {
-    pub mesh: CoreHandle<Mesh3D>,
+    pub mesh: MeshHandle,
 }
 
 impl MeshFilter {
-    pub fn new(mesh: CoreHandle<Mesh3D>) -> Self {
+    pub fn new(mesh: MeshHandle) -> Self {
         Self { mesh }
     }
 }

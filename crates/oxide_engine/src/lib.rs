@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod asset;
+pub mod audio;
 pub mod camera;
 pub mod ecs;
 pub mod event;

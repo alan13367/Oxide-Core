@@ -1,0 +1,19 @@
+[package]
+name = "oxide-core-light"
+description = "Oxide Core light components and GPU light buffers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "oxide_light"
+
+[dependencies]
+oxide_ecs.workspace = true
+bytemuck.workspace = true
+glam.workspace = true
+wgpu.workspace = true

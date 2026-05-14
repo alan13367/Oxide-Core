@@ -14,21 +14,27 @@ name = "oxide_engine"
 
 [dependencies]
 oxide_renderer = { workspace = true, default-features = false }
+oxide_camera.workspace = true
 oxide_math.workspace = true
 oxide_transform.workspace = true
 oxide_input.workspace = true
 oxide_ecs.workspace = true
 oxide_asset.workspace = true
+oxide_audio.workspace = true
+oxide_light.workspace = true
+oxide_scene.workspace = true
+oxide_ui.workspace = true
+oxide_editor.workspace = true
 wgpu.workspace = true
 winit.workspace = true
 glam.workspace = true
 bytemuck.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 pollster = "0.4"
 notify = "8.2.0"
-egui = "0.33"
-egui-winit = "0.33"
 
 [features]
 default = ["gltf-import", "image-import"]

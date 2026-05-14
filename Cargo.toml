@@ -2,19 +2,27 @@
 resolver = "2"
 members = [
     "crates/oxide_asset",
+    "crates/oxide_audio",
+    "crates/oxide_camera",
     "crates/oxide_ecs",
     "crates/oxide_ecs_derive",
+    "crates/oxide_editor",
     "crates/oxide_engine",
     "crates/oxide_input",
+    "crates/oxide_light",
     "crates/oxide_physics",
     "crates/oxide_renderer",
     "crates/oxide_math",
+    "crates/oxide_scene",
     "crates/oxide_transform",
+    "crates/oxide_ui",
     "examples/hello_window",
     "examples/physics_example",
     "examples/unlit_example",
     "examples/sky_gradient_example",
     "examples/sprite_ui_example",
+    "examples/minimal_game",
+    "examples/zombie_shooter",
 ]
 
 [workspace.package]
@@ -33,10 +41,16 @@ glam = "0.32.1"
 oxide_ecs = { version = "0.1.0", path = "crates/oxide_ecs" }
 oxide_ecs_derive = { version = "0.1.0", path = "crates/oxide_ecs_derive" }
 oxide_asset = { package = "oxide-core-asset", version = "0.1.0", path = "crates/oxide_asset" }
+oxide_audio = { package = "oxide-core-audio", version = "0.1.0", path = "crates/oxide_audio" }
+oxide_camera = { package = "oxide-core-camera", version = "0.1.0", path = "crates/oxide_camera" }
+oxide_editor = { package = "oxide-core-editor", version = "0.1.0", path = "crates/oxide_editor" }
 oxide_input = { package = "oxide-core-input", version = "0.1.0", path = "crates/oxide_input" }
+oxide_light = { package = "oxide-core-light", version = "0.1.0", path = "crates/oxide_light" }
 oxide_transform = { package = "oxide-core-transform", version = "0.1.0", path = "crates/oxide_transform" }
 oxide_math = { package = "oxide-core-math", version = "0.1.0", path = "crates/oxide_math" }
 oxide_renderer = { package = "oxide-core-renderer", version = "0.1.0", path = "crates/oxide_renderer", default-features = false }
+oxide_scene = { package = "oxide-core-scene", version = "0.1.0", path = "crates/oxide_scene" }
+oxide_ui = { package = "oxide-core-ui", version = "0.1.0", path = "crates/oxide_ui" }
 oxide_engine = { package = "oxide-core-engine", version = "0.1.0", path = "crates/oxide_engine" }
 oxide_physics = { package = "oxide-core-physics", version = "0.1.0", path = "crates/oxide_physics" }
 bytemuck = { version = "1.21", features = ["derive"] }

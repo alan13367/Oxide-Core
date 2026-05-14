@@ -2,6 +2,7 @@
 
 pub use oxide_ecs::component::Component;
 pub use oxide_ecs::entity::Entity;
+pub use oxide_ecs::event::Events;
 pub use oxide_ecs::prelude::Resource;
 pub use oxide_ecs::schedule::{Schedule, ScheduleLabel};
 pub use oxide_ecs::system::{

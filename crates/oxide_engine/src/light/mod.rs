@@ -1,9 +1,3 @@
-//! Light components and systems for dynamic lighting
+//! Compatibility re-export for light APIs.
 
-mod components;
-mod system;
-mod uniform;
-
-pub use components::*;
-pub use system::*;
-pub use uniform::*;
+pub use oxide_light::*;

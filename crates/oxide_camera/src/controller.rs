@@ -3,8 +3,8 @@
 use glam::Vec3;
 use oxide_ecs::Component;
 
-use crate::ecs::World;
-use crate::input::{KeyboardInput, MouseInput};
+use oxide_ecs::world::World;
+use oxide_input::{KeyboardInput, MouseInput};
 use oxide_math::prelude::Camera;
 
 #[derive(Component, Clone, Copy, Debug)]

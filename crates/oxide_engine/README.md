@@ -4,4 +4,7 @@
 [![Crates.io](https://img.shields.io/crates/v/oxide-core-engine.svg)](https://crates.io/crates/oxide-core-engine)
 [![Docs](https://docs.rs/oxide-core-engine/badge.svg)](https://docs.rs/oxide-core-engine/latest/oxide_engine/)
 
-Main game engine crate for Oxide Core.
+Main game engine facade crate for Oxide Core. It owns the app runner, plugin
+system, window/event loop integration, startup/render wiring, and prelude
+re-exports for focused runtime crates such as `oxide_scene`, `oxide_ui`,
+`oxide_camera`, `oxide_light`, `oxide_audio`, and `oxide_physics`.

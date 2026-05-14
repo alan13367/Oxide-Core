@@ -1,0 +1,25 @@
+[package]
+name = "oxide-core-editor"
+description = "Oxide Core runtime scene editor and authoring UI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "oxide_editor"
+
+[dependencies]
+oxide_camera.workspace = true
+oxide_ecs.workspace = true
+oxide_light.workspace = true
+oxide_math.workspace = true
+oxide_scene.workspace = true
+oxide_transform.workspace = true
+oxide_ui.workspace = true
+egui = "0.33"
+glam.workspace = true
+

@@ -12,6 +12,60 @@ pub mod resource {
     pub trait Resource: 'static {}
 }
 
+pub mod event {
+    use crate::resource::Resource;
+
+    /// FIFO event buffer for gameplay/system communication.
+    pub struct Events<T> {
+        events: Vec<T>,
+    }
+
+    impl<T> Default for Events<T> {
+        fn default() -> Self {
+            Self { events: Vec::new() }
+        }
+    }
+
+    impl<T: 'static> Resource for Events<T> {}
+
+    impl<T> Events<T> {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        pub fn send(&mut self, event: T) {
+            self.events.push(event);
+        }
+
+        pub fn extend<I>(&mut self, events: I)
+        where
+            I: IntoIterator<Item = T>,
+        {
+            self.events.extend(events);
+        }
+
+        pub fn iter(&self) -> impl Iterator<Item = &T> {
+            self.events.iter()
+        }
+
+        pub fn drain(&mut self) -> impl Iterator<Item = T> + '_ {
+            self.events.drain(..)
+        }
+
+        pub fn clear(&mut self) {
+            self.events.clear();
+        }
+
+        pub fn len(&self) -> usize {
+            self.events.len()
+        }
+
+        pub fn is_empty(&self) -> bool {
+            self.events.is_empty()
+        }
+    }
+}
+
 pub mod entity {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct Entity {
@@ -688,6 +742,16 @@ pub mod world {
                 .unwrap_or(false)
         }
 
+        pub fn entity_count(&self) -> usize {
+            self.generations
+                .len()
+                .saturating_sub(self.free_indices.len())
+        }
+
+        pub fn resource_count(&self) -> usize {
+            self.resources.len()
+        }
+
         pub fn despawn(&mut self, entity: Entity) -> bool {
             if !self.contains(entity) {
                 return false;
@@ -741,6 +805,13 @@ pub mod world {
                 .expect("resource not found")
         }
 
+        pub fn remove_resource<T: 'static>(&mut self) -> Option<T> {
+            self.resources
+                .remove(&TypeId::of::<T>())
+                .and_then(|boxed| boxed.downcast::<T>().ok())
+                .map(|boxed| *boxed)
+        }
+
         pub fn init_resource<T: Default + 'static>(&mut self) {
             if !self.resources.contains_key(&TypeId::of::<T>()) {
                 self.insert_resource(T::default());
@@ -766,6 +837,13 @@ pub mod world {
             self.non_send_resources
                 .get_mut(&TypeId::of::<T>())
                 .and_then(|boxed| boxed.downcast_mut::<T>())
+        }
+
+        pub fn remove_non_send_resource<T: 'static>(&mut self) -> Option<T> {
+            self.non_send_resources
+                .remove(&TypeId::of::<T>())
+                .and_then(|boxed| boxed.downcast::<T>().ok())
+                .map(|boxed| *boxed)
         }
 
         pub fn query<Q>(&mut self) -> QueryState<Q> {
@@ -1348,6 +1426,7 @@ pub mod world {
 pub mod prelude {
     pub use crate::component::Component;
     pub use crate::entity::Entity;
+    pub use crate::event::Events;
     pub use crate::query::{With, Without};
     pub use crate::resource::Resource;
     pub use crate::schedule::ScheduleLabel;
@@ -1399,12 +1478,19 @@ mod tests {
         world.init_resource::<Tick>();
         world.resource_mut::<Tick>().0 = 7;
         assert_eq!(world.resource::<Tick>().0, 7);
+        assert_eq!(world.remove_resource::<Tick>().map(|tick| tick.0), Some(7));
+        assert!(!world.contains_resource::<Tick>());
 
         world.insert_non_send_resource(String::from("watcher"));
         assert_eq!(
             world.get_non_send_resource::<String>().map(String::as_str),
             Some("watcher")
         );
+        assert_eq!(
+            world.remove_non_send_resource::<String>().as_deref(),
+            Some("watcher")
+        );
+        assert!(world.get_non_send_resource::<String>().is_none());
     }
 
     #[test]
@@ -1501,5 +1587,25 @@ mod tests {
             .set(AppState::Playing);
         system.run(&mut world, &mut queue);
         assert_eq!(world.resource::<Tick>().0, 1);
+    }
+
+    #[test]
+    fn events_buffer_and_world_counts_work() {
+        let mut events = crate::event::Events::new();
+        events.send(1);
+        events.extend([2, 3]);
+        assert_eq!(events.len(), 3);
+        assert_eq!(events.iter().copied().sum::<i32>(), 6);
+        assert_eq!(events.drain().collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert!(events.is_empty());
+
+        let mut world = World::new();
+        assert_eq!(world.entity_count(), 0);
+        let entity = world.spawn(Position(1)).id();
+        world.insert_resource(Tick(7));
+        assert_eq!(world.entity_count(), 1);
+        assert_eq!(world.resource_count(), 1);
+        assert!(world.despawn(entity));
+        assert_eq!(world.entity_count(), 0);
     }
 }
