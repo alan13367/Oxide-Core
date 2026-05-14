@@ -36,7 +36,7 @@ oxide_asset = { package = "oxide-core-asset", version = "0.1.0", path = "crates/
 oxide_input = { package = "oxide-core-input", version = "0.1.0", path = "crates/oxide_input" }
 oxide_transform = { package = "oxide-core-transform", version = "0.1.0", path = "crates/oxide_transform" }
 oxide_math = { package = "oxide-core-math", version = "0.1.0", path = "crates/oxide_math" }
-oxide_renderer = { package = "oxide-core-renderer", version = "0.1.0", path = "crates/oxide_renderer" }
+oxide_renderer = { package = "oxide-core-renderer", version = "0.1.0", path = "crates/oxide_renderer", default-features = false }
 oxide_engine = { package = "oxide-core-engine", version = "0.1.0", path = "crates/oxide_engine" }
 oxide_physics = { package = "oxide-core-physics", version = "0.1.0", path = "crates/oxide_physics" }
 bytemuck = { version = "1.21", features = ["derive"] }

@@ -3,7 +3,7 @@
 //! Provides efficient spatial queries against the physics world.
 
 use glam::{Quat, Vec3};
-use oxide_engine::prelude::Entity;
+use oxide_ecs::prelude::Entity;
 
 use crate::components::{BodyId, ColliderId, ColliderShape};
 use crate::resources::PhysicsWorld;
@@ -690,11 +690,12 @@ mod tests {
     };
     use crate::resources::{PhysicsCollider, PhysicsWorld};
     use glam::Vec3;
-    use oxide_engine::prelude::{CommandQueue, IntoSystem, Time, TransformComponent, World};
+    use oxide_ecs::prelude::{CommandQueue, IntoSystem, World};
+    use oxide_transform::TransformComponent;
 
     fn setup_world() -> World {
         let mut world = World::new();
-        world.insert_resource(Time::default());
+        world.insert_resource(crate::resources::PhysicsTime::default());
         world.insert_resource(PhysicsWorld::default());
         world
     }

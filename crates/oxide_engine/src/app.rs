@@ -11,14 +11,16 @@ use winit::{
     window::WindowId,
 };
 
-use crate::asset::{AssetServerResource, GltfSceneAssets, MaterialAssets};
+use crate::asset::{AssetServerResource, MaterialAssets};
+#[cfg(feature = "gltf-import")]
+use crate::asset::GltfSceneAssets;
 use crate::ecs::{CommandQueue, IntoSystem, System, Time, WindowResource, World};
 use crate::event::{window_event_to_engine, EngineEvent};
 use crate::input::{KeyboardInput, MouseInput};
 use crate::render::RenderFrame;
-use crate::scene::{
-    gltf_scene_spawn_system, transform_propagate_system, PendingGltfSceneSpawns, SpawnedGltfScenes,
-};
+#[cfg(feature = "gltf-import")]
+use crate::scene::{gltf_scene_spawn_system, PendingGltfSceneSpawns, SpawnedGltfScenes};
+use crate::scene::transform_propagate_system;
 use crate::ui::{handle_egui_event, EguiManager};
 use crate::window::Window;
 use oxide_renderer::Renderer;
@@ -127,6 +129,7 @@ impl<T: App> Plugin<T> for RenderPlugin {
     fn build(&self, app: &mut AppBuilder<T>) {
         app.add_startup_system_mut(initialize_window_resource);
         app.add_startup_system_mut(initialize_asset_resources);
+        #[cfg(feature = "gltf-import")]
         app.add_system_mut(AppStage::PreUpdate, gltf_scene_spawn_system);
     }
 }
@@ -145,14 +148,17 @@ fn initialize_asset_resources(world: &mut World, _window: &Window) {
     if !world.contains_resource::<MaterialAssets>() {
         world.insert_resource(MaterialAssets::default());
     }
-    if !world.contains_resource::<GltfSceneAssets>() {
-        world.insert_resource(GltfSceneAssets::default());
-    }
-    if !world.contains_resource::<PendingGltfSceneSpawns>() {
-        world.insert_resource(PendingGltfSceneSpawns::default());
-    }
-    if !world.contains_resource::<SpawnedGltfScenes>() {
-        world.insert_resource(SpawnedGltfScenes::default());
+    #[cfg(feature = "gltf-import")]
+    {
+        if !world.contains_resource::<GltfSceneAssets>() {
+            world.insert_resource(GltfSceneAssets::default());
+        }
+        if !world.contains_resource::<PendingGltfSceneSpawns>() {
+            world.insert_resource(PendingGltfSceneSpawns::default());
+        }
+        if !world.contains_resource::<SpawnedGltfScenes>() {
+            world.insert_resource(SpawnedGltfScenes::default());
+        }
     }
 }
 

@@ -11,10 +11,12 @@ pub use crate::components::{
 pub use crate::events::{CollisionEvent, CollisionEvents, EventContact};
 pub use crate::joints::{JointComponent, JointType};
 pub use crate::mass_properties::{MassProperties, DEFAULT_DENSITY};
+#[cfg(feature = "engine-plugin")]
 pub use crate::plugin::PhysicsPlugin;
 pub use crate::queries::{RaycastHit, ShapeCastHit};
 pub use crate::resources::{
-    ManifoldKey, PhysicsBody, PhysicsWorld, DEFAULT_FIXED_TIMESTEP, DEFAULT_MAX_SUBSTEPS,
+    ManifoldKey, PhysicsBody, PhysicsTime, PhysicsWorld, DEFAULT_FIXED_TIMESTEP,
+    DEFAULT_MAX_SUBSTEPS,
 };
 pub use crate::systems::{
     compute_mass_properties_system, ensure_colliders_system, ensure_rigid_bodies_system,

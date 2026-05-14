@@ -6,6 +6,7 @@ mod components;
 mod events;
 mod joints;
 mod mass_properties;
+#[cfg(feature = "engine-plugin")]
 mod plugin;
 mod queries;
 mod resources;
@@ -22,6 +23,7 @@ pub use components::*;
 pub use events::*;
 pub use joints::*;
 pub use mass_properties::*;
+#[cfg(feature = "engine-plugin")]
 pub use plugin::*;
 pub use queries::*;
 pub use resources::*;

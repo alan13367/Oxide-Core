@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use glam::{Mat3, Quat, Vec3};
+use oxide_ecs::prelude::Entity;
 use oxide_ecs::Resource;
-use oxide_engine::prelude::Entity;
 
 use crate::collision::ContactManifold;
 use crate::components::{
@@ -14,6 +14,33 @@ use crate::mass_properties::{MassProperties, DEFAULT_DENSITY};
 
 pub const DEFAULT_FIXED_TIMESTEP: f32 = 1.0 / 60.0;
 pub const DEFAULT_MAX_SUBSTEPS: u32 = 8;
+
+/// Frame timing consumed by the standalone physics systems.
+///
+/// Engine integrations should update this resource once per frame before
+/// `physics_step_system` runs.
+#[derive(Clone, Copy, Debug, Resource)]
+pub struct PhysicsTime {
+    pub delta_seconds: f32,
+}
+
+impl Default for PhysicsTime {
+    fn default() -> Self {
+        Self {
+            delta_seconds: DEFAULT_FIXED_TIMESTEP,
+        }
+    }
+}
+
+impl PhysicsTime {
+    pub fn new(delta_seconds: f32) -> Self {
+        Self { delta_seconds }
+    }
+
+    pub fn set_delta_seconds(&mut self, delta_seconds: f32) {
+        self.delta_seconds = delta_seconds;
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct PhysicsBody {

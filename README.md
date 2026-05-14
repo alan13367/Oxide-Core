@@ -16,6 +16,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Ergonomic Systems**: Signature-driven systems via `IntoSystem` + params (`Res`, `ResMut`, `Query`, `Commands`)
 - **Deferred Commands**: Stage-scoped command queue for safe world mutation during iteration
 - **State Gating**: Conditionally run systems with `.run_if(in_state(...))`
+- **Dependency Policy**: Oxide owns its ECS, physics, scene hierarchy, and engine runtime; third-party engine/ECS/physics/gameplay frameworks are intentionally avoided
 
 ## Requirements
 
@@ -234,13 +235,13 @@ See `docs/shader_material_roadmap.md` for roadmap, implementation status, and AP
 | `oxide_input` | Layout-stable keyboard/mouse input resources (`PhysicalKey`-based) |
 | `oxide_ecs` | Custom ECS runtime (world, entities, storage, resources, queries) |
 | `oxide_ecs_derive` | Proc-macro derives for ECS traits (`Component`, `Resource`, `ScheduleLabel`) |
-| `oxide_asset` | Asset handles and runtime mesh cache primitives |
+| `oxide_asset` | Generic asset handles, typed storage, and async asset loading primitives |
 | `oxide_transform` | Transform + hierarchy components and dirty-aware propagation |
 | `oxide_renderer` | Low-level wgpu rendering abstraction and material descriptors |
 | `oxide_math` | Math types and utilities leveraging `glam` |
 | `oxide_physics` | In-house 3D physics crate with ECS-first components, systems, and `PhysicsPlugin` |
 
-The crate layout is being evolved toward a Bevy-style distribution of focused domain crates plus a stable facade. See `docs/bevy_style_crate_distribution.md` for the active structure plan.
+The crate layout is being evolved toward a Bevy-style distribution of focused domain crates plus a stable facade. See `docs/bevy_style_crate_distribution.md` for the active structure plan, and `docs/dependency_policy.md` for dependency boundary rules.
 
 ## License
 

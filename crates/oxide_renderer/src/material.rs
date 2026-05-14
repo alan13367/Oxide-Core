@@ -35,6 +35,8 @@ pub enum MaterialError {
         path: String,
         source: crate::texture::TextureError,
     },
+    #[error("Texture material descriptors require the 'image-import' feature")]
+    TextureImportDisabled,
 }
 
 /// Returns the cached material bind group layout, creating it if necessary.

@@ -3,7 +3,8 @@
 use std::collections::HashSet;
 
 use glam::{Quat, Vec3};
-use oxide_engine::prelude::{Entity, Query, Res, ResMut, Time, TransformComponent};
+use oxide_ecs::prelude::{Entity, Query, Res, ResMut};
+use oxide_transform::TransformComponent;
 use tracing::span;
 
 use crate::collision::{generate_box_box_contacts, ContactId, ContactManifold, ContactPoint};
@@ -11,20 +12,9 @@ use crate::components::{
     BodyId, ColliderComponent, ColliderId, ColliderShape, CollisionLayers, RigidBodyComponent,
 };
 use crate::mass_properties::MassProperties;
-use crate::resources::{Aabb, ManifoldKey, PhysicsWorld};
-
-#[derive(Clone, Copy)]
-struct Contact {
-    a_body: BodyId,
-    b_body: BodyId,
-    a_collider: ColliderId,
-    b_collider: ColliderId,
-    contact_point: Vec3,
-    normal: Vec3,
-    penetration: f32,
-    restitution: f32,
-    friction: f32,
-}
+#[cfg(test)]
+use crate::resources::Aabb;
+use crate::resources::{ManifoldKey, PhysicsTime, PhysicsWorld};
 
 #[derive(Clone, Copy)]
 struct Obb {
@@ -33,6 +23,7 @@ struct Obb {
     half_extents: Vec3,
 }
 
+#[cfg(test)]
 #[derive(Clone)]
 struct BroadphaseProxy {
     collider_id: ColliderId,
@@ -242,7 +233,7 @@ pub fn prune_orphan_colliders_system(
 }
 
 pub fn physics_step_system(
-    time: Res<Time>,
+    time: Res<PhysicsTime>,
     mut physics: ResMut<PhysicsWorld>,
     mut collision_events: ResMut<crate::events::CollisionEvents>,
     mut joint_query: Query<&crate::joints::JointComponent>,
@@ -252,7 +243,7 @@ pub fn physics_step_system(
     // Collect joints for solving
     let joints: Vec<_> = joint_query.iter().cloned().collect();
 
-    let frame_delta = time.delta_secs().min(0.25);
+    let frame_delta = time.delta_seconds.min(0.25);
     physics.accumulator_seconds += frame_delta;
 
     let mut steps = 0;
@@ -448,6 +439,7 @@ fn broadphase_candidates(physics: &PhysicsWorld) -> Vec<(ColliderId, ColliderId)
     pairs
 }
 
+#[cfg(test)]
 fn broadphase_candidates_sweep(physics: &PhysicsWorld) -> Vec<(ColliderId, ColliderId)> {
     let mut proxies = Vec::new();
     for collider in physics.colliders.values() {
@@ -497,45 +489,6 @@ fn broadphase_candidates_sweep(physics: &PhysicsWorld) -> Vec<(ColliderId, Colli
     }
 
     pairs
-}
-
-fn generate_contact(
-    physics: &PhysicsWorld,
-    collider_a_id: ColliderId,
-    collider_b_id: ColliderId,
-) -> Option<Contact> {
-    let collider_a = physics.colliders.get(&collider_a_id)?;
-    let collider_b = physics.colliders.get(&collider_b_id)?;
-    if collider_a.is_sensor || collider_b.is_sensor {
-        return None;
-    }
-
-    let body_a = physics.body(collider_a.body_id)?;
-    let body_b = physics.body(collider_b.body_id)?;
-    if !body_a.is_dynamic() && !body_b.is_dynamic() {
-        return None;
-    }
-
-    let (normal, penetration, contact_point) = compute_collision_with_contact(
-        body_a.position,
-        body_a.rotation,
-        collider_a.shape,
-        body_b.position,
-        body_b.rotation,
-        collider_b.shape,
-    )?;
-
-    Some(Contact {
-        a_body: body_a.id,
-        b_body: body_b.id,
-        a_collider: collider_a_id,
-        b_collider: collider_b_id,
-        contact_point,
-        normal,
-        penetration,
-        restitution: collider_a.restitution.min(collider_b.restitution),
-        friction: (collider_a.friction + collider_b.friction) * 0.5,
-    })
 }
 
 /// Generate a contact manifold with warm starting from previous frame.
@@ -870,176 +823,6 @@ fn apply_warm_start_impulse(
     }
 }
 
-fn apply_contact(physics: &mut PhysicsWorld, contact: Contact, config: &SolverConfig) {
-    // Get mass and inertia info
-    let body_a_data = physics.body(contact.a_body).map(|b| {
-        (
-            b.inverse_mass,
-            b.world_inverse_inertia,
-            b.linear_velocity,
-            b.angular_velocity,
-            b.position,
-        )
-    });
-    let body_b_data = physics.body(contact.b_body).map(|b| {
-        (
-            b.inverse_mass,
-            b.world_inverse_inertia,
-            b.linear_velocity,
-            b.angular_velocity,
-            b.position,
-        )
-    });
-
-    let Some((inv_mass_a, world_inv_inertia_a, vel_a, ang_vel_a, pos_a)) = body_a_data else {
-        return;
-    };
-    let Some((inv_mass_b, world_inv_inertia_b, vel_b, ang_vel_b, pos_b)) = body_b_data else {
-        return;
-    };
-
-    let inv_mass_sum = inv_mass_a + inv_mass_b;
-    if inv_mass_sum <= f32::EPSILON {
-        return;
-    }
-
-    // Contact point relative to body centers
-    let r_a = contact.contact_point - pos_a;
-    let r_b = contact.contact_point - pos_b;
-
-    // === Positional Correction (Baumgarte) ===
-    let correction_mag = (contact.penetration - config.slop).max(0.0) * config.baumgarte;
-    let correction = contact.normal * correction_mag;
-    if inv_mass_a > 0.0 {
-        if let Some(body) = physics.body_mut(contact.a_body) {
-            body.wake();
-            body.position -= correction * (inv_mass_a / inv_mass_sum);
-        }
-    }
-    if inv_mass_b > 0.0 {
-        if let Some(body) = physics.body_mut(contact.b_body) {
-            body.wake();
-            body.position += correction * (inv_mass_b / inv_mass_sum);
-        }
-    }
-
-    // === Velocity Resolution ===
-    // Compute velocity at contact point (including angular contribution)
-    let vel_at_a = vel_a + ang_vel_a.cross(r_a);
-    let vel_at_b = vel_b + ang_vel_b.cross(r_b);
-    let relative_velocity = vel_at_b - vel_at_a;
-
-    let vel_along_normal = relative_velocity.dot(contact.normal);
-    if vel_along_normal > 0.0 {
-        return; // Objects are separating
-    }
-
-    // Compute the effective mass at the contact point (including rotation)
-    // K = (1/m_a + r_a x (I_a^{-1} x (r_a x n)) . n) + same for b
-    let r_a_cross_n = r_a.cross(contact.normal);
-    let r_b_cross_n = r_b.cross(contact.normal);
-    let angular_term_a = world_inv_inertia_a * r_a_cross_n;
-    let angular_term_b = world_inv_inertia_b * r_b_cross_n;
-
-    let effective_mass = inv_mass_sum
-        + angular_term_a.cross(r_a).dot(contact.normal)
-        + angular_term_b.cross(r_b).dot(contact.normal);
-
-    if effective_mass <= f32::EPSILON {
-        return;
-    }
-
-    // Normal impulse
-    let impulse_mag = -(1.0 + contact.restitution) * vel_along_normal / effective_mass;
-    let impulse = contact.normal * impulse_mag;
-
-    // Apply normal impulse
-    if inv_mass_a > 0.0 {
-        if let Some(body) = physics.body_mut(contact.a_body) {
-            body.wake();
-            body.linear_velocity -= impulse * inv_mass_a;
-            body.angular_velocity -= angular_term_a * impulse_mag;
-        }
-    }
-    if inv_mass_b > 0.0 {
-        if let Some(body) = physics.body_mut(contact.b_body) {
-            body.wake();
-            body.linear_velocity += impulse * inv_mass_b;
-            body.angular_velocity += angular_term_b * impulse_mag;
-        }
-    }
-
-    // === Friction Impulse ===
-    // Recompute velocities after normal impulse
-    let (vel_a, ang_vel_a) = physics
-        .body(contact.a_body)
-        .map(|b| (b.linear_velocity, b.angular_velocity))
-        .unwrap_or((Vec3::ZERO, Vec3::ZERO));
-    let (vel_b, ang_vel_b) = physics
-        .body(contact.b_body)
-        .map(|b| (b.linear_velocity, b.angular_velocity))
-        .unwrap_or((Vec3::ZERO, Vec3::ZERO));
-
-    let vel_at_a = vel_a + ang_vel_a.cross(r_a);
-    let vel_at_b = vel_b + ang_vel_b.cross(r_b);
-    let relative_velocity = vel_at_b - vel_at_a;
-
-    // Tangent direction (velocity component perpendicular to normal)
-    let tangent = relative_velocity - contact.normal * relative_velocity.dot(contact.normal);
-    let tangent_len_sq = tangent.length_squared();
-
-    if tangent_len_sq > f32::EPSILON {
-        let tangent_dir = tangent / tangent_len_sq.sqrt();
-
-        // Compute effective mass for tangent
-        let r_a_cross_t = r_a.cross(tangent_dir);
-        let r_b_cross_t = r_b.cross(tangent_dir);
-        let angular_term_a_t = world_inv_inertia_a * r_a_cross_t;
-        let angular_term_b_t = world_inv_inertia_b * r_b_cross_t;
-
-        let effective_mass_t = inv_mass_sum
-            + angular_term_a_t.cross(r_a).dot(tangent_dir)
-            + angular_term_b_t.cross(r_b).dot(tangent_dir);
-
-        if effective_mass_t > f32::EPSILON {
-            let jt = -relative_velocity.dot(tangent_dir) / effective_mass_t;
-            let max_friction = impulse_mag * contact.friction;
-            let jt_clamped = jt.clamp(-max_friction, max_friction);
-            let friction_impulse = tangent_dir * jt_clamped;
-
-            // Apply friction impulse
-            if inv_mass_a > 0.0 {
-                if let Some(body) = physics.body_mut(contact.a_body) {
-                    body.wake();
-                    body.linear_velocity -= friction_impulse * inv_mass_a;
-                    body.angular_velocity -= angular_term_a_t * jt_clamped;
-                }
-            }
-            if inv_mass_b > 0.0 {
-                if let Some(body) = physics.body_mut(contact.b_body) {
-                    body.wake();
-                    body.linear_velocity += friction_impulse * inv_mass_b;
-                    body.angular_velocity += angular_term_b_t * jt_clamped;
-                }
-            }
-        }
-    }
-}
-
-fn compute_collision(
-    position_a: Vec3,
-    rotation_a: Quat,
-    shape_a: ColliderShape,
-    position_b: Vec3,
-    rotation_b: Quat,
-    shape_b: ColliderShape,
-) -> Option<(Vec3, f32)> {
-    compute_collision_with_contact(
-        position_a, rotation_a, shape_a, position_b, rotation_b, shape_b,
-    )
-    .map(|(normal, penetration, _contact_point)| (normal, penetration))
-}
-
 /// Compute collision with contact point.
 /// Returns (normal from A to B, penetration depth, contact point in world space).
 fn compute_collision_with_contact(
@@ -1104,11 +887,6 @@ fn compute_collision_with_contact(
     }
 }
 
-fn sphere_sphere_collision(a: Vec3, ra: f32, b: Vec3, rb: f32) -> Option<(Vec3, f32)> {
-    sphere_sphere_collision_with_contact(a, ra, b, rb)
-        .map(|(normal, penetration, _)| (normal, penetration))
-}
-
 fn sphere_sphere_collision_with_contact(
     a: Vec3,
     ra: f32,
@@ -1129,23 +907,6 @@ fn sphere_sphere_collision_with_contact(
     // Contact point is on the surface of sphere A towards B
     let contact_point = a + normal * ra;
     Some((normal, target - distance + 0.001, contact_point))
-}
-
-fn sphere_obb_collision(
-    sphere_center: Vec3,
-    sphere_radius: f32,
-    obb_center: Vec3,
-    obb_rotation: Quat,
-    obb_half_extents: Vec3,
-) -> Option<(Vec3, f32)> {
-    sphere_obb_collision_with_contact(
-        sphere_center,
-        sphere_radius,
-        obb_center,
-        obb_rotation,
-        obb_half_extents,
-    )
-    .map(|(normal, penetration, _)| (normal, penetration))
 }
 
 fn sphere_obb_collision_with_contact(
@@ -1228,10 +989,6 @@ fn sphere_obb_collision_with_contact(
     );
     let contact_point = obb_center + obb_rotation * contact_on_face;
     Some((normal, sphere_radius + face_distance + 0.001, contact_point))
-}
-
-fn obb_obb_collision(a: Obb, b: Obb) -> Option<(Vec3, f32)> {
-    obb_obb_collision_with_contact(a, b).map(|(normal, penetration, _)| (normal, penetration))
 }
 
 fn obb_obb_collision_with_contact(a: Obb, b: Obb) -> Option<(Vec3, f32, Vec3)> {
@@ -1391,6 +1148,7 @@ fn compute_obb_contact_point(
     }
 }
 
+#[cfg(test)]
 fn shape_to_aabb(shape: ColliderShape, position: Vec3, rotation: Quat) -> Aabb {
     match shape {
         ColliderShape::Sphere { radius } => {
@@ -1426,10 +1184,9 @@ fn shape_to_aabb(shape: ColliderShape, position: Vec3, rotation: Quat) -> Aabb {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::time::Duration;
-
     use glam::{Quat, Vec3};
-    use oxide_engine::prelude::{CommandQueue, IntoSystem, Time, TransformComponent, World};
+    use oxide_ecs::prelude::{CommandQueue, Entity, IntoSystem, World};
+    use oxide_transform::TransformComponent;
 
     use super::{
         broadphase_candidates, broadphase_candidates_sweep, ensure_colliders_system,
@@ -1441,7 +1198,7 @@ mod tests {
         collision_layer, ColliderComponent, ColliderShape, CollisionLayers, RigidBodyComponent,
     };
     use crate::joints::JointComponent;
-    use crate::resources::{ManifoldKey, PhysicsWorld, DEFAULT_FIXED_TIMESTEP};
+    use crate::resources::{ManifoldKey, PhysicsTime, PhysicsWorld, DEFAULT_FIXED_TIMESTEP};
 
     fn run_system<S, Marker>(world: &mut World, system: S)
     where
@@ -1455,13 +1212,13 @@ mod tests {
 
     fn setup_world() -> World {
         let mut world = World::new();
-        world.insert_resource(Time::default());
+        world.insert_resource(PhysicsTime::default());
         world.insert_resource(PhysicsWorld::default());
         world.insert_resource(crate::events::CollisionEvents::default());
         world
     }
 
-    fn setup_resting_contact_world() -> (World, oxide_engine::prelude::Entity) {
+    fn setup_resting_contact_world() -> (World, Entity) {
         let mut world = setup_world();
 
         world.spawn((
@@ -1486,7 +1243,7 @@ mod tests {
 
     fn run_resting_contact_simulation(
         world: &mut World,
-        tracked_entity: oxide_engine::prelude::Entity,
+        tracked_entity: Entity,
         disable_warm_start: bool,
         steps: u32,
     ) -> (f32, f32, f32) {
@@ -1503,7 +1260,9 @@ mod tests {
                     .clear();
             }
 
-            world.resource_mut::<Time>().delta = Duration::from_secs_f32(DEFAULT_FIXED_TIMESTEP);
+            world
+                .resource_mut::<PhysicsTime>()
+                .set_delta_seconds(DEFAULT_FIXED_TIMESTEP);
             run_system(world, physics_step_system);
             run_system(world, sync_transforms_system);
 
@@ -1554,7 +1313,9 @@ mod tests {
         run_system(&mut world, ensure_colliders_system);
 
         for _ in 0..220 {
-            world.resource_mut::<Time>().delta = Duration::from_secs_f32(DEFAULT_FIXED_TIMESTEP);
+            world
+                .resource_mut::<PhysicsTime>()
+                .set_delta_seconds(DEFAULT_FIXED_TIMESTEP);
             run_system(&mut world, physics_step_system);
             run_system(&mut world, sync_transforms_system);
         }
@@ -1593,7 +1354,9 @@ mod tests {
         run_system(&mut world, ensure_rigid_bodies_system);
         run_system(&mut world, initialize_body_pose_system);
 
-        world.resource_mut::<Time>().delta = Duration::from_secs_f32(DEFAULT_FIXED_TIMESTEP * 0.5);
+        world
+            .resource_mut::<PhysicsTime>()
+            .set_delta_seconds(DEFAULT_FIXED_TIMESTEP * 0.5);
         run_system(&mut world, physics_step_system);
         run_system(&mut world, sync_transforms_system);
 
@@ -1608,7 +1371,9 @@ mod tests {
             "body should not move before first fixed step, got y={y_after_half_dt}"
         );
 
-        world.resource_mut::<Time>().delta = Duration::from_secs_f32(DEFAULT_FIXED_TIMESTEP);
+        world
+            .resource_mut::<PhysicsTime>()
+            .set_delta_seconds(DEFAULT_FIXED_TIMESTEP);
         run_system(&mut world, physics_step_system);
         run_system(&mut world, sync_transforms_system);
 
@@ -1681,7 +1446,9 @@ mod tests {
         run_system(&mut world, ensure_colliders_system);
 
         for _ in 0..90 {
-            world.resource_mut::<Time>().delta = Duration::from_secs_f32(DEFAULT_FIXED_TIMESTEP);
+            world
+                .resource_mut::<PhysicsTime>()
+                .set_delta_seconds(DEFAULT_FIXED_TIMESTEP);
             run_system(&mut world, physics_step_system);
             run_system(&mut world, sync_transforms_system);
         }
@@ -1720,7 +1487,9 @@ mod tests {
         run_system(&mut world, initialize_body_pose_system);
         run_system(&mut world, ensure_colliders_system);
 
-        world.resource_mut::<Time>().delta = Duration::from_secs_f32(DEFAULT_FIXED_TIMESTEP);
+        world
+            .resource_mut::<PhysicsTime>()
+            .set_delta_seconds(DEFAULT_FIXED_TIMESTEP);
         run_system(&mut world, physics_step_system);
 
         let events = world.resource::<crate::events::CollisionEvents>();
@@ -1739,7 +1508,7 @@ mod tests {
 
     #[test]
     fn warm_start_cached_impulses_apply_without_solver_iterations() {
-        fn setup_overlap_scene() -> (World, oxide_engine::prelude::Entity) {
+        fn setup_overlap_scene() -> (World, Entity) {
             let mut world = setup_world();
             world.resource_mut::<PhysicsWorld>().gravity = Vec3::ZERO;
 
@@ -1775,9 +1544,9 @@ mod tests {
             .expect("dynamic body should have a physics handle");
 
         let (warm_speed, warm_x_velocity) = {
-            let mut physics = warm_world.resource_mut::<PhysicsWorld>();
+            let physics = warm_world.resource_mut::<PhysicsWorld>();
             resolve_collisions(
-                &mut physics,
+                physics,
                 SolverConfig {
                     iterations: 1,
                     ..SolverConfig::default()
@@ -1801,7 +1570,7 @@ mod tests {
             }
 
             resolve_collisions(
-                &mut physics,
+                physics,
                 SolverConfig {
                     iterations: 0,
                     ..SolverConfig::default()
@@ -1822,14 +1591,14 @@ mod tests {
             .handle
             .expect("dynamic body should have a physics handle");
         let cold_speed = {
-            let mut physics = cold_world.resource_mut::<PhysicsWorld>();
+            let physics = cold_world.resource_mut::<PhysicsWorld>();
             if let Some(body) = physics.body_mut(cold_dynamic_handle) {
                 body.linear_velocity = Vec3::ZERO;
                 body.angular_velocity = Vec3::ZERO;
             }
 
             resolve_collisions(
-                &mut physics,
+                physics,
                 SolverConfig {
                     iterations: 0,
                     ..SolverConfig::default()
@@ -1869,7 +1638,9 @@ mod tests {
         run_system(&mut world, initialize_body_pose_system);
 
         for _ in 0..10 {
-            world.resource_mut::<Time>().delta = Duration::from_secs_f32(DEFAULT_FIXED_TIMESTEP);
+            world
+                .resource_mut::<PhysicsTime>()
+                .set_delta_seconds(DEFAULT_FIXED_TIMESTEP);
             run_system(&mut world, physics_step_system);
             run_system(&mut world, sync_transforms_system);
         }
@@ -1915,7 +1686,7 @@ mod tests {
         let point = Vec3::new(1.0, 0.0, 0.0); // At the right edge
 
         {
-            let mut physics = world.resource_mut::<PhysicsWorld>();
+            let physics = world.resource_mut::<PhysicsWorld>();
             if let Some(body) = physics.body_mut(body_id) {
                 body.apply_impulse_at_point(impulse, point);
             }
@@ -1985,7 +1756,9 @@ mod tests {
 
         // Simulate for a while
         for _ in 0..120 {
-            world.resource_mut::<Time>().delta = Duration::from_secs_f32(DEFAULT_FIXED_TIMESTEP);
+            world
+                .resource_mut::<PhysicsTime>()
+                .set_delta_seconds(DEFAULT_FIXED_TIMESTEP);
             run_system(&mut world, physics_step_system);
             run_system(&mut world, sync_transforms_system);
         }
@@ -2042,7 +1815,9 @@ mod tests {
 
         // Simulate for 3 seconds (180 frames)
         for _ in 0..180 {
-            world.resource_mut::<Time>().delta = Duration::from_secs_f32(DEFAULT_FIXED_TIMESTEP);
+            world
+                .resource_mut::<PhysicsTime>()
+                .set_delta_seconds(DEFAULT_FIXED_TIMESTEP);
             run_system(&mut world, physics_step_system);
             run_system(&mut world, sync_transforms_system);
         }
@@ -2177,7 +1952,9 @@ mod tests {
         };
 
         for _ in 0..90 {
-            world.resource_mut::<Time>().delta = Duration::from_secs_f32(DEFAULT_FIXED_TIMESTEP);
+            world
+                .resource_mut::<PhysicsTime>()
+                .set_delta_seconds(DEFAULT_FIXED_TIMESTEP);
             run_system(&mut world, physics_step_system);
             run_system(&mut world, sync_transforms_system);
         }
@@ -2227,7 +2004,9 @@ mod tests {
         let before_perp = Vec3::new(before.x, 0.0, before.z).length();
 
         for _ in 0..120 {
-            world.resource_mut::<Time>().delta = Duration::from_secs_f32(DEFAULT_FIXED_TIMESTEP);
+            world
+                .resource_mut::<PhysicsTime>()
+                .set_delta_seconds(DEFAULT_FIXED_TIMESTEP);
             run_system(&mut world, physics_step_system);
             run_system(&mut world, sync_transforms_system);
         }
@@ -2282,8 +2061,8 @@ mod tests {
 
         let key = ManifoldKey::new(dynamic_collider, ground_collider);
 
-        let mut physics = world.resource_mut::<PhysicsWorld>();
-        resolve_collisions(&mut physics, SolverConfig::default());
+        let physics = world.resource_mut::<PhysicsWorld>();
+        resolve_collisions(physics, SolverConfig::default());
 
         {
             let cached = physics
@@ -2321,7 +2100,7 @@ mod tests {
         }
 
         let warmed_manifold = generate_manifold(
-            &physics,
+            physics,
             dynamic_collider,
             ground_collider,
             &physics.cached_manifolds,

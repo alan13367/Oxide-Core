@@ -254,64 +254,56 @@ pub mod system {
     impl<T: Component> Query<&T> {
         pub fn iter(&mut self) -> impl Iterator<Item = &T> {
             let world = unsafe { &mut *self.world };
-            let mut query = world.query::<&T>();
-            query.iter(&*world).collect::<Vec<_>>().into_iter()
+            world.query::<&T>().iter(&*world)
         }
     }
 
     impl<T: Component> Query<&mut T> {
         pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
             let world = unsafe { &mut *self.world };
-            let mut query = world.query::<&mut T>();
-            query.iter_mut(world).collect::<Vec<_>>().into_iter()
+            world.query::<&mut T>().iter_mut(world)
         }
     }
 
     impl<T: Component> Query<(Entity, &T)> {
         pub fn iter(&mut self) -> impl Iterator<Item = (Entity, &T)> {
             let world = unsafe { &mut *self.world };
-            let mut query = world.query::<(Entity, &T)>();
-            query.iter(&*world).collect::<Vec<_>>().into_iter()
+            world.query::<(Entity, &T)>().iter(&*world)
         }
     }
 
     impl<T: Component> Query<(Entity, &mut T)> {
         pub fn iter_mut(&mut self) -> impl Iterator<Item = (Entity, &mut T)> {
             let world = unsafe { &mut *self.world };
-            let mut query = world.query::<(Entity, &mut T)>();
-            query.iter_mut(world).collect::<Vec<_>>().into_iter()
+            world.query::<(Entity, &mut T)>().iter_mut(world)
         }
     }
 
     impl<A: Component, B: Component> Query<(&A, &B)> {
         pub fn iter(&mut self) -> impl Iterator<Item = (&A, &B)> {
             let world = unsafe { &mut *self.world };
-            let mut query = world.query::<(&A, &B)>();
-            query.iter(&*world).collect::<Vec<_>>().into_iter()
+            world.query::<(&A, &B)>().iter(&*world)
         }
     }
 
     impl<A: Component, B: Component> Query<(&mut A, &mut B)> {
         pub fn iter_mut(&mut self) -> impl Iterator<Item = (&mut A, &mut B)> {
             let world = unsafe { &mut *self.world };
-            let mut query = world.query::<(&mut A, &mut B)>();
-            query.iter_mut(world).collect::<Vec<_>>().into_iter()
+            world.query::<(&mut A, &mut B)>().iter_mut(world)
         }
     }
 
     impl<A: Component, B: Component> Query<(&mut A, &B)> {
         pub fn iter_mut(&mut self) -> impl Iterator<Item = (&mut A, &B)> {
             let world = unsafe { &mut *self.world };
-            let mut query = world.query::<(&mut A, &B)>();
-            query.iter_mut(world).collect::<Vec<_>>().into_iter()
+            world.query::<(&mut A, &B)>().iter_mut(world)
         }
     }
 
     impl<A: Component, B: Component> Query<(&A, &mut B)> {
         pub fn iter_mut(&mut self) -> impl Iterator<Item = (&A, &mut B)> {
             let world = unsafe { &mut *self.world };
-            let mut query = world.query::<(&A, &mut B)>();
-            query.iter_mut(world).collect::<Vec<_>>().into_iter()
+            world.query::<(&A, &mut B)>().iter_mut(world)
         }
     }
 

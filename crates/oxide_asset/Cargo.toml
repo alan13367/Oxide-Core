@@ -13,5 +13,4 @@ homepage.workspace = true
 name = "oxide_asset"
 
 [dependencies]
-oxide_renderer.workspace = true
 thiserror.workspace = true

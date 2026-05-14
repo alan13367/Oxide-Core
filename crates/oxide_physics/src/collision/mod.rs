@@ -196,6 +196,7 @@ pub fn clip_polygon_against_plane(
 /// 2. Find the incident face on the other box
 /// 3. Clip the incident face against the reference face's side planes
 /// 4. Keep points that are behind the reference face
+#[allow(clippy::too_many_arguments)]
 pub fn generate_box_box_contacts(
     center_a: Vec3,
     axes_a: [Vec3; 3],
@@ -311,7 +312,7 @@ pub fn generate_box_box_contacts(
                 ),
                 position: vertex,
                 normal: contact_normal,
-                penetration: penetration,
+                penetration,
                 normal_impulse: 0.0,
                 tangent_impulse: Vec3::ZERO,
             };

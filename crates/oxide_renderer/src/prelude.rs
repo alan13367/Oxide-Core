@@ -5,6 +5,7 @@ pub use crate::depth::DepthTexture;
 pub use crate::descriptor::{
     load_material_descriptor, MaterialDescriptor, MaterialType, ShaderDescriptor,
 };
+#[cfg(feature = "gltf-import")]
 pub use crate::gltf::{load_gltf, GltfError, GltfNode, GltfScene};
 pub use crate::material::{get_material_bind_group_layout, MaterialError, MaterialPipeline};
 pub use crate::mesh::{

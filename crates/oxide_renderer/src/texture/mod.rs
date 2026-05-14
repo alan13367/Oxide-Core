@@ -12,16 +12,20 @@ pub use sampler::SamplerDescriptor;
 
 #[derive(thiserror::Error, Debug)]
 pub enum TextureError {
+    #[cfg(feature = "image-import")]
     #[error("Failed to load image '{path}': {source}")]
     ImageLoad {
         path: String,
         source: image::ImageError,
     },
+    #[cfg(feature = "image-import")]
     #[error("Failed to read image file '{path}': {source}")]
     Io {
         path: String,
         source: std::io::Error,
     },
+    #[error("Texture file loading requires the 'image-import' feature")]
+    ImageImportDisabled,
     #[error("Invalid texture dimensions: {width}x{height}")]
     InvalidDimensions { width: u32, height: u32 },
 }
@@ -95,6 +99,7 @@ impl Texture {
     }
 
     /// Loads a texture from a file (PNG or JPEG).
+    #[cfg(feature = "image-import")]
     pub fn from_file(
         device: &Device,
         queue: &Queue,
@@ -118,6 +123,16 @@ impl Texture {
             dimensions,
             Some(&path_str),
         ))
+    }
+
+    /// Loads a texture from a file (PNG or JPEG).
+    #[cfg(not(feature = "image-import"))]
+    pub fn from_file(
+        _device: &Device,
+        _queue: &Queue,
+        _path: impl AsRef<Path>,
+    ) -> Result<Self, TextureError> {
+        Err(TextureError::ImageImportDisabled)
     }
 
     /// Creates a texture with a custom sampler.

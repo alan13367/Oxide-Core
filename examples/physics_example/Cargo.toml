@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 oxide_engine.workspace = true
-oxide_physics.workspace = true
+oxide_physics = { workspace = true, features = ["engine-plugin"] }
 wgpu.workspace = true
 bytemuck.workspace = true
 tracing.workspace = true

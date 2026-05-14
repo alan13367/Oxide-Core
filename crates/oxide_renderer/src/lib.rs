@@ -5,6 +5,7 @@ pub mod debug_lines;
 pub mod depth;
 pub mod descriptor;
 pub mod device;
+#[cfg(feature = "gltf-import")]
 pub mod gltf;
 pub mod material;
 pub mod mesh;

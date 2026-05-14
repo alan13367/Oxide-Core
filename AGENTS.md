@@ -13,6 +13,7 @@ Oxide Core is a high-performance 3D game engine built from scratch in Rust. It i
 - **Windowing**: `winit` for cross-platform windowing and event handling
 - **Diagnostics**: `tracing` and `tracing-subscriber` for logging and instrumentation
 - **Serialization**: `serde` and `serde_json` for material descriptors
+- **Dependency Policy**: Oxide owns its engine, ECS, physics, scene hierarchy, and gameplay-facing runtime. Do not add third-party game engines, ECS runtimes, physics engines, scene graphs, or gameplay frameworks; utility/platform crates are allowed behind Oxide-owned APIs.
 
 ## Project Architecture
 The workspace is divided into several specialized crates:
@@ -20,6 +21,7 @@ The workspace is divided into several specialized crates:
 - **`oxide_engine`**: The core orchestration layer. It defines the `App` trait, plugin APIs (`Plugin`, `DefaultPlugins`), manages the main loop via `winit`, integrates `oxide_ecs`, handles input/events, and provides an `AssetWatcher` for hot-reloading.
 - **`oxide_renderer`**: A low-level abstraction over `wgpu`. It handles device/queue initialization, swapchain management (Surface), and provides primitives for meshes, pipelines, descriptor-driven materials, and shaders.
 - **`oxide_math`**: Provides math types and utilities, re-exporting `glam` types and adding engine-specific transforms and camera math.
+- **`oxide_asset`**: Generic typed handles, handle-indexed asset storage, and async loading primitives. Renderer-specific caches and imported asset types should live in renderer or engine-facing crates.
 - **`oxide_physics`**: In-house 3D physics crate providing ECS components/resources/systems and a `PhysicsPlugin` for `AppStage::Update` (fixed-step simulation, spatial-hash broadphase, warm-started manifold solver, collision layers/events, joints, and OBB-aware cuboid collisions).
 - **`examples/`**: Contains demonstration projects. The primary example is `hello_window`, which serves as a full-featured interactive 3D scene with FPS-style camera controls. Other examples include `physics_example`, `unlit_example`, `sky_gradient_example`, and `sprite_ui_example`.
 

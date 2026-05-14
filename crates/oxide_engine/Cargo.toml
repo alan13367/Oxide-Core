@@ -13,7 +13,7 @@ homepage.workspace = true
 name = "oxide_engine"
 
 [dependencies]
-oxide_renderer.workspace = true
+oxide_renderer = { workspace = true, default-features = false }
 oxide_math.workspace = true
 oxide_transform.workspace = true
 oxide_input.workspace = true
@@ -31,5 +31,7 @@ egui = "0.33"
 egui-winit = "0.33"
 
 [features]
-default = []
+default = ["gltf-import", "image-import"]
+gltf-import = ["oxide_renderer/gltf-import"]
+image-import = ["oxide_renderer/image-import"]
 trace = ["tracing/release_max_level_trace"]

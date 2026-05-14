@@ -12,9 +12,10 @@ use oxide_ecs::Component;
 use crate::components::BodyId;
 
 /// Types of joint constraints.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum JointType {
     /// Fixed joint - locks all relative motion.
+    #[default]
     Fixed,
     /// Hinge (revolute) joint - allows rotation around a single axis.
     Hinge {
@@ -32,12 +33,6 @@ pub enum JointType {
         /// Damping coefficient.
         damping: f32,
     },
-}
-
-impl Default for JointType {
-    fn default() -> Self {
-        Self::Fixed
-    }
 }
 
 /// A joint constraint between two bodies.
@@ -146,6 +141,7 @@ pub struct JointConstraint {
 
 impl JointConstraint {
     /// Create a joint constraint from a joint component and body data.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_joint(
         joint: JointComponent,
         pos_a: Vec3,
@@ -201,6 +197,7 @@ impl JointConstraint {
     }
 
     /// Solve the joint constraint.
+    #[allow(clippy::too_many_arguments)]
     pub fn solve(
         &mut self,
         vel_a: &mut Vec3,

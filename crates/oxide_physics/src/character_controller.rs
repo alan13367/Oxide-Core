@@ -295,9 +295,11 @@ mod tests {
 
     #[test]
     fn is_on_walkable_slope() {
-        let mut controller = CharacterControllerComponent::default();
-        controller.grounded = true;
-        controller.ground_normal = Vec3::Y;
+        let mut controller = CharacterControllerComponent {
+            grounded: true,
+            ground_normal: Vec3::Y,
+            ..Default::default()
+        };
 
         // Flat ground is walkable
         assert!(controller.is_on_walkable_slope());
@@ -316,8 +318,10 @@ mod tests {
 
     #[test]
     fn jump_when_grounded() {
-        let mut controller = CharacterControllerComponent::default();
-        controller.grounded = true;
+        let mut controller = CharacterControllerComponent {
+            grounded: true,
+            ..Default::default()
+        };
 
         controller.jump(10.0);
         assert_eq!(controller.velocity.y, 10.0);
@@ -326,9 +330,11 @@ mod tests {
 
     #[test]
     fn no_jump_when_airborne() {
-        let mut controller = CharacterControllerComponent::default();
-        controller.grounded = false;
-        controller.velocity = Vec3::ZERO;
+        let mut controller = CharacterControllerComponent {
+            grounded: false,
+            velocity: Vec3::ZERO,
+            ..Default::default()
+        };
 
         controller.jump(10.0);
         assert_eq!(controller.velocity.y, 0.0);

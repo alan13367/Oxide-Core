@@ -4,8 +4,8 @@
 //! and other physics visualization. Feature-gated behind "debug-render".
 
 use glam::Mat4;
+use oxide_ecs::prelude::{Query, Res, ResMut};
 use oxide_ecs::Resource;
-use oxide_engine::prelude::{Query, Res, ResMut};
 use oxide_renderer::prelude::DebugLines;
 
 use crate::components::{ColliderComponent, ColliderShape, RigidBodyComponent, RigidBodyType};
