@@ -18,7 +18,7 @@ use serde_json::Value;
 
 use crate::{
     MeshPrimitive, RenderLayers, RenderMaterial, RenderMesh, SceneMaterialLibrary, SpriteBillboard,
-    SpriteDepthMode, SpriteFacing,
+    SpriteDepthMode, SpriteFacing, SpriteId,
 };
 
 pub const OXSCENE_FORMAT: &str = "oxide.oxscene";
@@ -923,6 +923,20 @@ pub enum SceneDescriptorError {
     },
 }
 
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
+pub enum SceneExportError {
+    #[error("Cannot export entity {entity:?}: missing TransformComponent")]
+    MissingTransform { entity: Entity },
+    #[error(
+        "Cannot export entity {entity:?}: entity appears more than once in the exported roots"
+    )]
+    DuplicateEntity { entity: Entity },
+    #[error("Cannot export entity {entity:?}: hierarchy cycle detected")]
+    HierarchyCycle { entity: Entity },
+    #[error("Cannot export entity {entity:?}: built-in shader {shader} is not representable in SceneBuiltinShader")]
+    UnsupportedMaterialShader { entity: Entity, shader: String },
+}
+
 pub fn load_scene_descriptor(
     path: impl AsRef<Path>,
 ) -> Result<SceneDescriptor, SceneDescriptorError> {
@@ -986,6 +1000,246 @@ fn scene_descriptor_from_value(
             .validate()
             .map_err(|source| SceneDescriptorError::Validation { path, source })?;
         Ok(scene)
+    }
+}
+
+/// Builds a scene descriptor from every root entity with a [`TransformComponent`].
+///
+/// Root entities are transform-bearing entities without a [`Parent`]. Children
+/// are exported recursively using the stored hierarchy order. This is intended
+/// for editor save flows and code-first tools that need to persist live Oxide
+/// scene data back into `.oxscene` documents.
+pub fn scene_descriptor_from_world(world: &mut World) -> Result<SceneDescriptor, SceneExportError> {
+    let mut query = world.query::<(Entity, &TransformComponent)>();
+    let mut roots: Vec<_> = query
+        .iter(world)
+        .filter_map(|(entity, _)| world.get::<Parent>(entity).is_none().then_some(entity))
+        .collect();
+    roots.sort_by_key(|entity| (entity.index(), entity.generation()));
+    scene_descriptor_from_roots(world, roots)
+}
+
+/// Builds a scene descriptor from the provided root entities.
+///
+/// Each root must have a [`TransformComponent`]. Descendants are exported
+/// recursively when they appear in [`Children`].
+pub fn scene_descriptor_from_roots(
+    world: &World,
+    roots: impl IntoIterator<Item = Entity>,
+) -> Result<SceneDescriptor, SceneExportError> {
+    let mut visited = HashSet::new();
+    let mut stack = HashSet::new();
+    let mut entities = Vec::new();
+
+    for root in roots {
+        entities.push(scene_entity_descriptor_from_world(
+            world,
+            root,
+            &mut visited,
+            &mut stack,
+        )?);
+    }
+
+    Ok(SceneDescriptor {
+        entities,
+        ..Default::default()
+    })
+}
+
+fn scene_entity_descriptor_from_world(
+    world: &World,
+    entity: Entity,
+    visited: &mut HashSet<Entity>,
+    stack: &mut HashSet<Entity>,
+) -> Result<SceneEntityDescriptor, SceneExportError> {
+    if !stack.insert(entity) {
+        return Err(SceneExportError::HierarchyCycle { entity });
+    }
+    if !visited.insert(entity) {
+        stack.remove(&entity);
+        return Err(SceneExportError::DuplicateEntity { entity });
+    }
+
+    let transform = world
+        .get::<TransformComponent>(entity)
+        .ok_or(SceneExportError::MissingTransform { entity })?;
+    let children = world
+        .get::<Children>(entity)
+        .map(|children| children.iter().collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    let descriptor = SceneEntityDescriptor {
+        name: world.get::<Name>(entity).map(|name| name.0.clone()),
+        tags: world
+            .get::<Tags>(entity)
+            .map(|tags| tags.iter().map(str::to_string).collect())
+            .unwrap_or_default(),
+        transform: scene_transform_from_transform(&transform.transform),
+        visible: world
+            .get::<Visibility>(entity)
+            .map(|visibility| visibility.is_visible())
+            .unwrap_or(true),
+        render_layers: world
+            .get::<RenderLayers>(entity)
+            .map(|layers| layers.mask()),
+        kind: scene_entity_kind_from_world(world, entity)?,
+        children: children
+            .into_iter()
+            .map(|child| scene_entity_descriptor_from_world(world, child, visited, stack))
+            .collect::<Result<Vec<_>, _>>()?,
+    };
+
+    stack.remove(&entity);
+    Ok(descriptor)
+}
+
+fn scene_entity_kind_from_world(
+    world: &World,
+    entity: Entity,
+) -> Result<SceneEntityKind, SceneExportError> {
+    if let Some(camera) = world.get::<CameraComponent>(entity) {
+        let view = world
+            .get::<CameraRenderView>(entity)
+            .copied()
+            .unwrap_or_default();
+        return Ok(SceneEntityKind::Camera {
+            target: camera.0.target.to_array(),
+            controller: world.get::<CameraController>(entity).is_some(),
+            order: view.order,
+            active: view.is_active,
+            viewport: view
+                .viewport
+                .map(|viewport| [viewport.x, viewport.y, viewport.width, viewport.height]),
+            clear_color: view.clear_color,
+        });
+    }
+
+    if let Some(light) = world.get::<AmbientLight>(entity) {
+        return Ok(SceneEntityKind::AmbientLight {
+            color: light.color.to_array(),
+            intensity: light.intensity,
+        });
+    }
+
+    if let Some(light) = world.get::<DirectionalLight>(entity) {
+        return Ok(SceneEntityKind::DirectionalLight {
+            direction: light.direction.to_array(),
+            color: light.color.to_array(),
+            intensity: light.intensity,
+        });
+    }
+
+    if let Some(light) = world.get::<PointLight>(entity) {
+        return Ok(SceneEntityKind::PointLight {
+            color: light.color.to_array(),
+            intensity: light.intensity,
+            radius: light.radius,
+        });
+    }
+
+    if let Some(mesh) = world.get::<RenderMesh>(entity) {
+        return Ok(SceneEntityKind::Mesh {
+            primitive: scene_mesh_primitive_from_mesh(mesh.primitive),
+            material: scene_material_descriptor_from_render_material(
+                entity,
+                &mesh.material,
+                mesh.tint,
+            )?,
+        });
+    }
+
+    if let Some(sprite) = world.get::<SpriteBillboard>(entity) {
+        return Ok(SceneEntityKind::Sprite {
+            sprite: SceneSpriteDescriptor {
+                sprite: sprite_id_string(&sprite.sprite),
+                size: sprite.size.to_array(),
+                tint: sprite.tint,
+                facing: scene_sprite_facing_from_sprite(sprite.facing),
+                depth: scene_sprite_depth_from_sprite(sprite.depth),
+            },
+        });
+    }
+
+    Ok(SceneEntityKind::Empty)
+}
+
+fn scene_transform_from_transform(transform: &Transform) -> SceneTransform {
+    SceneTransform {
+        position: transform.position.to_array(),
+        rotation: [
+            transform.rotation.x,
+            transform.rotation.y,
+            transform.rotation.z,
+            transform.rotation.w,
+        ],
+        scale: transform.scale.to_array(),
+    }
+}
+
+fn scene_mesh_primitive_from_mesh(primitive: MeshPrimitive) -> SceneMeshPrimitive {
+    match primitive {
+        MeshPrimitive::Cube => SceneMeshPrimitive::Cube,
+        MeshPrimitive::Sphere { .. } => SceneMeshPrimitive::Sphere,
+    }
+}
+
+fn scene_material_descriptor_from_render_material(
+    entity: Entity,
+    material: &RenderMaterial,
+    tint: [f32; 4],
+) -> Result<SceneMaterialDescriptor, SceneExportError> {
+    match material {
+        RenderMaterial::Named(reference) => Ok(SceneMaterialDescriptor {
+            reference: Some(reference.clone()),
+            color: tint,
+            ..Default::default()
+        }),
+        RenderMaterial::Builtin {
+            shader,
+            name,
+            base_color,
+            ..
+        } => {
+            let shader = match shader {
+                oxide_renderer::shader::BuiltinShader::Lit => SceneBuiltinShader::Lit,
+                oxide_renderer::shader::BuiltinShader::Unlit => SceneBuiltinShader::Unlit,
+                shader => {
+                    return Err(SceneExportError::UnsupportedMaterialShader {
+                        entity,
+                        shader: format!("{shader:?}"),
+                    });
+                }
+            };
+            Ok(SceneMaterialDescriptor {
+                reference: None,
+                name: name.clone(),
+                shader,
+                color: multiply_colors(*base_color, tint),
+            })
+        }
+    }
+}
+
+fn multiply_colors(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    [a[0] * b[0], a[1] * b[1], a[2] * b[2], a[3] * b[3]]
+}
+
+fn sprite_id_string(sprite: &SpriteId) -> String {
+    sprite.as_str().to_string()
+}
+
+fn scene_sprite_facing_from_sprite(facing: SpriteFacing) -> SceneSpriteFacing {
+    match facing {
+        SpriteFacing::YBillboard => SceneSpriteFacing::YBillboard,
+        SpriteFacing::Camera => SceneSpriteFacing::Camera,
+        SpriteFacing::Fixed => SceneSpriteFacing::Fixed,
+    }
+}
+
+fn scene_sprite_depth_from_sprite(depth: SpriteDepthMode) -> SceneSpriteDepthMode {
+    match depth {
+        SpriteDepthMode::World => SceneSpriteDepthMode::World,
+        SpriteDepthMode::Overlay => SceneSpriteDepthMode::Overlay,
     }
 }
 
@@ -1636,6 +1890,174 @@ mod tests {
 
         let mut meshes = world.query::<&RenderMesh>();
         assert_eq!(meshes.iter(&world).count(), 1);
+    }
+
+    #[test]
+    fn scene_descriptor_exports_world_hierarchy_for_authoring_save() {
+        let mut world = World::new();
+        let root = world
+            .spawn((
+                Name("Encounter".to_string()),
+                TransformComponent::from_position(Vec3::new(1.0, 2.0, 3.0)),
+                GlobalTransform::default(),
+            ))
+            .id();
+        world.entity_mut(root).insert((
+            Tags::new(["encounter", "edited"]),
+            Visibility::Hidden,
+            RenderLayers::layer(2),
+            RenderMesh::new(
+                MeshPrimitive::Cube,
+                RenderMaterial::Named("crate".to_string()),
+            )
+            .with_tint([0.2, 0.4, 0.6, 1.0]),
+        ));
+        let child = world
+            .spawn((
+                Name("Marker".to_string()),
+                TransformComponent::from_position(Vec3::new(0.0, 1.0, 0.0)),
+                GlobalTransform::default(),
+                SpriteBillboard::new("marker", Vec2::new(0.5, 0.75))
+                    .with_tint([1.0, 0.5, 0.25, 1.0])
+                    .with_facing(SpriteFacing::Camera)
+                    .with_depth(SpriteDepthMode::Overlay),
+            ))
+            .id();
+        attach_child(&mut world, root, child);
+
+        let scene = scene_descriptor_from_roots(&world, [root]).unwrap();
+
+        assert_eq!(scene.entities.len(), 1);
+        let root_descriptor = &scene.entities[0];
+        assert_eq!(root_descriptor.name.as_deref(), Some("Encounter"));
+        assert_eq!(root_descriptor.tags, ["encounter", "edited"]);
+        assert_eq!(root_descriptor.transform.position, [1.0, 2.0, 3.0]);
+        assert!(!root_descriptor.visible);
+        assert_eq!(
+            root_descriptor.render_layers,
+            Some(RenderLayers::layer(2).mask())
+        );
+        let SceneEntityKind::Mesh {
+            primitive,
+            material,
+        } = &root_descriptor.kind
+        else {
+            panic!("expected exported mesh root");
+        };
+        assert!(matches!(primitive, SceneMeshPrimitive::Cube));
+        assert_eq!(material.reference.as_deref(), Some("crate"));
+        assert_eq!(material.color, [0.2, 0.4, 0.6, 1.0]);
+
+        assert_eq!(root_descriptor.children.len(), 1);
+        let SceneEntityKind::Sprite { sprite } = &root_descriptor.children[0].kind else {
+            panic!("expected exported sprite child");
+        };
+        assert_eq!(sprite.sprite, "marker");
+        assert_eq!(sprite.size, [0.5, 0.75]);
+        assert_eq!(sprite.facing, SceneSpriteFacing::Camera);
+        assert_eq!(sprite.depth, SceneSpriteDepthMode::Overlay);
+        scene.validate().unwrap();
+
+        let mut spawned_world = World::new();
+        let spawned = spawn_scene_descriptor_instance(&mut spawned_world, &scene).unwrap();
+        assert_eq!(
+            entities_in_scene_instance(&mut spawned_world, spawned.id).len(),
+            2
+        );
+        assert!(entity_has_tag(
+            &spawned_world,
+            spawned.root().unwrap(),
+            "edited"
+        ));
+    }
+
+    #[test]
+    fn scene_descriptor_exports_cameras_and_lights() {
+        let mut world = World::new();
+        let mut camera = CameraComponent::new();
+        camera.0.position = Vec3::new(0.0, 3.0, 5.0);
+        camera.0.target = Vec3::ZERO;
+        let camera_entity = world
+            .spawn((
+                Name("Gameplay Camera".to_string()),
+                TransformComponent::from_position(Vec3::new(0.0, 3.0, 5.0)),
+                GlobalTransform::default(),
+            ))
+            .id();
+        world.entity_mut(camera_entity).insert((
+            camera,
+            CameraController::new(),
+            CameraRenderView::new()
+                .with_order(-2)
+                .with_viewport(CameraViewport::new(0.1, 0.2, 0.3, 0.4))
+                .with_clear_color([0.1, 0.2, 0.3, 1.0]),
+        ));
+        let light_entity = world
+            .spawn((
+                Name("Sun".to_string()),
+                TransformComponent::default(),
+                GlobalTransform::default(),
+                DirectionalLight::new(Vec3::new(1.0, -1.0, 0.0), Vec3::new(1.0, 0.9, 0.8), 2.0),
+            ))
+            .id();
+
+        let scene = scene_descriptor_from_roots(&world, [camera_entity, light_entity]).unwrap();
+
+        let SceneEntityKind::Camera {
+            target,
+            controller,
+            order,
+            active,
+            viewport,
+            clear_color,
+        } = &scene.entities[0].kind
+        else {
+            panic!("expected exported camera");
+        };
+        assert_eq!(*target, [0.0, 0.0, 0.0]);
+        assert!(*controller);
+        assert_eq!(*order, -2);
+        assert!(*active);
+        assert_eq!(*viewport, Some([0.1, 0.2, 0.3, 0.4]));
+        assert_eq!(*clear_color, Some([0.1, 0.2, 0.3, 1.0]));
+
+        let SceneEntityKind::DirectionalLight {
+            color, intensity, ..
+        } = &scene.entities[1].kind
+        else {
+            panic!("expected exported directional light");
+        };
+        assert_eq!(*color, [1.0, 0.9, 0.8]);
+        assert_eq!(*intensity, 2.0);
+    }
+
+    #[test]
+    fn scene_descriptor_export_reports_unrepresentable_materials() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                TransformComponent::default(),
+                GlobalTransform::default(),
+                RenderMesh::new(
+                    MeshPrimitive::Cube,
+                    RenderMaterial::Builtin {
+                        shader: oxide_renderer::shader::BuiltinShader::Basic,
+                        material_type: oxide_renderer::descriptor::MaterialType::Basic,
+                        name: "basic".to_string(),
+                        base_color: [1.0; 4],
+                    },
+                ),
+            ))
+            .id();
+
+        let err = scene_descriptor_from_roots(&world, [entity]).unwrap_err();
+        assert_eq!(
+            err,
+            SceneExportError::UnsupportedMaterialShader {
+                entity,
+                shader: "Basic".to_string()
+            }
+        );
     }
 
     #[test]

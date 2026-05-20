@@ -228,6 +228,24 @@ tags, and empty sprite IDs with descriptor paths such as
 and `try_spawn_scene_descriptor` / `try_spawn_scene_prefab` when code wants
 structured `SceneValidationError` diagnostics before mutating the world.
 
+## Exporting Edited Scenes
+
+Editor and tooling code can serialize live scene entities back into Oxide's
+native descriptor format:
+
+```rust
+let scene = scene_descriptor_from_world(&mut world)?;
+save_scene_descriptor("assets/scenes/edited.oxscene", &scene)?;
+```
+
+`scene_descriptor_from_world` exports transform-bearing root entities and their
+children. Use `scene_descriptor_from_roots(&world, roots)` when saving only a
+selection, prefab candidate, or imported subtree. The exporter preserves
+hierarchy order plus supported Oxide scene components: `Name`, `Tags`,
+`TransformComponent`, `Visibility`, `RenderLayers`, `RenderMesh`,
+`SpriteBillboard`, cameras, and lights. It returns `SceneExportError` instead of
+silently dropping unsupported material shaders or malformed hierarchies.
+
 ## Scene Materials
 
 Code-first scenes can register named material intents once and reference them

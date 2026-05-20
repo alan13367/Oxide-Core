@@ -352,6 +352,19 @@ and `try_spawn_scene_descriptor` / `try_spawn_scene_prefab` return structured
 diagnostics for missing prefab IDs, duplicate IDs, recursive prefab graphs, and
 invalid prefab overrides without partially spawning invalid content.
 
+Editor save flows can export live Oxide scene entities back into descriptors:
+
+```rust
+let scene = scene_descriptor_from_world(&mut world)?;
+save_scene_descriptor("assets/scenes/edited.oxscene", &scene)?;
+```
+
+Use `scene_descriptor_from_roots(&world, roots)` when a tool should save a
+selection or authored subtree instead of every root entity. The exporter
+preserves hierarchy, transforms, names, tags, visibility, render layers, meshes,
+sprites, cameras, and lights, and reports `SceneExportError` when a live entity
+uses data that cannot be represented by the current `.oxscene` schema.
+
 Authored tags are intended for game logic and tools, not just editor display:
 
 ```rust
@@ -584,6 +597,8 @@ The editor is implemented as normal engine data, not a separate tool runtime:
 - `SceneEditorPlugin` inserts a `SceneEditor` resource.
 - `SceneEditor` can select, spawn, duplicate, delete, rename, transform, and
   retint scene entities.
+- `scene_descriptor_from_world` and `scene_descriptor_from_roots` provide the
+  save-side bridge from edited ECS data back into `.oxscene` descriptors.
 - `GameUiPlugin` inserts a `GameUi` resource and renders panels, buttons, bars,
   counters, and reticles as camera-locked scene primitives.
 - `GameTextRenderer` is installed with `GameUiPlugin`; it batches styled text
