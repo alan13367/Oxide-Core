@@ -33,6 +33,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+egui.workspace = true
 pollster = "0.4"
 notify = "8.2.0"
 

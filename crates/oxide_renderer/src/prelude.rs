@@ -3,7 +3,8 @@
 pub use crate::debug_lines::DebugLines;
 pub use crate::depth::DepthTexture;
 pub use crate::descriptor::{
-    load_material_descriptor, MaterialDescriptor, MaterialType, ShaderDescriptor,
+    load_material_descriptor, save_material_descriptor, MaterialDescriptor, MaterialType,
+    OxMaterialDocument, ShaderDescriptor, OXMAT_FORMAT, OXMAT_VERSION,
 };
 #[cfg(feature = "gltf-import")]
 pub use crate::gltf::{load_gltf, GltfError, GltfNode, GltfScene};

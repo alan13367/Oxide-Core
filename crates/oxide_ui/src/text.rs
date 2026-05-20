@@ -533,7 +533,7 @@ fn create_text_pipeline(
 ) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Game UI Text Pipeline Layout"),
-        bind_group_layouts: &[atlas_layout],
+        bind_group_layouts: &[Some(atlas_layout)],
         immediate_size: 0,
     });
 

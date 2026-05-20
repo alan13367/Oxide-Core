@@ -1,15 +1,16 @@
 //! Runtime scene editor model and egui surface.
 
-use glam::Vec3;
+use glam::{Mat4, Vec2, Vec3, Vec4};
 use oxide_camera::CameraComponent;
 use oxide_ecs::entity::Entity;
 use oxide_ecs::world::World;
 use oxide_ecs::Resource;
+use oxide_input::MouseInput;
 use oxide_light::{AmbientLight, DirectionalLight, PointLight};
 use oxide_math::transform::Transform;
 use oxide_scene::{
     Children, GlobalTransform, MeshPrimitive, Name, Parent, RenderMaterial, RenderMesh,
-    TransformComponent,
+    SceneGizmoLines, TransformComponent,
 };
 use oxide_ui::{DevOverlay, DevOverlaySnapshot, RuntimeUi};
 
@@ -17,6 +18,10 @@ use oxide_ui::{DevOverlay, DevOverlaySnapshot, RuntimeUi};
 pub struct SceneEditor {
     pub visible: bool,
     selected: Option<Entity>,
+    active_tool: SceneEditorTool,
+    active_axis: GizmoAxis,
+    drag: Option<GizmoDrag>,
+    last_left_pressed: bool,
     next_spawn_index: u32,
 }
 
@@ -25,9 +30,48 @@ impl Default for SceneEditor {
         Self {
             visible: true,
             selected: None,
+            active_tool: SceneEditorTool::Select,
+            active_axis: GizmoAxis::X,
+            drag: None,
+            last_left_pressed: false,
             next_spawn_index: 1,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SceneEditorTool {
+    Select,
+    Translate,
+    Rotate,
+    Scale,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GizmoAxis {
+    X,
+    Y,
+    Z,
+    Uniform,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct GizmoDrag {
+    entity: Entity,
+    start_cursor: Vec2,
+    start_transform: Transform,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScenePickRay {
+    pub origin: Vec3,
+    pub direction: Vec3,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScenePickHit {
+    pub entity: Entity,
+    pub distance: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,9 +119,41 @@ pub fn with_scene_editor<R>(
     Some(result)
 }
 
+pub fn scene_editor_viewport_system(world: &mut World, viewport_size: [f32; 2]) {
+    if !world.contains_resource::<SceneEditor>() || !world.contains_resource::<MouseInput>() {
+        return;
+    }
+    if !world.contains_resource::<SceneGizmoLines>() {
+        world.insert_resource(SceneGizmoLines::default());
+    }
+
+    let mut editor = world.remove_resource::<SceneEditor>().unwrap();
+    editor.update_viewport_interaction(world, viewport_size);
+    world.insert_resource(editor);
+}
+
 impl SceneEditor {
     pub fn selected(&self) -> Option<Entity> {
         self.selected
+    }
+
+    pub fn active_tool(&self) -> SceneEditorTool {
+        self.active_tool
+    }
+
+    pub fn set_active_tool(&mut self, tool: SceneEditorTool) {
+        self.active_tool = tool;
+        if tool == SceneEditorTool::Select {
+            self.drag = None;
+        }
+    }
+
+    pub fn active_axis(&self) -> GizmoAxis {
+        self.active_axis
+    }
+
+    pub fn set_active_axis(&mut self, axis: GizmoAxis) {
+        self.active_axis = axis;
     }
 
     pub fn select(&mut self, world: &World, entity: Option<Entity>) -> bool {
@@ -244,6 +320,23 @@ impl SceneEditor {
                         self.spawn_sphere(world);
                     }
                 });
+                ui.horizontal(|ui| {
+                    tool_button(ui, &mut self.active_tool, SceneEditorTool::Select, "Select");
+                    tool_button(
+                        ui,
+                        &mut self.active_tool,
+                        SceneEditorTool::Translate,
+                        "Move",
+                    );
+                    tool_button(ui, &mut self.active_tool, SceneEditorTool::Rotate, "Rotate");
+                    tool_button(ui, &mut self.active_tool, SceneEditorTool::Scale, "Scale");
+                });
+                ui.horizontal(|ui| {
+                    axis_button(ui, &mut self.active_axis, GizmoAxis::X, "X");
+                    axis_button(ui, &mut self.active_axis, GizmoAxis::Y, "Y");
+                    axis_button(ui, &mut self.active_axis, GizmoAxis::Z, "Z");
+                    axis_button(ui, &mut self.active_axis, GizmoAxis::Uniform, "All");
+                });
                 ui.separator();
 
                 for summary in &summaries {
@@ -330,11 +423,279 @@ impl SceneEditor {
             });
         });
     }
+
+    fn update_viewport_interaction(&mut self, world: &mut World, viewport_size: [f32; 2]) {
+        {
+            let gizmos = world.resource_mut::<SceneGizmoLines>();
+            gizmos.clear();
+        }
+        self.draw_selected_gizmo(world);
+
+        let (cursor, left_pressed) = {
+            let mouse = world.resource::<MouseInput>();
+            (
+                mouse
+                    .position
+                    .map(|position| Vec2::new(position.x as f32, position.y as f32)),
+                mouse.left_pressed,
+            )
+        };
+        let just_pressed = left_pressed && !self.last_left_pressed;
+        self.last_left_pressed = left_pressed;
+
+        let Some(cursor) = cursor else {
+            return;
+        };
+
+        if !left_pressed {
+            self.drag = None;
+            return;
+        }
+
+        match self.active_tool {
+            SceneEditorTool::Select => {
+                if just_pressed {
+                    let picked = active_camera(world)
+                        .and_then(|camera| viewport_pick_ray(&camera.0, cursor, viewport_size))
+                        .and_then(|ray| pick_render_mesh(world, ray));
+                    let _ = self.select(world, picked.map(|hit| hit.entity));
+                }
+            }
+            SceneEditorTool::Translate | SceneEditorTool::Rotate | SceneEditorTool::Scale => {
+                if just_pressed {
+                    if let Some(entity) = self.selected.filter(|entity| world.contains(*entity)) {
+                        if let Some(transform) = world.get::<TransformComponent>(entity).cloned() {
+                            self.drag = Some(GizmoDrag {
+                                entity,
+                                start_cursor: cursor,
+                                start_transform: transform.transform,
+                            });
+                        }
+                    }
+                }
+
+                if let Some(drag) = self.drag {
+                    if !world.contains(drag.entity) {
+                        self.drag = None;
+                        return;
+                    }
+                    let delta = cursor - drag.start_cursor;
+                    let edited = apply_gizmo_drag(
+                        drag.start_transform,
+                        self.active_tool,
+                        self.active_axis,
+                        delta,
+                    );
+                    if let Some(transform) = world.get_mut::<TransformComponent>(drag.entity) {
+                        transform.set_transform(edited);
+                    }
+                }
+            }
+        }
+    }
+
+    fn draw_selected_gizmo(&self, world: &mut World) {
+        let Some(entity) = self.selected.filter(|entity| world.contains(*entity)) else {
+            return;
+        };
+        let matrix = entity_model_matrix(world, entity);
+        let gizmos = world.resource_mut::<SceneGizmoLines>();
+        gizmos.draw_axes(matrix, 1.5);
+    }
 }
 
 fn drag_value(ui: &mut egui::Ui, value: &mut f32, label: &str) -> bool {
     ui.label(label);
     ui.add(egui::DragValue::new(value).speed(0.05)).changed()
+}
+
+fn tool_button(
+    ui: &mut egui::Ui,
+    active: &mut SceneEditorTool,
+    tool: SceneEditorTool,
+    label: &str,
+) {
+    if ui.selectable_label(*active == tool, label).clicked() {
+        *active = tool;
+    }
+}
+
+fn axis_button(ui: &mut egui::Ui, active: &mut GizmoAxis, axis: GizmoAxis, label: &str) {
+    if ui.selectable_label(*active == axis, label).clicked() {
+        *active = axis;
+    }
+}
+
+pub fn viewport_pick_ray(
+    camera: &oxide_math::prelude::Camera,
+    cursor: Vec2,
+    viewport_size: [f32; 2],
+) -> Option<ScenePickRay> {
+    if viewport_size[0] <= 0.0 || viewport_size[1] <= 0.0 {
+        return None;
+    }
+
+    let ndc_x = (cursor.x / viewport_size[0]) * 2.0 - 1.0;
+    let ndc_y = 1.0 - (cursor.y / viewport_size[1]) * 2.0;
+    let view_proj = camera.view_projection_matrix(viewport_size[0] / viewport_size[1]);
+    let inv = view_proj.inverse();
+    let near = unproject(inv, Vec3::new(ndc_x, ndc_y, -1.0));
+    let far = unproject(inv, Vec3::new(ndc_x, ndc_y, 1.0));
+    let direction = (far - near).normalize_or_zero();
+
+    (direction != Vec3::ZERO).then_some(ScenePickRay {
+        origin: camera.position,
+        direction,
+    })
+}
+
+pub fn pick_render_mesh(world: &mut World, ray: ScenePickRay) -> Option<ScenePickHit> {
+    let mut query = world.query::<(Entity, &RenderMesh)>();
+    let entities: Vec<(Entity, MeshPrimitive)> = query
+        .iter(world)
+        .map(|(entity, mesh)| (entity, mesh.primitive))
+        .collect();
+
+    entities
+        .into_iter()
+        .filter_map(|(entity, primitive)| {
+            let model = entity_model_matrix(world, entity);
+            intersect_primitive(ray, model, primitive)
+                .map(|distance| ScenePickHit { entity, distance })
+        })
+        .min_by(|a, b| a.distance.total_cmp(&b.distance))
+}
+
+pub fn apply_gizmo_drag(
+    start: Transform,
+    tool: SceneEditorTool,
+    axis: GizmoAxis,
+    cursor_delta: Vec2,
+) -> Transform {
+    let amount = (cursor_delta.x - cursor_delta.y) * 0.01;
+    let mut edited = start;
+    match tool {
+        SceneEditorTool::Select => {}
+        SceneEditorTool::Translate => {
+            edited.position += axis_vector(axis) * amount;
+        }
+        SceneEditorTool::Rotate => {
+            let rotation = match axis {
+                GizmoAxis::X => glam::Quat::from_rotation_x(amount),
+                GizmoAxis::Y => glam::Quat::from_rotation_y(amount),
+                GizmoAxis::Z | GizmoAxis::Uniform => glam::Quat::from_rotation_z(amount),
+            };
+            edited.rotation = rotation * edited.rotation;
+        }
+        SceneEditorTool::Scale => {
+            let factor = (1.0 + amount).max(0.05);
+            match axis {
+                GizmoAxis::X => edited.scale.x = (start.scale.x * factor).max(0.05),
+                GizmoAxis::Y => edited.scale.y = (start.scale.y * factor).max(0.05),
+                GizmoAxis::Z => edited.scale.z = (start.scale.z * factor).max(0.05),
+                GizmoAxis::Uniform => {
+                    edited.scale = (start.scale * factor).max(Vec3::splat(0.05));
+                }
+            }
+        }
+    }
+    edited
+}
+
+fn active_camera(world: &mut World) -> Option<CameraComponent> {
+    let mut query = world.query::<&CameraComponent>();
+    query.iter(world).next().copied()
+}
+
+fn unproject(inv_view_proj: Mat4, ndc: Vec3) -> Vec3 {
+    let point = inv_view_proj * Vec4::new(ndc.x, ndc.y, ndc.z, 1.0);
+    point.truncate() / point.w
+}
+
+fn entity_model_matrix(world: &World, entity: Entity) -> Mat4 {
+    if let Some(global) = world.get::<GlobalTransform>(entity) {
+        global.matrix
+    } else if let Some(local) = world.get::<TransformComponent>(entity) {
+        local.to_matrix()
+    } else {
+        Mat4::IDENTITY
+    }
+}
+
+fn intersect_primitive(ray: ScenePickRay, model: Mat4, primitive: MeshPrimitive) -> Option<f32> {
+    let inv_model = model.inverse();
+    let local_origin = inv_model.transform_point3(ray.origin);
+    let local_direction = inv_model
+        .transform_vector3(ray.direction)
+        .normalize_or_zero();
+    if local_direction == Vec3::ZERO {
+        return None;
+    }
+
+    let local_t = match primitive {
+        MeshPrimitive::Cube => intersect_unit_cube(local_origin, local_direction),
+        MeshPrimitive::Sphere { .. } => intersect_unit_sphere(local_origin, local_direction),
+    }?;
+    let local_hit = local_origin + local_direction * local_t;
+    let world_hit = model.transform_point3(local_hit);
+    Some((world_hit - ray.origin).length())
+}
+
+fn intersect_unit_sphere(origin: Vec3, direction: Vec3) -> Option<f32> {
+    let a = direction.length_squared();
+    let b = 2.0 * origin.dot(direction);
+    let c = origin.length_squared() - 0.25;
+    let discriminant = b * b - 4.0 * a * c;
+    if discriminant < 0.0 {
+        return None;
+    }
+
+    let sqrt = discriminant.sqrt();
+    let near = (-b - sqrt) / (2.0 * a);
+    let far = (-b + sqrt) / (2.0 * a);
+    [near, far]
+        .into_iter()
+        .filter(|t| *t >= 0.0)
+        .min_by(|a, b| a.total_cmp(b))
+}
+
+fn intersect_unit_cube(origin: Vec3, direction: Vec3) -> Option<f32> {
+    let mut t_min = 0.0f32;
+    let mut t_max = f32::INFINITY;
+
+    for axis in 0..3 {
+        let origin_axis = origin[axis];
+        let direction_axis = direction[axis];
+        if direction_axis.abs() < f32::EPSILON {
+            if !(-0.5..=0.5).contains(&origin_axis) {
+                return None;
+            }
+            continue;
+        }
+
+        let inv = 1.0 / direction_axis;
+        let mut t0 = (-0.5 - origin_axis) * inv;
+        let mut t1 = (0.5 - origin_axis) * inv;
+        if t0 > t1 {
+            std::mem::swap(&mut t0, &mut t1);
+        }
+        t_min = t_min.max(t0);
+        t_max = t_max.min(t1);
+        if t_max < t_min {
+            return None;
+        }
+    }
+
+    Some(t_min)
+}
+
+fn axis_vector(axis: GizmoAxis) -> Vec3 {
+    match axis {
+        GizmoAxis::X => Vec3::X,
+        GizmoAxis::Y => Vec3::Y,
+        GizmoAxis::Z => Vec3::Z,
+        GizmoAxis::Uniform => Vec3::ONE.normalize(),
+    }
 }
 
 fn delete_entity_recursive(world: &mut World, entity: Entity) -> bool {
@@ -393,5 +754,69 @@ mod tests {
         assert_ne!(source, duplicated);
         assert_eq!(editor.selected(), Some(duplicated));
         assert!(world.get::<RenderMesh>(duplicated).is_some());
+    }
+
+    #[test]
+    fn picking_selects_nearest_render_mesh() {
+        let mut world = World::new();
+        let near = world
+            .spawn((
+                TransformComponent::from_position(Vec3::new(0.0, 0.0, -2.0)),
+                GlobalTransform::default(),
+                RenderMesh::new(MeshPrimitive::Cube, RenderMaterial::default()),
+            ))
+            .id();
+        world.spawn((
+            TransformComponent::from_position(Vec3::new(0.0, 0.0, -5.0)),
+            GlobalTransform::default(),
+            RenderMesh::new(MeshPrimitive::Cube, RenderMaterial::default()),
+        ));
+        oxide_scene::transform_propagate_system(&mut world);
+
+        let hit = pick_render_mesh(
+            &mut world,
+            ScenePickRay {
+                origin: Vec3::ZERO,
+                direction: Vec3::NEG_Z,
+            },
+        )
+        .expect("ray should hit a cube");
+        assert_eq!(hit.entity, near);
+    }
+
+    #[test]
+    fn gizmo_translate_rotate_and_scale_math_is_stable() {
+        let start = Transform::default();
+        let moved = apply_gizmo_drag(
+            start,
+            SceneEditorTool::Translate,
+            GizmoAxis::X,
+            Vec2::new(20.0, 0.0),
+        );
+        assert!(moved.position.x > start.position.x);
+
+        let rotated = apply_gizmo_drag(
+            start,
+            SceneEditorTool::Rotate,
+            GizmoAxis::Y,
+            Vec2::new(20.0, 0.0),
+        );
+        assert_ne!(rotated.rotation, start.rotation);
+
+        let scaled = apply_gizmo_drag(
+            start,
+            SceneEditorTool::Scale,
+            GizmoAxis::Uniform,
+            Vec2::new(20.0, 0.0),
+        );
+        assert!(scaled.scale.x > start.scale.x);
+
+        let clamped = apply_gizmo_drag(
+            start,
+            SceneEditorTool::Scale,
+            GizmoAxis::Uniform,
+            Vec2::new(-1000.0, 0.0),
+        );
+        assert!(clamped.scale.min_element() >= 0.05);
     }
 }

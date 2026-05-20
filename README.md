@@ -11,12 +11,13 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Audio**: `oxide_audio` playback, software mixing, generated tones, and WAV clip loading via an engine `AudioPlugin`
 - **Focused Runtime Crates**: camera, lighting, scene, UI, editor, audio, physics, asset, input, transform, renderer, and ECS code live outside the façade crate behind Oxide-owned APIs
 - **Materials + Shaders**: built-in shader pack plus custom WGSL (inline/file) with fallback support
+- **Native Asset Documents**: versioned `.oxscene` and `.oxmat` JSON wrappers with legacy descriptor loading support
 - **Automatic Scene Renderer**: optional plugin that renders `RenderMesh` scene entities without app-owned pipelines
 - **Native Sprites**: engine-owned RGBA/PNG sprite assets plus billboard and UI sprite components for actors, props, weapons, and overlays
 - **Terrain + World Authoring**: heightfield terrain and configurable world descriptors for code-first maps
 - **Game UI + Text**: camera-locked panels, buttons, bars, counters, reticles, native styled text widgets, and custom TrueType/OpenType font registration
-- **Scene Editor Model**: hierarchy/inspector resource with spawn, select, duplicate, delete, transform, and tint editing APIs
-- **Descriptor Pipeline**: JSON, RON, and TOML material descriptors for built-in and project-level shader assets
+- **Scene Editor Model**: hierarchy/inspector resource with spawn, select, duplicate, delete, picking, TRS gizmos, transform, and tint editing APIs
+- **Descriptor Pipeline**: JSON, RON, TOML, and `.oxmat` material descriptors for built-in and project-level shader assets
 - **Hot-Reloading**: Automatically reload shader assets during development
 - **Robust Validation**: Static checks to ensure custom shaders comply with engine bindings
 - **Plugin Architecture**: Group engine setup with `Plugin`/`DefaultPlugins` to reduce app boilerplate
@@ -49,6 +50,15 @@ cargo run -p sky_gradient_example # Skybox/gradient material demo
 cargo run -p sprite_ui_example    # 2D Orthographic overlay material
 ```
 
+Create a new project scaffold with:
+
+```bash
+cargo run -p oxide -- new my_game --name my_game
+```
+
+Apps using `SceneAuthoringPlugins` start without editor chrome; press `F1` to
+toggle the egui authoring panels.
+
 ## Usage
 
 Oxide Core uses a data-driven architecture powered by an Entity-Component-System (ECS). Applications are built by implementing the `App` trait and launched with the fluent app builder.
@@ -77,9 +87,10 @@ impl App for MyApp {
         world.insert_resource(RendererResource::new(renderer));
         world.insert_resource(WindowResource::new(window.size().width, window.size().height));
 
-        let scene = SceneDescriptor::starter_scene();
-        let roots = spawn_scene_descriptor(&mut world, &scene);
-        world.insert_resource(SceneSpawnResult { entities: roots });
+        let _scene_handle = request_oxscene_spawn(
+            &mut world,
+            "assets/scenes/starter.oxscene",
+        );
 
         Self { world }
     }
@@ -223,7 +234,7 @@ Current physics runtime highlights include:
 - Use built-in shaders through `BuiltinShader` (`basic`, `lit`, `unlit`, `sky_gradient`, `sprite_ui`, `fallback`)
 - Load custom shaders through `ShaderSource::File` or `ShaderSource::WgslOwned`
 - Build pipelines through `MaterialPipeline` with optional fallback behavior
-- Load descriptor-driven materials from files via `load_material_descriptor(...)` (Supports JSON, RON, and TOML)
+- Load descriptor-driven materials from files via `load_material_descriptor(...)` (Supports legacy JSON/RON/TOML plus versioned `.oxmat`)
 
 ### Hot-Reloading
 

@@ -60,7 +60,7 @@ impl DebugLines {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Debug Lines Pipeline Layout"),
-            bind_group_layouts: &[&camera_layout],
+            bind_group_layouts: &[Some(&camera_layout)],
             immediate_size: 0,
         });
 
@@ -109,8 +109,8 @@ impl DebugLines {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),

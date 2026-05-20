@@ -2,21 +2,26 @@
 
 #[cfg(feature = "gltf-import")]
 mod gltf_hierarchy;
+mod oxscene;
 
-use crate::app::{App, AppBuilder, Plugin, PluginGroup};
+use crate::app::{App, AppBuilder, AppStage, Plugin, PluginGroup};
 use crate::ecs::{RendererResource, WindowResource, World};
 use crate::render::RenderFrame;
-use crate::ui::{DevOverlayPlugin, GameUiPlugin, RuntimeUiPlugin};
+use crate::ui::{
+    authoring_ui_visible, DevOverlayPlugin, EguiPlugin, GameUiPlugin, RuntimeUiPlugin,
+};
 use crate::window::Window;
 
 pub use oxide_editor::{
-    show_scene_authoring_egui, show_scene_editor_egui, with_scene_editor, SceneEditor,
-    SceneEntitySummary,
+    apply_gizmo_drag, pick_render_mesh, show_scene_authoring_egui, show_scene_editor_egui,
+    viewport_pick_ray, with_scene_editor, GizmoAxis, SceneEditor, SceneEditorTool,
+    SceneEntitySummary, ScenePickHit, ScenePickRay,
 };
 pub use oxide_scene::*;
 
 #[cfg(feature = "gltf-import")]
 pub use gltf_hierarchy::*;
+pub use oxscene::*;
 
 pub struct SceneRendererPlugin;
 
@@ -106,6 +111,7 @@ pub struct SceneEditorPlugin;
 impl<T: App> Plugin<T> for SceneEditorPlugin {
     fn build(&self, app: &mut AppBuilder<T>) {
         app.add_startup_system_mut(initialize_scene_editor);
+        app.add_system_mut(AppStage::Update, scene_editor_viewport_system);
     }
 }
 
@@ -113,11 +119,30 @@ pub fn initialize_scene_editor(world: &mut World, _window: &Window) {
     oxide_editor::initialize_scene_editor(world);
 }
 
+pub fn scene_editor_viewport_system(world: &mut World) {
+    if !authoring_ui_visible(world) {
+        return;
+    }
+
+    let viewport_size = if world.contains_resource::<WindowResource>() {
+        let window = world.resource::<WindowResource>();
+        [window.width as f32, window.height as f32]
+    } else if world.contains_resource::<RendererResource>() {
+        let renderer = &world.resource::<RendererResource>().renderer;
+        [renderer.width() as f32, renderer.height() as f32]
+    } else {
+        [1280.0, 720.0]
+    };
+
+    oxide_editor::scene_editor_viewport_system(world, viewport_size);
+}
+
 /// Convenience plugin group for code-first game authoring.
 pub struct SceneAuthoringPlugins;
 
 impl<T: App> PluginGroup<T> for SceneAuthoringPlugins {
     fn build(self, app: &mut AppBuilder<T>) {
+        app.add_plugin_mut(EguiPlugin);
         app.add_plugin_mut(SceneRendererPlugin);
         app.add_plugin_mut(SceneEditorPlugin);
         app.add_plugin_mut(GameUiPlugin);

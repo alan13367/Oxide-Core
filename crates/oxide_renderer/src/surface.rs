@@ -1,9 +1,23 @@
 //! Surface configuration and management
 
 use wgpu::{
-    PresentMode, Surface, SurfaceConfiguration, SurfaceError, SurfaceTexture, TextureFormat,
-    TextureUsages,
+    CurrentSurfaceTexture, PresentMode, Surface, SurfaceConfiguration, SurfaceTexture,
+    TextureFormat, TextureUsages,
 };
+
+#[derive(thiserror::Error, Debug)]
+pub enum SurfaceAcquireError {
+    #[error("surface acquire timed out")]
+    Timeout,
+    #[error("surface is occluded")]
+    Occluded,
+    #[error("surface configuration is outdated")]
+    Outdated,
+    #[error("surface was lost")]
+    Lost,
+    #[error("surface validation failed")]
+    Validation,
+}
 
 pub struct SurfaceState {
     surface: Surface<'static>,
@@ -69,7 +83,15 @@ impl SurfaceState {
         self.config.height
     }
 
-    pub fn acquire(&self) -> Result<SurfaceTexture, SurfaceError> {
-        self.surface.get_current_texture()
+    pub fn acquire(&self) -> Result<SurfaceTexture, SurfaceAcquireError> {
+        match self.surface.get_current_texture() {
+            CurrentSurfaceTexture::Success(texture)
+            | CurrentSurfaceTexture::Suboptimal(texture) => Ok(texture),
+            CurrentSurfaceTexture::Timeout => Err(SurfaceAcquireError::Timeout),
+            CurrentSurfaceTexture::Occluded => Err(SurfaceAcquireError::Occluded),
+            CurrentSurfaceTexture::Outdated => Err(SurfaceAcquireError::Outdated),
+            CurrentSurfaceTexture::Lost => Err(SurfaceAcquireError::Lost),
+            CurrentSurfaceTexture::Validation => Err(SurfaceAcquireError::Validation),
+        }
     }
 }

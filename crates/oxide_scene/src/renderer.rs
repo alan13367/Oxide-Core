@@ -10,7 +10,7 @@ use oxide_ecs::world::World;
 use oxide_light::LightBuffer;
 use oxide_renderer::depth::DepthTexture;
 use oxide_renderer::descriptor::MaterialType;
-use oxide_renderer::mesh::{Mesh3D, Vertex3D};
+use oxide_renderer::mesh::{Mesh3D, Vertex, Vertex3D};
 use oxide_renderer::pipeline::create_shader;
 use oxide_renderer::shader::BuiltinShader;
 use oxide_renderer::texture::{SamplerDescriptor, Texture};
@@ -18,8 +18,8 @@ use oxide_renderer::wgpu;
 use oxide_transform::{GlobalTransform, TransformComponent};
 
 use crate::{
-    MeshPrimitive, RenderMaterial, RenderMesh, SpriteAssets, SpriteBillboard, SpriteDepthMode,
-    SpriteFacing, SpriteId, Terrain,
+    MeshPrimitive, RenderMaterial, RenderMesh, SceneGizmoLines, SpriteAssets, SpriteBillboard,
+    SpriteDepthMode, SpriteFacing, SpriteId, Terrain,
 };
 
 const SCENE_RENDERER_SHADER: &str = r#"
@@ -207,6 +207,39 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
     return color;
+}
+"#;
+
+const GIZMO_LINE_SHADER: &str = r#"
+struct CameraUniform {
+    view_proj: mat4x4<f32>,
+    position: vec4<f32>,
+};
+
+@group(0) @binding(0)
+var<uniform> camera: CameraUniform;
+
+struct VertexInput {
+    @location(0) position: vec3<f32>,
+    @location(1) color: vec3<f32>,
+};
+
+struct VertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+};
+
+@vertex
+fn vs_main(input: VertexInput) -> VertexOutput {
+    var output: VertexOutput;
+    output.clip_position = camera.view_proj * vec4<f32>(input.position, 1.0);
+    output.color = vec4<f32>(input.color, 1.0);
+    return output;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    return input.color;
 }
 "#;
 
@@ -400,6 +433,9 @@ pub struct SceneRenderer {
     sprite_index_count: u32,
     sprite_textures: HashMap<SpriteId, SpriteTexture>,
     sprite_batches: Vec<SpriteBatch>,
+    gizmo_pipeline: wgpu::RenderPipeline,
+    gizmo_vertex_buffer: wgpu::Buffer,
+    gizmo_vertex_count: u32,
     clear_color: wgpu::Color,
     stats: SceneRendererStats,
 }
@@ -431,8 +467,8 @@ impl SceneRenderer {
             &sprite_texture_layout,
             Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth24PlusStencil8,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
@@ -449,6 +485,20 @@ impl SceneRenderer {
         );
         let (sprite_vertex_buffer, sprite_index_buffer, sprite_index_count) =
             create_sprite_quad_buffers(device);
+        let gizmo_shader =
+            create_shader(device, GIZMO_LINE_SHADER, Some("Scene Gizmo Line Shader"));
+        let gizmo_pipeline = create_gizmo_line_pipeline(
+            device,
+            &gizmo_shader,
+            format,
+            &camera_buffer.bind_group_layout,
+        );
+        let gizmo_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Scene Gizmo Line Vertex Buffer"),
+            size: (8192 * std::mem::size_of::<Vertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         Self {
             camera_buffer,
@@ -469,6 +519,9 @@ impl SceneRenderer {
             sprite_index_count,
             sprite_textures: HashMap::new(),
             sprite_batches: Vec::new(),
+            gizmo_pipeline,
+            gizmo_vertex_buffer,
+            gizmo_vertex_count: 0,
             clear_color: wgpu::Color {
                 r: 0.07,
                 g: 0.09,
@@ -499,6 +552,7 @@ impl SceneRenderer {
         self.prepare_instances(device, world);
         self.prepare_terrain(device, world);
         self.prepare_sprites(device, queue, world);
+        self.prepare_gizmo_lines(queue, world);
     }
 
     pub fn queue(&mut self, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder) {
@@ -550,6 +604,7 @@ impl SceneRenderer {
         }
 
         self.queue_sprites(&mut render_pass);
+        self.queue_gizmo_lines(&mut render_pass);
     }
 
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
@@ -817,6 +872,46 @@ impl SceneRenderer {
             render_pass.draw_indexed(0..self.sprite_index_count, 0, 0..batch.instances.count);
         }
     }
+
+    fn prepare_gizmo_lines(&mut self, queue: &wgpu::Queue, world: &World) {
+        self.gizmo_vertex_count = 0;
+        if !world.contains_resource::<SceneGizmoLines>() {
+            return;
+        }
+
+        let lines = world.resource::<SceneGizmoLines>();
+        if lines.is_empty() {
+            return;
+        }
+
+        let mut vertices = Vec::with_capacity(lines.lines().len() * 2);
+        for line in lines.lines().iter().take(4096) {
+            let color = [line.color.x, line.color.y, line.color.z];
+            vertices.push(Vertex::new(
+                [line.start.x, line.start.y, line.start.z],
+                color,
+            ));
+            vertices.push(Vertex::new([line.end.x, line.end.y, line.end.z], color));
+        }
+
+        self.gizmo_vertex_count = vertices.len() as u32;
+        queue.write_buffer(
+            &self.gizmo_vertex_buffer,
+            0,
+            bytemuck::cast_slice(&vertices),
+        );
+    }
+
+    fn queue_gizmo_lines<'pass>(&'pass self, render_pass: &mut wgpu::RenderPass<'pass>) {
+        if self.gizmo_vertex_count == 0 {
+            return;
+        }
+
+        render_pass.set_pipeline(&self.gizmo_pipeline);
+        render_pass.set_bind_group(0, &self.camera_buffer.bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.gizmo_vertex_buffer.slice(..));
+        render_pass.draw(0..self.gizmo_vertex_count, 0..1);
+    }
 }
 
 fn create_scene_pipeline(
@@ -828,7 +923,7 @@ fn create_scene_pipeline(
 ) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Scene Renderer Pipeline Layout"),
-        bind_group_layouts: &[camera_layout, light_layout],
+        bind_group_layouts: &[Some(camera_layout), Some(light_layout)],
         immediate_size: 0,
     });
 
@@ -862,8 +957,8 @@ fn create_scene_pipeline(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth24PlusStencil8,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
@@ -912,7 +1007,7 @@ fn create_sprite_pipeline(
 ) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Scene Sprite Pipeline Layout"),
-        bind_group_layouts: &[camera_layout, sprite_texture_layout],
+        bind_group_layouts: &[Some(camera_layout), Some(sprite_texture_layout)],
         immediate_size: 0,
     });
 
@@ -945,6 +1040,63 @@ fn create_sprite_pipeline(
             conservative: false,
         },
         depth_stencil,
+        multisample: wgpu::MultisampleState {
+            count: 1,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        },
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn create_gizmo_line_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    camera_layout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Scene Gizmo Line Pipeline Layout"),
+        bind_group_layouts: &[Some(camera_layout)],
+        immediate_size: 0,
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Scene Gizmo Line Pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: &[Vertex::desc()],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::LineList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth24PlusStencil8,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
         multisample: wgpu::MultisampleState {
             count: 1,
             mask: !0,

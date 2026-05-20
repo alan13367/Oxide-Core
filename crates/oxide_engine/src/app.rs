@@ -8,6 +8,7 @@ use winit::{
     dpi::PhysicalPosition,
     event::{DeviceEvent, DeviceId, ElementState, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
+    keyboard::{KeyCode, PhysicalKey},
     window::WindowId,
 };
 
@@ -21,10 +22,13 @@ use crate::render::RenderFrame;
 #[cfg(feature = "gltf-import")]
 use crate::scene::{gltf_scene_spawn_system, PendingGltfSceneSpawns, SpawnedGltfScenes};
 use crate::scene::{
-    prepare_scene_renderer, queue_scene_renderer, resize_scene_renderer, transform_propagate_system,
+    oxscene_spawn_system, prepare_scene_renderer, queue_scene_renderer, resize_scene_renderer,
+    transform_propagate_system, PendingOxSceneSpawns, SceneDescriptorAssets, SpawnedOxScenes,
 };
 use crate::ui::{
-    handle_egui_event, prepare_game_text_renderer, queue_game_text_renderer, EguiManager,
+    authoring_ui_visible, begin_engine_egui_frame, handle_egui_event, handle_engine_egui_event,
+    prepare_game_text_renderer, queue_engine_egui, queue_game_text_renderer, toggle_authoring_ui,
+    EguiManager,
 };
 use crate::window::Window;
 use oxide_renderer::Renderer;
@@ -133,6 +137,7 @@ impl<T: App> Plugin<T> for RenderPlugin {
     fn build(&self, app: &mut AppBuilder<T>) {
         app.add_startup_system_mut(initialize_window_resource);
         app.add_startup_system_mut(initialize_asset_resources);
+        app.add_system_mut(AppStage::PreUpdate, oxscene_spawn_system);
         #[cfg(feature = "gltf-import")]
         app.add_system_mut(AppStage::PreUpdate, gltf_scene_spawn_system);
     }
@@ -151,6 +156,15 @@ fn initialize_asset_resources(world: &mut World, _window: &Window) {
     }
     if !world.contains_resource::<MaterialAssets>() {
         world.insert_resource(MaterialAssets::default());
+    }
+    if !world.contains_resource::<SceneDescriptorAssets>() {
+        world.insert_resource(SceneDescriptorAssets::default());
+    }
+    if !world.contains_resource::<PendingOxSceneSpawns>() {
+        world.insert_resource(PendingOxSceneSpawns::default());
+    }
+    if !world.contains_resource::<SpawnedOxScenes>() {
+        world.insert_resource(SpawnedOxScenes::default());
     }
     #[cfg(feature = "gltf-import")]
     {
@@ -401,11 +415,23 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
         let mut ui_blocks_game_input = false;
 
         if let (Some(app), Some(window)) = (self.app.as_mut(), self.window.as_ref()) {
-            if let Some(egui_manager) = app.egui_manager_mut() {
+            if let Some((consumed, blocks_game_input)) =
+                handle_engine_egui_event(app.world_mut(), window, &event)
+            {
+                ui_consumed = consumed;
+                ui_blocks_game_input = blocks_game_input;
+            } else if let Some(egui_manager) = app.egui_manager_mut() {
                 ui_consumed = handle_egui_event(egui_manager, window.winit_window(), &event);
                 ui_blocks_game_input =
                     egui_manager.wants_pointer_input() || egui_manager.wants_keyboard_input();
             }
+        }
+
+        if authoring_ui_toggle_requested(&event) {
+            if let Some(app) = self.app.as_mut() {
+                toggle_authoring_ui(app.world_mut());
+            }
+            return;
         }
 
         if ui_consumed {
@@ -458,6 +484,12 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
                             false,
                             &mut self.synced_cursor_grabbed,
                         );
+
+                        if let Some(ctx) = begin_engine_egui_frame(app.world_mut(), window) {
+                            if authoring_ui_visible(app.world()) {
+                                crate::scene::show_scene_authoring_egui(app.world_mut(), &ctx);
+                            }
+                        }
                     }
 
                     app.extract();
@@ -491,6 +523,9 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
                         queue_scene_renderer(app.world_mut(), &mut frame);
                         queue_game_text_renderer(app.world_mut(), &mut frame);
                         app.queue(&mut frame);
+                        if let Some(window) = self.window.as_ref() {
+                            queue_engine_egui(app.world_mut(), window, &mut frame);
+                        }
                         frame.present(&queue);
                     }
 
@@ -596,6 +631,15 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
             window.request_redraw();
         }
     }
+}
+
+fn authoring_ui_toggle_requested(event: &WindowEvent) -> bool {
+    matches!(
+        event,
+        WindowEvent::KeyboardInput { event, .. }
+            if event.state == ElementState::Pressed
+                && matches!(event.physical_key, PhysicalKey::Code(KeyCode::F1))
+    )
 }
 
 pub fn app<T: App>() -> AppBuilder<T> {

@@ -1,0 +1,40 @@
+{
+  "format": "oxide.oxscene",
+  "version": 1,
+  "scene": {
+    "entities": [
+      {
+        "name": "Camera",
+        "transform": {
+          "position": [0.0, 2.0, 6.0]
+        },
+        "type": "camera",
+        "target": [0.0, 0.0, 0.0],
+        "controller": true
+      },
+      {
+        "name": "Key Light",
+        "type": "directional_light",
+        "direction": [0.8, -1.0, -0.4],
+        "color": [1.0, 0.96, 0.88],
+        "intensity": 0.8
+      },
+      {
+        "name": "Ambient",
+        "type": "ambient_light",
+        "color": [0.45, 0.48, 0.55],
+        "intensity": 0.25
+      },
+      {
+        "name": "Cube",
+        "type": "mesh",
+        "primitive": "cube",
+        "material": {
+          "name": "default_unlit",
+          "shader": "unlit",
+          "color": [0.85, 0.72, 0.48, 1.0]
+        }
+      }
+    ]
+  }
+}

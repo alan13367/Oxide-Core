@@ -88,14 +88,18 @@ pub fn create_lit_pipeline(
 ) -> RenderPipeline {
     let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("Lit Pipeline Layout"),
-        bind_group_layouts: &[camera_layout, material_layout, light_layout],
+        bind_group_layouts: &[
+            Some(camera_layout),
+            Some(material_layout),
+            Some(light_layout),
+        ],
         immediate_size: 0,
     });
 
     let depth_stencil = Some(DepthStencilState {
         format: TextureFormat::Depth24PlusStencil8,
-        depth_write_enabled: true,
-        depth_compare: CompareFunction::Less,
+        depth_write_enabled: Some(true),
+        depth_compare: Some(CompareFunction::Less),
         stencil: StencilState::default(),
         bias: wgpu::DepthBiasState::default(),
     });
@@ -148,14 +152,14 @@ pub fn create_unlit_pipeline(
 ) -> RenderPipeline {
     let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("Unlit Pipeline Layout"),
-        bind_group_layouts: &[camera_layout, material_layout],
+        bind_group_layouts: &[Some(camera_layout), Some(material_layout)],
         immediate_size: 0,
     });
 
     let depth_stencil = Some(DepthStencilState {
         format: TextureFormat::Depth24PlusStencil8,
-        depth_write_enabled: true,
-        depth_compare: CompareFunction::Less,
+        depth_write_enabled: Some(true),
+        depth_compare: Some(CompareFunction::Less),
         stencil: StencilState::default(),
         bias: wgpu::DepthBiasState::default(),
     });

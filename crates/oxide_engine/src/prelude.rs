@@ -8,8 +8,8 @@ pub use crate::app::{
 #[cfg(feature = "gltf-import")]
 pub use crate::asset::{load_gltf_async, GltfSceneAssets};
 pub use crate::asset::{
-    register_material_asset, AssetServerResource, Handle, HandleAllocator, MaterialAssets,
-    MaterialHandle, MeshCache, MeshFilter, MeshHandle,
+    register_material_asset, AssetLoadStatus, AssetServerResource, Handle, HandleAllocator,
+    MaterialAssets, MaterialHandle, MeshCache, MeshFilter, MeshHandle,
 };
 pub use crate::audio::{
     initialize_audio, Audio, AudioClip, AudioClipError, AudioError, AudioPlugin, AudioTone,
@@ -34,17 +34,22 @@ pub use crate::render::RenderFrame;
 pub use crate::scene::SpriteImageLoadError;
 pub use crate::scene::{
     attach_child, detach_child, initialize_scene_editor, initialize_scene_renderer,
-    install_scene_renderer, load_scene_descriptor, mark_subtree_dirty, prepare_scene_renderer,
-    queue_scene_renderer, register_sprite, resize_scene_renderer, show_scene_authoring_egui,
-    show_scene_editor_egui, spawn_scene_descriptor, spawn_world_descriptor,
-    transform_propagate_system, with_scene_editor, Children, GlobalTransform, MeshPrimitive,
-    MeshRenderer, Name, Parent, RenderMaterial, RenderMesh, SceneAuthoringPlugins,
-    SceneBuiltinShader, SceneDescriptor, SceneEditor, SceneEditorPlugin, SceneEntityDescriptor,
-    SceneEntityKind, SceneEntitySummary, SceneMaterialDescriptor, SceneMeshPrimitive,
-    SceneRenderer, SceneRendererPlugin, SceneRendererStats, SceneSpawnResult, SceneTransform,
-    SceneWorldDescriptor, SceneWorldSpawnResult, SpriteAssets, SpriteBillboard, SpriteDepthMode,
-    SpriteFacing, SpriteId, SpriteImage, SpriteImageError, Terrain, TerrainDescriptor,
-    TerrainWaveDescriptor, TransformComponent, WorldObjectDescriptor,
+    install_scene_renderer, load_scene_descriptor, mark_subtree_dirty, pick_render_mesh,
+    prepare_scene_renderer, queue_oxscene_spawn, queue_scene_renderer, register_sprite,
+    request_oxscene_spawn, resize_scene_renderer, save_scene_descriptor,
+    scene_editor_viewport_system, show_scene_authoring_egui, show_scene_editor_egui,
+    spawn_scene_descriptor, spawn_world_descriptor, take_spawned_oxscene_roots,
+    transform_propagate_system, viewport_pick_ray, with_scene_editor, Children, GizmoAxis,
+    GlobalTransform, MeshPrimitive, MeshRenderer, Name, OxSceneDocument, Parent,
+    PendingOxSceneSpawns, RenderMaterial, RenderMesh, SceneAuthoringPlugins, SceneBuiltinShader,
+    SceneDescriptor, SceneDescriptorAssets, SceneEditor, SceneEditorPlugin, SceneEditorTool,
+    SceneEntityDescriptor, SceneEntityKind, SceneEntitySummary, SceneGizmoLine, SceneGizmoLines,
+    SceneMaterialDescriptor, SceneMeshPrimitive, ScenePickHit, ScenePickRay, SceneRenderer,
+    SceneRendererPlugin, SceneRendererStats, SceneSpawnResult, SceneTransform,
+    SceneWorldDescriptor, SceneWorldSpawnResult, SpawnedOxScenes, SpriteAssets, SpriteBillboard,
+    SpriteDepthMode, SpriteFacing, SpriteId, SpriteImage, SpriteImageError, Terrain,
+    TerrainDescriptor, TerrainWaveDescriptor, TransformComponent, WorldObjectDescriptor,
+    OXSCENE_FORMAT, OXSCENE_VERSION,
 };
 #[cfg(feature = "gltf-import")]
 pub use crate::scene::{
@@ -54,14 +59,16 @@ pub use crate::scene::{
 };
 pub use crate::time::{Timer, TimerMode};
 pub use crate::ui::{
-    game_ui_sync_system, handle_egui_event, initialize_game_fonts, initialize_game_text_renderer,
-    initialize_game_ui, install_game_text_renderer, load_game_font, prepare_game_text_renderer,
-    queue_game_text_renderer, register_game_font_bytes, DevOverlay, DevOverlayPlugin,
-    DevOverlaySnapshot, EguiManager, EguiRender, GameFont, GameFontError, GameFontId, GameFonts,
-    GameTextRenderer, GameTextRendererPlugin, GameTextStyle, GameUi, GameUiAnchor, GameUiBar,
-    GameUiButton, GameUiCounter, GameUiPlugin, GameUiRect, GameUiReticle, GameUiText, GameUiWidget,
-    RuntimeUi, RuntimeUiPlugin, TextHorizontalAlign, TextVerticalAlign, UiElement,
-    BUILTIN_GAME_FONT,
+    authoring_ui_visible, begin_engine_egui_frame, game_ui_sync_system, handle_egui_event,
+    handle_engine_egui_event, initialize_authoring_ui, initialize_egui_pass, initialize_game_fonts,
+    initialize_game_text_renderer, initialize_game_ui, install_egui_pass,
+    install_game_text_renderer, load_game_font, prepare_game_text_renderer, queue_engine_egui,
+    queue_game_text_renderer, register_game_font_bytes, toggle_authoring_ui, AuthoringUi,
+    DevOverlay, DevOverlayPlugin, DevOverlaySnapshot, EguiManager, EguiPlugin, EguiRender,
+    EguiWgpuPass, GameFont, GameFontError, GameFontId, GameFonts, GameTextRenderer,
+    GameTextRendererPlugin, GameTextStyle, GameUi, GameUiAnchor, GameUiBar, GameUiButton,
+    GameUiCounter, GameUiPlugin, GameUiRect, GameUiReticle, GameUiText, GameUiWidget, RuntimeUi,
+    RuntimeUiPlugin, TextHorizontalAlign, TextVerticalAlign, UiElement, BUILTIN_GAME_FONT,
 };
 pub use crate::watcher::AssetWatcher;
 pub use crate::window::Window;

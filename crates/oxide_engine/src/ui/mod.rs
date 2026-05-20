@@ -4,14 +4,127 @@ use crate::app::{App, AppBuilder, AppStage, Plugin};
 use crate::ecs::{RendererResource, WindowResource, World};
 use crate::render::RenderFrame;
 use crate::window::Window;
+use oxide_ecs::Resource;
 
 pub use oxide_ui::{
     handle_egui_event, load_game_font, register_game_font_bytes, DevOverlay, DevOverlaySnapshot,
-    EguiManager, EguiRender, GameFont, GameFontError, GameFontId, GameFonts, GameTextRenderer,
-    GameTextStyle, GameUi, GameUiAnchor, GameUiBar, GameUiButton, GameUiCounter, GameUiRect,
-    GameUiReticle, GameUiText, GameUiWidget, RuntimeUi, TextHorizontalAlign, TextVerticalAlign,
-    UiElement, BUILTIN_GAME_FONT,
+    EguiManager, EguiRender, EguiWgpuPass, GameFont, GameFontError, GameFontId, GameFonts,
+    GameTextRenderer, GameTextStyle, GameUi, GameUiAnchor, GameUiBar, GameUiButton, GameUiCounter,
+    GameUiRect, GameUiReticle, GameUiText, GameUiWidget, RuntimeUi, TextHorizontalAlign,
+    TextVerticalAlign, UiElement, BUILTIN_GAME_FONT,
 };
+
+pub struct EguiPlugin;
+
+impl<T: App> Plugin<T> for EguiPlugin {
+    fn build(&self, app: &mut AppBuilder<T>) {
+        app.add_startup_system_mut(initialize_authoring_ui);
+        app.add_startup_system_mut(initialize_egui_pass);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Resource)]
+pub struct AuthoringUi {
+    pub visible: bool,
+}
+
+impl Default for AuthoringUi {
+    fn default() -> Self {
+        Self { visible: false }
+    }
+}
+
+impl AuthoringUi {
+    pub fn show(&mut self) {
+        self.visible = true;
+    }
+
+    pub fn hide(&mut self) {
+        self.visible = false;
+    }
+
+    pub fn toggle(&mut self) {
+        self.visible = !self.visible;
+    }
+}
+
+pub fn initialize_authoring_ui(world: &mut World, _window: &Window) {
+    if !world.contains_resource::<AuthoringUi>() {
+        world.insert_resource(AuthoringUi::default());
+    }
+}
+
+pub fn authoring_ui_visible(world: &World) -> bool {
+    world
+        .contains_resource::<AuthoringUi>()
+        .then(|| world.resource::<AuthoringUi>().visible)
+        .unwrap_or(false)
+}
+
+pub fn toggle_authoring_ui(world: &mut World) {
+    if !world.contains_resource::<AuthoringUi>() {
+        world.insert_resource(AuthoringUi::default());
+    }
+    world.resource_mut::<AuthoringUi>().toggle();
+}
+
+pub fn initialize_egui_pass(world: &mut World, window: &Window) {
+    install_egui_pass(world, window);
+}
+
+pub fn install_egui_pass(world: &mut World, window: &Window) {
+    if world.get_non_send_resource::<EguiWgpuPass>().is_some()
+        || !world.contains_resource::<RendererResource>()
+    {
+        return;
+    }
+
+    let (device, format) = {
+        let renderer = &world.resource::<RendererResource>().renderer;
+        (renderer.device.clone(), renderer.format())
+    };
+    world.insert_non_send_resource(EguiWgpuPass::new(
+        &device,
+        format,
+        window.winit_window().as_ref(),
+        window.scale_factor() as f32,
+    ));
+}
+
+pub fn handle_engine_egui_event(
+    world: &mut World,
+    window: &Window,
+    event: &winit::event::WindowEvent,
+) -> Option<(bool, bool)> {
+    let egui_pass = world.get_non_send_resource_mut::<EguiWgpuPass>()?;
+    let consumed = egui_pass.handle_event(window.winit_window().as_ref(), event);
+    let blocks_game_input = egui_pass.wants_pointer_input() || egui_pass.wants_keyboard_input();
+    Some((consumed, blocks_game_input))
+}
+
+pub fn begin_engine_egui_frame(world: &mut World, window: &Window) -> Option<egui::Context> {
+    let egui_pass = world.get_non_send_resource_mut::<EguiWgpuPass>()?;
+    egui_pass.begin_frame(window.winit_window().as_ref());
+    Some(egui_pass.context().clone())
+}
+
+pub fn queue_engine_egui(world: &mut World, window: &Window, frame: &mut RenderFrame) {
+    let (device, queue) = {
+        let renderer = &world.resource::<RendererResource>().renderer;
+        (renderer.device.clone(), renderer.queue.clone())
+    };
+
+    let Some(egui_pass) = world.get_non_send_resource_mut::<EguiWgpuPass>() else {
+        return;
+    };
+    egui_pass.queue(
+        window.winit_window().as_ref(),
+        &device,
+        &queue,
+        &frame.view,
+        &mut frame.encoder,
+    );
+}
 
 pub struct RuntimeUiPlugin;
 

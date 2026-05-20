@@ -9,9 +9,9 @@ pub struct AdapterInfo {
 }
 
 pub fn create_instance() -> Instance {
-    Instance::new(&InstanceDescriptor {
+    Instance::new(InstanceDescriptor {
         backends: Backends::METAL,
-        ..Default::default()
+        ..InstanceDescriptor::new_without_display_handle()
     })
 }
 

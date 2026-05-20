@@ -30,7 +30,7 @@ pub enum RendererError {
     #[error("Failed to request device: {0}")]
     Device(#[from] wgpu::RequestDeviceError),
     #[error("Failed to acquire surface texture: {0}")]
-    Surface(#[from] wgpu::SurfaceError),
+    Surface(#[from] surface::SurfaceAcquireError),
 }
 
 pub struct Renderer {

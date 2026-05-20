@@ -11,6 +11,8 @@ enum GameEvent {
 struct MinimalGame {
     world: World,
     pulse_timer: Timer,
+    scene_handle: Handle<SceneDescriptor>,
+    scene_loaded: bool,
 }
 
 impl App for MinimalGame {
@@ -31,13 +33,15 @@ impl App for MinimalGame {
             window.size().height,
         ));
 
-        let scene = SceneDescriptor::starter_scene();
-        let spawned = spawn_scene_descriptor(&mut world, &scene);
-        world.insert_resource(SceneSpawnResult { entities: spawned });
+        let scene_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/scenes/starter.oxscene");
+        let scene_handle = request_oxscene_spawn(&mut world, scene_path);
 
         Self {
             world,
             pulse_timer: Timer::repeating(Duration::from_secs(1)),
+            scene_handle,
+            scene_loaded: false,
         }
     }
 
@@ -50,6 +54,14 @@ impl App for MinimalGame {
     }
 
     fn update(&mut self) {
+        if !self.scene_loaded {
+            if let Some(roots) = take_spawned_oxscene_roots(&mut self.world, self.scene_handle) {
+                self.world
+                    .insert_resource(SceneSpawnResult { entities: roots });
+                self.scene_loaded = true;
+            }
+        }
+
         let delta = self.world.resource::<Time>().delta;
         if self.pulse_timer.tick(delta).just_finished() {
             self.world
@@ -74,6 +86,14 @@ impl App for MinimalGame {
             let ui = self.world.resource_mut::<RuntimeUi>();
             ui.clear();
             ui.label("title", "Oxide Minimal Game");
+            ui.label(
+                "scene",
+                if self.scene_loaded {
+                    "Scene: assets/scenes/starter.oxscene"
+                } else {
+                    "Scene: loading..."
+                },
+            );
             ui.label("entities", format!("Entities: {entity_count}"));
             ui.label("meshes", format!("Render meshes: {mesh_count}"));
             ui.label("events", format!("Queued events: {pending_events}"));

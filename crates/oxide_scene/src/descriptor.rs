@@ -10,8 +10,41 @@ use oxide_light::{AmbientLight, DirectionalLight, PointLight};
 use oxide_math::transform::Transform;
 use oxide_transform::{GlobalTransform, TransformComponent};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{MeshPrimitive, RenderMaterial, RenderMesh};
+
+pub const OXSCENE_FORMAT: &str = "oxide.oxscene";
+pub const OXSCENE_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OxSceneDocument {
+    pub format: String,
+    pub version: u32,
+    pub scene: SceneDescriptor,
+}
+
+impl OxSceneDocument {
+    pub fn new(scene: SceneDescriptor) -> Self {
+        Self {
+            format: OXSCENE_FORMAT.to_string(),
+            version: OXSCENE_VERSION,
+            scene,
+        }
+    }
+
+    pub fn validate(self, path: String) -> Result<SceneDescriptor, SceneDescriptorError> {
+        if self.format != OXSCENE_FORMAT || self.version != OXSCENE_VERSION {
+            return Err(SceneDescriptorError::UnsupportedVersion {
+                path,
+                format: self.format,
+                version: self.version,
+            });
+        }
+
+        Ok(self.scene)
+    }
+}
 
 #[derive(Component, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Name(pub String);
@@ -261,6 +294,14 @@ pub enum SceneDescriptorError {
         path: String,
         source: serde_json::Error,
     },
+    #[error(
+        "Unsupported scene descriptor version for '{path}': format '{format}' version {version}"
+    )]
+    UnsupportedVersion {
+        path: String,
+        format: String,
+        version: u32,
+    },
 }
 
 pub fn load_scene_descriptor(
@@ -271,10 +312,54 @@ pub fn load_scene_descriptor(
         path: path.display().to_string(),
         source,
     })?;
-    serde_json::from_str(&raw).map_err(|source| SceneDescriptorError::Parse {
+    let value =
+        serde_json::from_str::<Value>(&raw).map_err(|source| SceneDescriptorError::Parse {
+            path: path.display().to_string(),
+            source,
+        })?;
+    scene_descriptor_from_value(value, path.display().to_string())
+}
+
+pub fn save_scene_descriptor(
+    path: impl AsRef<Path>,
+    scene: &SceneDescriptor,
+) -> Result<(), SceneDescriptorError> {
+    let path = path.as_ref();
+    let document = OxSceneDocument::new(scene.clone());
+    let raw =
+        serde_json::to_string_pretty(&document).map_err(|source| SceneDescriptorError::Parse {
+            path: path.display().to_string(),
+            source,
+        })?;
+    std::fs::write(path, raw).map_err(|source| SceneDescriptorError::Io {
         path: path.display().to_string(),
         source,
     })
+}
+
+fn scene_descriptor_from_value(
+    value: Value,
+    path: String,
+) -> Result<SceneDescriptor, SceneDescriptorError> {
+    let is_wrapped = value
+        .get("format")
+        .and_then(Value::as_str)
+        .map(|format| format == OXSCENE_FORMAT)
+        .unwrap_or(false)
+        || value.get("scene").is_some() && value.get("version").is_some();
+
+    if is_wrapped {
+        let document = serde_json::from_value::<OxSceneDocument>(value).map_err(|source| {
+            SceneDescriptorError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        document.validate(path)
+    } else {
+        serde_json::from_value::<SceneDescriptor>(value)
+            .map_err(|source| SceneDescriptorError::Parse { path, source })
+    }
 }
 
 pub fn spawn_scene_descriptor(world: &mut World, scene: &SceneDescriptor) -> Vec<Entity> {
@@ -394,6 +479,8 @@ fn default_material_color() -> [f32; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn starter_scene_spawns_gameplay_entities() {
@@ -406,5 +493,99 @@ mod tests {
 
         let mut meshes = world.query::<&RenderMesh>();
         assert_eq!(meshes.iter(&world).count(), 1);
+    }
+
+    #[test]
+    fn load_scene_descriptor_accepts_legacy_raw_scene_json() {
+        let path = temp_path("legacy_scene", "json");
+        fs::write(
+            &path,
+            r#"{
+                "entities": [
+                    {
+                        "name": "Legacy Cube",
+                        "type": "mesh",
+                        "primitive": "cube"
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let scene = load_scene_descriptor(&path).unwrap();
+        assert_eq!(scene.entities.len(), 1);
+        assert_eq!(scene.entities[0].name.as_deref(), Some("Legacy Cube"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_scene_descriptor_accepts_wrapped_oxscene_json() {
+        let path = temp_path("wrapped_scene", "oxscene");
+        fs::write(
+            &path,
+            r#"{
+                "format": "oxide.oxscene",
+                "version": 1,
+                "scene": {
+                    "entities": [
+                        {
+                            "name": "Wrapped Cube",
+                            "type": "mesh",
+                            "primitive": "cube"
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let scene = load_scene_descriptor(&path).unwrap();
+        assert_eq!(scene.entities.len(), 1);
+        assert_eq!(scene.entities[0].name.as_deref(), Some("Wrapped Cube"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_scene_descriptor_rejects_unsupported_oxscene_version() {
+        let path = temp_path("future_scene", "oxscene");
+        fs::write(
+            &path,
+            r#"{
+                "format": "oxide.oxscene",
+                "version": 99,
+                "scene": { "entities": [] }
+            }"#,
+        )
+        .unwrap();
+
+        let err = load_scene_descriptor(&path).unwrap_err();
+        assert!(matches!(
+            err,
+            SceneDescriptorError::UnsupportedVersion { .. }
+        ));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn save_scene_descriptor_writes_wrapped_roundtrip_document() {
+        let path = temp_path("roundtrip_scene", "oxscene");
+        let scene = SceneDescriptor::starter_scene();
+        save_scene_descriptor(&path, &scene).unwrap();
+
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("\"format\": \"oxide.oxscene\""));
+        assert!(raw.contains("\"version\": 1"));
+
+        let loaded = load_scene_descriptor(&path).unwrap();
+        assert_eq!(loaded.entities.len(), scene.entities.len());
+        let _ = fs::remove_file(path);
+    }
+
+    fn temp_path(name: &str, extension: &str) -> std::path::PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{name}_{stamp}.{extension}"))
     }
 }
