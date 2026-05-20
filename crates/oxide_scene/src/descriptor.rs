@@ -426,6 +426,9 @@ impl From<SceneSpriteDepthMode> for SpriteDepthMode {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SceneMaterialDescriptor {
+    /// Optional `SceneMaterialLibrary` key to use instead of inline shader data.
+    #[serde(default, rename = "ref")]
+    pub reference: Option<String>,
     #[serde(default = "default_material_name")]
     pub name: String,
     #[serde(default)]
@@ -437,6 +440,7 @@ pub struct SceneMaterialDescriptor {
 impl Default for SceneMaterialDescriptor {
     fn default() -> Self {
         Self {
+            reference: None,
             name: default_material_name(),
             shader: SceneBuiltinShader::Unlit,
             color: default_material_color(),
@@ -446,6 +450,9 @@ impl Default for SceneMaterialDescriptor {
 
 impl From<SceneMaterialDescriptor> for RenderMaterial {
     fn from(value: SceneMaterialDescriptor) -> Self {
+        if let Some(reference) = value.reference {
+            return RenderMaterial::Named(reference);
+        }
         RenderMaterial::Builtin {
             shader: value.shader.into(),
             material_type: value.shader.material_type(),
@@ -1173,6 +1180,34 @@ mod tests {
             world.get::<RenderLayers>(roots[0]),
             Some(&RenderLayers::layer(2))
         );
+    }
+
+    #[test]
+    fn mesh_scene_entities_can_reference_named_materials() {
+        let scene = SceneDescriptor {
+            prefabs: Vec::new(),
+            entities: vec![SceneEntityDescriptor {
+                name: Some("Named Material Mesh".to_string()),
+                kind: SceneEntityKind::Mesh {
+                    primitive: SceneMeshPrimitive::Cube,
+                    material: SceneMaterialDescriptor {
+                        reference: Some("materials.crate".to_string()),
+                        color: [0.25, 0.5, 0.75, 1.0],
+                        ..Default::default()
+                    },
+                },
+                ..Default::default()
+            }],
+        };
+
+        let mut world = World::new();
+        let roots = spawn_scene_descriptor(&mut world, &scene);
+        let mesh = world.get::<RenderMesh>(roots[0]).unwrap();
+        assert!(matches!(
+            &mesh.material,
+            RenderMaterial::Named(name) if name == "materials.crate"
+        ));
+        assert_eq!(mesh.tint, [0.25, 0.5, 0.75, 1.0]);
     }
 
     #[test]

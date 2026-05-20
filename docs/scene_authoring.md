@@ -116,7 +116,8 @@ existing color target so viewports can be composited.
                 "name": "Crate Top",
                 "transform": { "position": [0.0, 1.15, 0.0] },
                 "type": "mesh",
-                "primitive": "cube"
+                "primitive": "cube",
+                "material": { "ref": "crate_lit", "color": [0.8, 0.7, 0.55, 1.0] }
               }
             ]
           }
@@ -186,6 +187,23 @@ When `DefaultPlugins` loads a `.oxmat` descriptor through
 `SceneMaterialLibrary` under `MaterialDescriptor::name`. This gives small
 scenes a data-driven material path without forcing gameplay components to hold
 renderer pipelines.
+
+Native scene descriptors can reference the same library through the material
+`ref` field:
+
+```json
+{
+  "type": "mesh",
+  "primitive": "cube",
+  "material": {
+    "ref": "enemy_unlit",
+    "color": [1.0, 0.4, 0.35, 1.0]
+  }
+}
+```
+
+The `color` field remains a per-entity tint even when material shader data is
+resolved from the library.
 
 ## Native Sprites
 

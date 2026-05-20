@@ -15,7 +15,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Asset Dependency Tracking**: `AssetServer` records secondary source paths, can query typed handles affected by a changed file, can reload known paths in place, and `Assets<T>` exposes per-handle revisions plus cursor-readable change records for cache invalidation
 - **Native Scene Reloading**: `.oxscene` handles can be refreshed from direct file changes or dependency changes without duplicating spawned roots
 - **Automatic Scene Renderer**: optional plugin that renders `RenderMesh` scene entities without app-owned pipelines
-- **Scene Material Library**: reusable named scene materials can be registered directly or populated from loaded `.oxmat` descriptors
+- **Scene Material Library**: reusable named scene materials can be registered directly, populated from loaded `.oxmat` descriptors, and referenced from `.oxscene` meshes
 - **Camera Render Views**: ordered multi-camera scene rendering with active flags, normalized viewports, per-camera clear colors, and render-layer filtering
 - **Render Layers**: filter meshes, terrain, and sprites by camera/renderable layer masks for world views, first-person overlays, editor-only helpers, and debug cameras
 - **Ordered Render Passes**: plugins can register lightweight frame callbacks around stable built-in anchors for scene, text, app queue, and egui rendering
