@@ -494,8 +494,8 @@ glTF materials/images are published into `MaterialDescriptorAssets` and
 mesh nodes receive `GltfMeshRef`/`GltfMaterialRef` plus
 `MeshFilter`/`MaterialFilter` when stable handles are available. The automatic
 scene renderer draws `MeshFilter` entities from `MeshCache`; if the entity also
-has a `RenderMesh`, its material and tint are used for the imported mesh instead
-of drawing a built-in primitive.
+has a `RenderMesh`, its material, tint, and labeled albedo texture are used for
+the imported mesh instead of drawing a built-in primitive.
 
 ### 10. Physics Plugin Integration
 

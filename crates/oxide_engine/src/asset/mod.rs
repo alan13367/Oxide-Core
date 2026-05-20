@@ -16,7 +16,6 @@ use oxide_renderer::descriptor::{
 use oxide_renderer::gltf::{load_gltf, GltfScene};
 use oxide_renderer::material::MaterialPipeline;
 use oxide_renderer::mesh::Mesh3D;
-use oxide_renderer::texture::TextureImage;
 #[cfg(feature = "gltf-import")]
 use wgpu::{Device, Queue};
 
@@ -24,7 +23,7 @@ use crate::scene::{reload_changed_oxscenes, SceneDescriptor, SceneMaterialLibrar
 use crate::watcher::AssetWatcher;
 
 pub use oxide_asset::*;
-pub use oxide_scene::{MaterialFilter, MeshCache, MeshFilter};
+pub use oxide_scene::{MaterialFilter, MeshCache, MeshFilter, TextureImageAssets};
 
 /// ECS resource wrapper for the engine asset server.
 #[derive(Resource, Default)]
@@ -48,7 +47,14 @@ pub struct MaterialDescriptorAssets {
 pub type MeshHandle = CoreHandle<Mesh3D>;
 pub type MaterialHandle = CoreHandle<MaterialPipeline>;
 pub type MaterialDescriptorHandle = CoreHandle<MaterialDescriptor>;
-pub type TextureImageHandle = CoreHandle<TextureImage>;
+pub type TextureImageHandle = oxide_scene::TextureImageHandle;
+
+/// ECS resource storing handle-indexed glTF scenes.
+#[cfg(feature = "gltf-import")]
+#[derive(Resource, Default)]
+pub struct GltfSceneAssets {
+    pub assets: CoreAssets<GltfScene>,
+}
 
 /// Result of routing changed source paths through Oxide's native reload systems.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -66,19 +72,6 @@ impl NativeAssetReloadSummary {
     pub fn is_empty(&self) -> bool {
         self.oxscenes.is_empty() && self.material_descriptors.is_empty()
     }
-}
-
-/// ECS resource storing handle-indexed glTF scenes.
-#[cfg(feature = "gltf-import")]
-#[derive(Resource, Default)]
-pub struct GltfSceneAssets {
-    pub assets: CoreAssets<GltfScene>,
-}
-
-/// ECS resource storing CPU-side texture images imported from containers or files.
-#[derive(Resource, Default)]
-pub struct TextureImageAssets {
-    pub assets: CoreAssets<TextureImage>,
 }
 
 /// Registers a material pipeline under a stable handle.

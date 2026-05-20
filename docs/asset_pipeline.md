@@ -91,7 +91,11 @@ The automatic scene renderer can draw `MeshFilter` entities directly from
 `MeshCache`. When a handle-based mesh entity also carries `RenderMesh`, the
 renderer uses that component's material and tint for the imported mesh and skips
 the built-in primitive path, which lets imported glTF materials influence the
-rendered handle mesh without duplicating geometry.
+rendered handle mesh without duplicating geometry. `TextureImageAssets` also
+maintains a label lookup, and the scene renderer uploads labeled images into a
+small material texture cache. A material albedo reference such as `#image_0`
+binds that uploaded texture for the relevant material batch, while untextured
+materials use a white fallback texture.
 
 This keeps the compatibility glTF path useful for development while moving the
 runtime shape toward Oxide-owned handles and caches.

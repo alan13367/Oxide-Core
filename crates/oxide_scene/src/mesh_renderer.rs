@@ -8,9 +8,11 @@ use oxide_ecs::{Component, Resource};
 use oxide_renderer::descriptor::{MaterialDescriptor, MaterialType};
 use oxide_renderer::mesh::Mesh3D;
 use oxide_renderer::shader::BuiltinShader;
+use oxide_renderer::texture::TextureImage;
 
 pub type MeshHandle = Handle<Mesh3D>;
 pub type MaterialDescriptorHandle = Handle<MaterialDescriptor>;
+pub type TextureImageHandle = Handle<TextureImage>;
 
 /// Resource that caches GPU meshes by typed asset handle.
 #[derive(Resource)]
@@ -59,6 +61,52 @@ impl MeshCache {
 impl Default for MeshCache {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Resource storing CPU-side texture images by typed asset handle and label.
+#[derive(Resource, Default)]
+pub struct TextureImageAssets {
+    pub assets: oxide_asset::Assets<TextureImage>,
+    labels: HashMap<String, TextureImageHandle>,
+}
+
+impl TextureImageAssets {
+    /// Registers a texture image and associates it with a material-friendly label.
+    pub fn insert_labeled(
+        &mut self,
+        label: impl Into<String>,
+        handle: TextureImageHandle,
+        image: TextureImage,
+    ) {
+        self.labels.insert(label.into(), handle);
+        self.assets.insert(handle, image);
+    }
+
+    /// Returns an image by handle.
+    pub fn get(&self, handle: TextureImageHandle) -> Option<&TextureImage> {
+        self.assets.get(&handle)
+    }
+
+    /// Returns an image by label, accepting labels with or without a leading `#`.
+    pub fn get_labeled(&self, label: &str) -> Option<&TextureImage> {
+        let label = label.trim_start_matches('#');
+        self.labels.get(label).and_then(|handle| self.get(*handle))
+    }
+
+    /// Returns the handle associated with a label.
+    pub fn handle_for_label(&self, label: &str) -> Option<TextureImageHandle> {
+        let label = label.trim_start_matches('#');
+        self.labels.get(label).copied()
+    }
+
+    /// Iterates labeled texture images for renderer cache synchronization.
+    pub fn iter_labeled(&self) -> impl Iterator<Item = (&str, TextureImageHandle, &TextureImage)> {
+        self.labels.iter().filter_map(|(label, handle)| {
+            self.assets
+                .get(handle)
+                .map(|image| (label.as_str(), *handle, image))
+        })
     }
 }
 
@@ -180,6 +228,7 @@ pub enum RenderMaterial {
         material_type: MaterialType,
         name: String,
         base_color: [f32; 4],
+        albedo_texture: Option<String>,
     },
     Named(String),
 }
@@ -191,6 +240,7 @@ impl Default for RenderMaterial {
             material_type: MaterialType::Unlit,
             name: "default_unlit".to_string(),
             base_color: [1.0, 1.0, 1.0, 1.0],
+            albedo_texture: None,
         }
     }
 }
@@ -208,6 +258,7 @@ impl RenderMaterial {
             material_type: descriptor.material_type,
             name: descriptor.name.clone(),
             base_color: descriptor.base_color,
+            albedo_texture: descriptor.albedo_texture.clone(),
         }
     }
 
@@ -220,6 +271,23 @@ impl RenderMaterial {
             *color = base_color;
         }
         self
+    }
+
+    /// Returns the optional albedo texture reference resolved through a material library.
+    pub fn albedo_texture_with_library<'a>(
+        &'a self,
+        library: Option<&'a SceneMaterialLibrary>,
+    ) -> Option<&'a str> {
+        if let Self::Named(name) = self {
+            if let Some(resolved) = library.and_then(|library| library.get(name)) {
+                return resolved.albedo_texture_with_library(None);
+            }
+        }
+
+        match self {
+            Self::Builtin { albedo_texture, .. } => albedo_texture.as_deref(),
+            Self::Named(_) => None,
+        }
     }
 
     /// Returns the material base color resolved through an optional library.
@@ -318,5 +386,28 @@ impl RenderMesh {
 impl MeshRenderer {
     pub fn new(mesh: Mesh3D) -> Self {
         Self { mesh }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn texture_image_assets_resolve_labels_with_or_without_hash() {
+        let mut assets = TextureImageAssets::default();
+        let handle = TextureImageHandle::new(7);
+        let image = TextureImage::from_rgba(1, 1, vec![1, 2, 3, 4]).unwrap();
+
+        assets.insert_labeled("image_0", handle, image);
+
+        assert_eq!(assets.handle_for_label("image_0"), Some(handle));
+        assert_eq!(assets.handle_for_label("#image_0"), Some(handle));
+        assert_eq!(
+            assets
+                .get_labeled("#image_0")
+                .map(|image| image.rgba.as_slice()),
+            Some([1, 2, 3, 4].as_slice())
+        );
     }
 }

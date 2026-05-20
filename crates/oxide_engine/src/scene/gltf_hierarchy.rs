@@ -399,15 +399,15 @@ fn register_gltf_scene_images(
         let scene_source = server.server.asset_source(&handle);
         for (image_name, image) in std::mem::take(&mut scene.images) {
             let image_handle = if let Some(source) = &scene_source {
-                server.server.insert_loaded_labeled_path(
-                    &mut image_assets.assets,
+                let image_handle = server.server.register_loaded_labeled_path(
                     source.path().to_path_buf(),
                     Some(image_name.as_str()),
-                    image,
-                )
+                );
+                image_assets.insert_labeled(image_name.as_str(), image_handle, image);
+                image_handle
             } else {
                 let image_handle = server.server.allocate_handle();
-                image_assets.assets.insert(image_handle, image);
+                image_assets.insert_labeled(image_name.as_str(), image_handle, image);
                 image_handle
             };
             image_handles.push(image_handle);

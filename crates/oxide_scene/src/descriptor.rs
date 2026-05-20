@@ -796,6 +796,7 @@ impl From<SceneMaterialDescriptor> for RenderMaterial {
             material_type: value.shader.material_type(),
             name: value.name,
             base_color: [1.0, 1.0, 1.0, 1.0],
+            albedo_texture: None,
         }
     }
 }
@@ -2075,6 +2076,7 @@ mod tests {
                         material_type: oxide_renderer::descriptor::MaterialType::Basic,
                         name: "basic".to_string(),
                         base_color: [1.0; 4],
+                        albedo_texture: None,
                     },
                 ),
             ))

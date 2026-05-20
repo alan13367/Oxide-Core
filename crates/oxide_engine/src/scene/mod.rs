@@ -44,17 +44,18 @@ pub fn install_scene_renderer(world: &mut World) {
         return;
     }
 
-    let (device, format, width, height) = {
+    let (device, queue, format, width, height) = {
         let renderer = &world.resource::<RendererResource>().renderer;
         (
             renderer.device.clone(),
+            renderer.queue.clone(),
             renderer.format(),
             renderer.width(),
             renderer.height(),
         )
     };
 
-    world.insert_non_send_resource(SceneRenderer::new(&device, format, width, height));
+    world.insert_non_send_resource(SceneRenderer::new(&device, &queue, format, width, height));
 }
 
 pub fn prepare_scene_renderer(world: &mut World) {

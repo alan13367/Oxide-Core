@@ -22,7 +22,7 @@ use oxide_transform::{is_visible, GlobalTransform, TransformComponent};
 use crate::{
     MeshCache, MeshFilter, MeshPrimitive, RenderLayers, RenderMaterial, RenderMesh,
     SceneGizmoLines, SceneMaterialLibrary, SpriteAssets, SpriteBillboard, SpriteDepthMode,
-    SpriteFacing, SpriteId, Terrain,
+    SpriteFacing, SpriteId, Terrain, TextureImageAssets,
 };
 
 const SCENE_RENDERER_SHADER: &str = r#"
@@ -59,6 +59,12 @@ var<uniform> lights: LightUniform;
 @group(1) @binding(1)
 var<storage, read> point_lights: array<PointLight>;
 
+@group(2) @binding(0)
+var material_texture: texture_2d<f32>;
+
+@group(2) @binding(1)
+var material_sampler: sampler;
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
@@ -77,6 +83,8 @@ struct VertexOutput {
     @location(1) normal: vec3<f32>,
     @location(2) tint: vec4<f32>,
     @location(3) material_mode: f32,
+    @location(4) uv: vec2<f32>,
+    @location(5) texture_weight: f32,
 };
 
 @vertex
@@ -90,13 +98,19 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.normal = normalize((model * vec4<f32>(input.normal, 0.0)).xyz);
     output.tint = input.tint;
     output.material_mode = input.material.x;
+    output.uv = input.uv;
+    output.texture_weight = input.material.y;
     return output;
 }
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    let sampled = textureSample(material_texture, material_sampler, input.uv);
+    let texture_color = mix(vec4<f32>(1.0, 1.0, 1.0, 1.0), sampled, input.texture_weight);
+    let surface_color = input.tint * texture_color;
+
     if (input.material_mode < 0.5) {
-        return input.tint;
+        return surface_color;
     }
 
     let normal = normalize(input.normal);
@@ -130,8 +144,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    let color = input.tint.rgb * max(lighting, vec3<f32>(0.08));
-    return vec4<f32>(color, input.tint.a);
+    let color = surface_color.rgb * max(lighting, vec3<f32>(0.08));
+    return vec4<f32>(color, surface_color.a);
 }
 "#;
 
@@ -256,10 +270,11 @@ struct SceneInstanceRaw {
 
 impl SceneInstanceRaw {
     fn new(model: Mat4, tint: [f32; 4], material: MaterialBatchKey) -> Self {
+        let has_texture = f32::from(material.albedo_texture.is_some());
         Self {
             model: model.to_cols_array_2d(),
             tint,
-            material: [material.mode.shader_value(), 0.0, 0.0, 0.0],
+            material: [material.mode.shader_value(), has_texture, 0.0, 0.0],
         }
     }
 }
@@ -268,6 +283,7 @@ impl SceneInstanceRaw {
 struct MaterialBatchKey {
     mode: MaterialMode,
     identity: String,
+    albedo_texture: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -307,13 +323,18 @@ impl MaterialBatchKey {
                 material_type,
                 name,
                 base_color,
+                albedo_texture,
             } => Self {
                 mode: material_mode(*shader, *material_type),
-                identity: format!("builtin:{shader:?}:{material_type:?}:{name}:{base_color:?}"),
+                identity: format!(
+                    "builtin:{shader:?}:{material_type:?}:{name}:{base_color:?}:{albedo_texture:?}"
+                ),
+                albedo_texture: albedo_texture.clone(),
             },
             RenderMaterial::Named(name) => Self {
                 mode: MaterialMode::Lit,
                 identity: format!("named:{name}"),
+                albedo_texture: None,
             },
         }
     }
@@ -339,6 +360,7 @@ fn multiply_color(left: [f32; 4], right: [f32; 4]) -> [f32; 4] {
 struct InstanceBatch {
     buffer: wgpu::Buffer,
     count: u32,
+    material_texture: Option<wgpu::BindGroup>,
 }
 
 #[derive(Debug)]
@@ -420,6 +442,13 @@ struct SpriteTexture {
 }
 
 #[derive(Debug)]
+struct MaterialTexture {
+    _texture: Texture,
+    bind_group: wgpu::BindGroup,
+    revision: u64,
+}
+
+#[derive(Debug)]
 struct SpriteBatch {
     sprite: SpriteId,
     depth: SpriteDepthMode,
@@ -473,6 +502,8 @@ pub struct SceneRenderer {
     sprite_world_pipeline: wgpu::RenderPipeline,
     sprite_overlay_pipeline: wgpu::RenderPipeline,
     sprite_texture_layout: wgpu::BindGroupLayout,
+    material_texture_layout: wgpu::BindGroupLayout,
+    fallback_material_texture: MaterialTexture,
     depth_texture: DepthTexture,
     cube_mesh: Mesh3D,
     sphere_meshes: HashMap<(u32, u32), Mesh3D>,
@@ -482,6 +513,7 @@ pub struct SceneRenderer {
     sprite_index_buffer: wgpu::Buffer,
     sprite_index_count: u32,
     sprite_textures: HashMap<SpriteId, SpriteTexture>,
+    material_textures: HashMap<String, MaterialTexture>,
     target_width: u32,
     target_height: u32,
     gizmo_pipeline: wgpu::RenderPipeline,
@@ -494,6 +526,7 @@ pub struct SceneRenderer {
 impl SceneRenderer {
     pub fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         width: u32,
         height: u32,
@@ -501,14 +534,26 @@ impl SceneRenderer {
         let camera_buffer = CameraBuffer::new(device);
         let light_buffer = LightBuffer::new(device);
         let shader = create_shader(device, SCENE_RENDERER_SHADER, Some("Scene Renderer Shader"));
+        let material_texture_layout =
+            create_texture_bind_group_layout(device, "Scene Material Texture Layout");
         let pipeline = create_scene_pipeline(
             device,
             &shader,
             format,
             &camera_buffer.bind_group_layout,
             &light_buffer.bind_group_layout,
+            &material_texture_layout,
         );
-        let sprite_texture_layout = create_sprite_texture_layout(device);
+        let sprite_texture_layout =
+            create_texture_bind_group_layout(device, "Scene Sprite Texture Layout");
+        let fallback_material_texture = create_material_texture(
+            device,
+            queue,
+            &material_texture_layout,
+            &[255, 255, 255, 255],
+            (1, 1),
+            "Scene Fallback Material Texture",
+        );
         let sprite_shader = create_shader(device, SPRITE_SHADER, Some("Scene Sprite Shader"));
         let sprite_world_pipeline = create_sprite_pipeline(
             device,
@@ -565,6 +610,8 @@ impl SceneRenderer {
             sprite_world_pipeline,
             sprite_overlay_pipeline,
             sprite_texture_layout,
+            material_texture_layout,
+            fallback_material_texture,
             depth_texture: DepthTexture::new(device, width, height, Some("Scene Renderer Depth")),
             cube_mesh: Mesh3D::new_cube(device),
             sphere_meshes: HashMap::new(),
@@ -574,6 +621,7 @@ impl SceneRenderer {
             sprite_index_buffer,
             sprite_index_count,
             sprite_textures: HashMap::new(),
+            material_textures: HashMap::new(),
             target_width: width,
             target_height: height,
             gizmo_pipeline,
@@ -600,6 +648,7 @@ impl SceneRenderer {
         aspect_ratio: f32,
     ) {
         self.light_buffer.update(device, queue, world);
+        self.sync_material_textures(device, queue, world);
         self.sync_sprite_textures(device, queue, world);
         self.prepare_gizmo_lines(queue, world);
         self.prune_terrain_meshes(world);
@@ -691,21 +740,41 @@ impl SceneRenderer {
             render_pass.set_bind_group(1, &self.light_buffer.bind_group, &[]);
 
             for instances in &scene_view.cube_instances {
+                set_material_texture(
+                    &mut render_pass,
+                    &self.fallback_material_texture.bind_group,
+                    instances,
+                );
                 draw_mesh_batch(&mut render_pass, &self.cube_mesh, instances);
             }
 
             for batch in &scene_view.sphere_instances {
                 if let Some(mesh) = self.sphere_meshes.get(&(batch.segments, batch.rings)) {
+                    set_material_texture(
+                        &mut render_pass,
+                        &self.fallback_material_texture.bind_group,
+                        &batch.instances,
+                    );
                     draw_mesh_batch(&mut render_pass, mesh, &batch.instances);
                 }
             }
 
             for draw in &scene_view.mesh_handle_draws {
+                set_material_texture(
+                    &mut render_pass,
+                    &self.fallback_material_texture.bind_group,
+                    &draw.instances,
+                );
                 draw_prepared_mesh_batch(&mut render_pass, draw);
             }
 
             for terrain in &scene_view.terrain_draws {
                 if let Some(entry) = self.terrain_meshes.get(&terrain.entity) {
+                    set_material_texture(
+                        &mut render_pass,
+                        &self.fallback_material_texture.bind_group,
+                        &terrain.instances,
+                    );
                     draw_mesh_batch(&mut render_pass, &entry.mesh, &terrain.instances);
                 }
             }
@@ -803,19 +872,28 @@ impl SceneRenderer {
         }
 
         let cube_batches = cube_instances
-            .values()
-            .filter_map(|instances| {
-                create_instance_batch(device, "Scene Cube Instances", instances)
+            .iter()
+            .filter_map(|(material, instances)| {
+                create_material_instance_batch(
+                    device,
+                    "Scene Cube Instances",
+                    instances,
+                    self.material_bind_group_for(material),
+                )
             })
             .collect();
         let mut sphere_batches = Vec::new();
-        for ((segments, rings, _material), instances) in sphere_instances {
+        for ((segments, rings, material), instances) in sphere_instances {
             self.sphere_meshes
                 .entry((segments, rings))
                 .or_insert_with(|| Mesh3D::new_sphere(device, segments, rings));
 
-            if let Some(batch) = create_instance_batch(device, "Scene Sphere Instances", &instances)
-            {
+            if let Some(batch) = create_material_instance_batch(
+                device,
+                "Scene Sphere Instances",
+                &instances,
+                self.material_bind_group_for(&material),
+            ) {
                 sphere_batches.push(SphereInstanceBatch {
                     segments,
                     rings,
@@ -878,14 +956,17 @@ impl SceneRenderer {
         };
 
         let mut draws = Vec::new();
-        for ((mesh_id, _material), instances) in batches {
+        for ((mesh_id, material), instances) in batches {
             let mesh_handle = oxide_asset::Handle::new(mesh_id);
             let Some(mesh) = mesh_cache.get(mesh_handle) else {
                 continue;
             };
-            if let Some(instances) =
-                create_instance_batch(device, "Scene Mesh Handle Instances", &instances)
-            {
+            if let Some(instances) = create_material_instance_batch(
+                device,
+                "Scene Mesh Handle Instances",
+                &instances,
+                self.material_bind_group_for(&material),
+            ) {
                 draws.push(MeshHandleDraw {
                     vertex_buffer: mesh.vertex_buffer.clone(),
                     index_buffer: mesh.index_buffer.clone(),
@@ -933,15 +1014,27 @@ impl SceneRenderer {
             let base_color = terrain
                 .material
                 .base_color_with_library(material_library.as_ref());
+            let material_texture = self.material_bind_group_for(&material);
             let instance =
                 SceneInstanceRaw::new(model, multiply_color(terrain.tint, base_color), material);
-            if let Some(instances) = create_instance_batch(device, "Terrain Instances", &[instance])
-            {
+            if let Some(instances) = create_material_instance_batch(
+                device,
+                "Terrain Instances",
+                &[instance],
+                material_texture,
+            ) {
                 draws.push(TerrainDraw { entity, instances });
             }
         }
 
         draws
+    }
+
+    fn material_bind_group_for(&self, material: &MaterialBatchKey) -> Option<wgpu::BindGroup> {
+        let label = material.albedo_texture.as_deref()?.trim_start_matches('#');
+        self.material_textures
+            .get(label)
+            .map(|texture| texture.bind_group.clone())
     }
 
     fn prepare_sprites(
@@ -1046,20 +1139,12 @@ impl SceneRenderer {
                 },
             );
 
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Scene Sprite Texture Bind Group"),
-                layout: &self.sprite_texture_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&texture.view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&texture.sampler),
-                    },
-                ],
-            });
+            let bind_group = create_texture_bind_group(
+                device,
+                &self.sprite_texture_layout,
+                &texture,
+                "Scene Sprite Texture Bind Group",
+            );
 
             self.sprite_textures.insert(
                 id,
@@ -1067,6 +1152,48 @@ impl SceneRenderer {
                     _texture: texture,
                     bind_group,
                     revision: asset.revision,
+                },
+            );
+        }
+    }
+
+    fn sync_material_textures(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        world: &World,
+    ) {
+        let Some(assets) = world.get_resource::<TextureImageAssets>() else {
+            self.material_textures.clear();
+            return;
+        };
+
+        let active_labels: HashSet<String> = assets
+            .iter_labeled()
+            .map(|(label, _, _)| label.to_string())
+            .collect();
+        self.material_textures
+            .retain(|label, _| active_labels.contains(label));
+
+        for (label, handle, image) in assets.iter_labeled() {
+            let revision = assets.assets.revision(&handle).unwrap_or(0);
+            let current_revision = self
+                .material_textures
+                .get(label)
+                .map(|texture| texture.revision);
+            if current_revision == Some(revision) {
+                continue;
+            }
+
+            let texture = Texture::from_image(device, queue, image, Some(label));
+            let bind_group =
+                create_texture_bind_group(device, &self.material_texture_layout, &texture, label);
+            self.material_textures.insert(
+                label.to_string(),
+                MaterialTexture {
+                    _texture: texture,
+                    bind_group,
+                    revision,
                 },
             );
         }
@@ -1149,10 +1276,15 @@ fn create_scene_pipeline(
     format: wgpu::TextureFormat,
     camera_layout: &wgpu::BindGroupLayout,
     light_layout: &wgpu::BindGroupLayout,
+    material_texture_layout: &wgpu::BindGroupLayout,
 ) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Scene Renderer Pipeline Layout"),
-        bind_group_layouts: &[Some(camera_layout), Some(light_layout)],
+        bind_group_layouts: &[
+            Some(camera_layout),
+            Some(light_layout),
+            Some(material_texture_layout),
+        ],
         immediate_size: 0,
     });
 
@@ -1201,9 +1333,9 @@ fn create_scene_pipeline(
     })
 }
 
-fn create_sprite_texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+fn create_texture_bind_group_layout(device: &wgpu::Device, label: &str) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("Scene Sprite Texture Layout"),
+        label: Some(label),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -1223,6 +1355,45 @@ fn create_sprite_texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout 
             },
         ],
     })
+}
+
+fn create_texture_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    texture: &Texture,
+    label: &str,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(label),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&texture.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&texture.sampler),
+            },
+        ],
+    })
+}
+
+fn create_material_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    rgba: &[u8],
+    dimensions: (u32, u32),
+    label: &str,
+) -> MaterialTexture {
+    let texture = Texture::from_bytes(device, queue, rgba, dimensions, Some(label));
+    let bind_group = create_texture_bind_group(device, layout, &texture, label);
+    MaterialTexture {
+        _texture: texture,
+        bind_group,
+        revision: 0,
+    }
 }
 
 fn create_sprite_pipeline(
@@ -1418,6 +1589,19 @@ fn create_instance_batch<T: Pod>(
     Some(InstanceBatch {
         buffer,
         count: instances.len() as u32,
+        material_texture: None,
+    })
+}
+
+fn create_material_instance_batch(
+    device: &wgpu::Device,
+    label: &str,
+    instances: &[SceneInstanceRaw],
+    material_texture: Option<wgpu::BindGroup>,
+) -> Option<InstanceBatch> {
+    create_instance_batch(device, label, instances).map(|mut batch| {
+        batch.material_texture = material_texture;
+        batch
     })
 }
 
@@ -1753,6 +1937,15 @@ fn draw_mesh_batch<'pass>(
     render_pass.draw_indexed(0..mesh.index_count, 0, 0..instances.count);
 }
 
+fn set_material_texture<'pass>(
+    render_pass: &mut wgpu::RenderPass<'pass>,
+    fallback: &'pass wgpu::BindGroup,
+    instances: &'pass InstanceBatch,
+) {
+    let bind_group = instances.material_texture.as_ref().unwrap_or(fallback);
+    render_pass.set_bind_group(2, bind_group, &[]);
+}
+
 fn draw_prepared_mesh_batch<'pass>(
     render_pass: &mut wgpu::RenderPass<'pass>,
     draw: &'pass MeshHandleDraw,
@@ -1775,6 +1968,7 @@ mod tests {
             material_type: MaterialType::Unlit,
             name: "ui".to_string(),
             base_color: [1.0, 1.0, 1.0, 1.0],
+            albedo_texture: None,
         };
 
         let key = MaterialBatchKey::from_material(&material);
@@ -1790,6 +1984,7 @@ mod tests {
             material_type: MaterialType::Lit,
             name: "scene_lit".to_string(),
             base_color: [1.0, 1.0, 1.0, 1.0],
+            albedo_texture: None,
         };
 
         let key = MaterialBatchKey::from_material(&material);
@@ -1807,6 +2002,29 @@ mod tests {
     }
 
     #[test]
+    fn material_batch_key_preserves_texture_identity() {
+        let first = MaterialBatchKey::from_material(&RenderMaterial::Builtin {
+            shader: BuiltinShader::Lit,
+            material_type: MaterialType::Lit,
+            name: "textured".to_string(),
+            base_color: [1.0, 1.0, 1.0, 1.0],
+            albedo_texture: Some("#image_0".to_string()),
+        });
+        let second = MaterialBatchKey::from_material(&RenderMaterial::Builtin {
+            shader: BuiltinShader::Lit,
+            material_type: MaterialType::Lit,
+            name: "textured".to_string(),
+            base_color: [1.0, 1.0, 1.0, 1.0],
+            albedo_texture: Some("#image_1".to_string()),
+        });
+
+        assert_ne!(first, second);
+        assert_eq!(first.albedo_texture.as_deref(), Some("#image_0"));
+        let instance = SceneInstanceRaw::new(Mat4::IDENTITY, [1.0; 4], first);
+        assert_eq!(instance.material[1], 1.0);
+    }
+
+    #[test]
     fn material_batch_key_resolves_named_scene_materials() {
         let mut library = SceneMaterialLibrary::new();
         library.register(
@@ -1816,6 +2034,7 @@ mod tests {
                 material_type: MaterialType::Unlit,
                 name: "matte".to_string(),
                 base_color: [0.5, 0.75, 1.0, 1.0],
+                albedo_texture: None,
             },
         );
 
@@ -1830,7 +2049,7 @@ mod tests {
         assert_eq!(resolved.mode, MaterialMode::Unlit);
         assert_eq!(
             resolved.identity,
-            "builtin:Unlit:Unlit:matte:[0.5, 0.75, 1.0, 1.0]"
+            "builtin:Unlit:Unlit:matte:[0.5, 0.75, 1.0, 1.0]:None"
         );
     }
 
@@ -1844,6 +2063,7 @@ mod tests {
                 material_type: MaterialType::Unlit,
                 name: "bronze".to_string(),
                 base_color: [0.5, 0.25, 0.75, 0.5],
+                albedo_texture: None,
             },
         );
         let material = RenderMaterial::Named("bronze".to_string());
