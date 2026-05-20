@@ -402,7 +402,7 @@ pub fn material_descriptor_asset_system(world: &mut World) {
     }
 }
 
-fn publish_material_texture_assets(world: &mut World, textures: Vec<(String, PathBuf)>) {
+pub(crate) fn publish_material_texture_assets(world: &mut World, textures: Vec<(String, PathBuf)>) {
     if !world.contains_resource::<TextureImageAssets>() {
         world.insert_resource(TextureImageAssets::default());
     }

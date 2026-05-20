@@ -200,7 +200,9 @@ Native scene loads validate authored data before publishing the descriptor.
 Use top-level `dependencies` for material, sprite, import, or sidecar data files
 that should trigger scene reloads when they change. Relative paths are resolved
 from the `.oxscene` file location when the scene is loaded through the runtime
-asset path.
+asset path. Non-virtual scene material `albedo_texture` paths are also recorded
+as dependencies automatically and published into `TextureImageAssets` during
+native scene loading.
 Use entity `tags` for stable gameplay labels independent of display names.
 Systems can query `Tags` directly or use `first_entity_with_tag(&mut world,
 "spawn_point")` / `entities_with_tag(&mut world, "enemy")` instead of parsing
@@ -331,8 +333,10 @@ material base color and `albedo_texture` stores the material texture label or
 path-like reference. For mesh entities and prefab overrides, `color` remains
 the per-entity tint even when material shader data is resolved from the
 library. Texture labels such as `#image_0` or `#crate_albedo` resolve against
-`TextureImageAssets`; loaded `.oxmat` descriptors and import tooling can publish
-those images before the scene renderer prepares the frame.
+`TextureImageAssets`; file paths such as `textures/crate.png` are loaded by the
+native scene asset pipeline and tracked as scene dependencies. Loaded `.oxmat`
+descriptors and import tooling can also publish those images before the scene
+renderer prepares the frame.
 
 ## Native Sprites
 

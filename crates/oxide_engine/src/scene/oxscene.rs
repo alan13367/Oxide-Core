@@ -3,11 +3,16 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::asset::{AssetServerError, AssetServerResource, Assets, Handle};
+use crate::asset::{
+    publish_material_texture_assets, AssetServerError, AssetServerResource, Assets, Handle,
+};
 use oxide_ecs::entity::Entity;
 use oxide_ecs::world::World;
 use oxide_ecs::Resource;
-use oxide_scene::{load_scene_descriptor, spawn_scene_descriptor, SceneDescriptor};
+use oxide_scene::{
+    load_scene_descriptor, spawn_scene_descriptor, SceneDescriptor, SceneEntityDescriptor,
+    SceneEntityKind, SceneMaterialDescriptor,
+};
 
 #[derive(Resource, Default)]
 pub struct SceneDescriptorAssets {
@@ -143,14 +148,29 @@ pub fn oxscene_spawn_system(world: &mut World) {
 
     if !completed.is_empty() {
         let mut scenes = Vec::new();
+        let mut texture_requests = Vec::new();
         for result in completed {
             match result {
                 Ok((handle, scene)) => {
+                    let source_path = world
+                        .resource::<AssetServerResource>()
+                        .server
+                        .asset_path(&handle)
+                        .map(PathBuf::from);
+                    if let Some(source_path) = source_path {
+                        texture_requests.extend(scene_descriptor_texture_sources(
+                            source_path.as_path(),
+                            &scene,
+                        ));
+                    }
                     record_scene_dependencies(world, &handle, &scene);
                     scenes.push((handle, scene));
                 }
                 Err(err) => tracing::warn!("Failed to load Oxide scene: {err}"),
             }
+        }
+        if !texture_requests.is_empty() {
+            publish_material_texture_assets(world, texture_requests);
         }
         let scene_assets = world.resource_mut::<SceneDescriptorAssets>();
         for (handle, scene) in scenes {
@@ -222,9 +242,86 @@ pub fn scene_descriptor_dependencies(
             (!dependency.is_empty()).then(|| resolve_scene_dependency(base.as_ref(), dependency))
         })
         .collect();
+    dependencies.extend(
+        scene_descriptor_texture_sources(descriptor_path.as_ref(), scene)
+            .into_iter()
+            .map(|(_, path)| path),
+    );
     dependencies.sort();
     dependencies.dedup();
     dependencies
+}
+
+/// Returns non-virtual scene material albedo texture sources.
+///
+/// Texture labels beginning with `#` are treated as virtual labels that must
+/// already be present in `TextureImageAssets`. Other labels are resolved
+/// relative to the `.oxscene` file and can be loaded by the native scene asset
+/// pipeline.
+pub fn scene_descriptor_texture_sources(
+    descriptor_path: impl AsRef<Path>,
+    scene: &SceneDescriptor,
+) -> Vec<(String, PathBuf)> {
+    let base = descriptor_path.as_ref().parent().map(PathBuf::from);
+    let mut textures = Vec::new();
+
+    for material in &scene.materials {
+        collect_scene_material_texture(material, &mut textures);
+    }
+    for entity in &scene.entities {
+        collect_scene_entity_textures(entity, &mut textures);
+    }
+    for prefab in &scene.prefabs {
+        for entity in &prefab.entities {
+            collect_scene_entity_textures(entity, &mut textures);
+        }
+    }
+
+    let mut sources: Vec<_> = textures
+        .into_iter()
+        .map(|texture| {
+            let path = resolve_scene_dependency(base.as_ref(), texture.as_str());
+            (texture, path)
+        })
+        .collect();
+    sources.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    sources.dedup();
+    sources
+}
+
+fn collect_scene_entity_textures(entity: &SceneEntityDescriptor, textures: &mut Vec<String>) {
+    match &entity.kind {
+        SceneEntityKind::Mesh { material, .. } => {
+            collect_scene_material_texture(material, textures);
+        }
+        SceneEntityKind::Prefab { overrides, .. } => {
+            for prefab_override in overrides {
+                if let Some(material) = &prefab_override.material {
+                    collect_scene_material_texture(material, textures);
+                }
+            }
+        }
+        _ => {}
+    }
+
+    for child in &entity.children {
+        collect_scene_entity_textures(child, textures);
+    }
+}
+
+fn collect_scene_material_texture(material: &SceneMaterialDescriptor, textures: &mut Vec<String>) {
+    if let Some(texture) = material
+        .albedo_texture
+        .as_ref()
+        .map(|texture| texture.trim())
+        .filter(|texture| !texture.is_empty() && !is_virtual_texture_ref(texture))
+    {
+        textures.push(texture.to_string());
+    }
+}
+
+fn is_virtual_texture_ref(texture: &str) -> bool {
+    texture.trim_start().starts_with('#')
 }
 
 fn resolve_scene_dependency(base: Option<&PathBuf>, dependency: &str) -> PathBuf {
@@ -259,7 +356,11 @@ mod tests {
     use std::fs;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-    use oxide_scene::{SceneEntityDescriptor, SceneEntityKind};
+    use crate::asset::TextureImageAssets;
+    use oxide_scene::{
+        SceneBuiltinShader, SceneEntityDescriptor, SceneEntityKind, ScenePrefabDescriptor,
+        ScenePrefabOverride,
+    };
 
     #[test]
     fn queued_oxscene_spawns_when_asset_is_available() {
@@ -384,6 +485,43 @@ mod tests {
     }
 
     #[test]
+    fn loaded_oxscene_records_and_publishes_material_texture_paths() {
+        let scene_path = temp_path("textured_dependency_scene", "oxscene");
+        let texture_path = scene_path.parent().unwrap().join("scene_albedo.png");
+        write_png_1x1(&texture_path);
+        write_scene_with_material_texture(&scene_path, "Textured Cube", "scene_albedo.png");
+
+        let mut world = World::new();
+        let handle = request_oxscene_spawn(&mut world, &scene_path);
+        run_until_scene_asset_named(&mut world, handle, "Textured Cube");
+
+        let server = world.resource::<AssetServerResource>();
+        let expected_dependency = server
+            .server
+            .asset_path(&handle)
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("scene_albedo.png");
+        let dependencies = server.server.asset_dependencies(&handle).unwrap();
+        assert_eq!(dependencies, &[expected_dependency]);
+        assert!(server
+            .server
+            .handle_for_path::<oxide_renderer::texture::TextureImage>(&texture_path)
+            .is_some());
+
+        let textures = world.resource::<TextureImageAssets>();
+        let image = textures
+            .get_labeled("scene_albedo.png")
+            .expect("scene material texture should be published");
+        assert_eq!((image.width, image.height), (1, 1));
+        assert_eq!(image.rgba.as_slice(), &[255, 0, 0, 255]);
+
+        let _ = fs::remove_file(scene_path);
+        let _ = fs::remove_file(texture_path);
+    }
+
+    #[test]
     fn reload_changed_oxscenes_matches_declared_dependency_paths() {
         let scene_path = temp_path("declared_reload_scene", "oxscene");
         let dependency_path = scene_path.parent().unwrap().join("declared_reload.oxmat");
@@ -422,7 +560,35 @@ mod tests {
                 "materials/stone.oxmat".to_string(),
                 "sprites/hud.png".to_string(),
             ],
-            ..Default::default()
+            materials: vec![SceneMaterialDescriptor {
+                name: "crate_lit".to_string(),
+                shader: SceneBuiltinShader::Lit,
+                albedo_texture: Some("textures/crate.png".to_string()),
+                ..Default::default()
+            }],
+            prefabs: vec![ScenePrefabDescriptor {
+                id: "crate".to_string(),
+                entities: vec![SceneEntityDescriptor {
+                    kind: SceneEntityKind::Mesh {
+                        primitive: Default::default(),
+                        material: SceneMaterialDescriptor {
+                            albedo_texture: Some("textures/prefab.png".to_string()),
+                            ..Default::default()
+                        },
+                    },
+                    ..Default::default()
+                }],
+            }],
+            entities: vec![SceneEntityDescriptor {
+                kind: SceneEntityKind::Mesh {
+                    primitive: Default::default(),
+                    material: SceneMaterialDescriptor {
+                        albedo_texture: Some("#already_loaded".to_string()),
+                        ..Default::default()
+                    },
+                },
+                ..Default::default()
+            }],
         };
 
         let dependencies = scene_descriptor_dependencies("assets/scenes/level.oxscene", &scene);
@@ -431,6 +597,74 @@ mod tests {
             vec![
                 PathBuf::from("assets/scenes/materials/stone.oxmat"),
                 PathBuf::from("assets/scenes/sprites/hud.png"),
+                PathBuf::from("assets/scenes/textures/crate.png"),
+                PathBuf::from("assets/scenes/textures/prefab.png"),
+            ]
+        );
+    }
+
+    #[test]
+    fn scene_descriptor_texture_sources_collect_inline_prefab_and_override_materials() {
+        let scene = SceneDescriptor {
+            entities: vec![
+                SceneEntityDescriptor {
+                    kind: SceneEntityKind::Mesh {
+                        primitive: Default::default(),
+                        material: SceneMaterialDescriptor {
+                            albedo_texture: Some("textures/entity.png".to_string()),
+                            ..Default::default()
+                        },
+                    },
+                    ..Default::default()
+                },
+                SceneEntityDescriptor {
+                    kind: SceneEntityKind::Prefab {
+                        id: "crate".to_string(),
+                        overrides: vec![ScenePrefabOverride {
+                            path: "Crate".to_string(),
+                            material: Some(SceneMaterialDescriptor {
+                                albedo_texture: Some("textures/override.png".to_string()),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }],
+                    },
+                    ..Default::default()
+                },
+            ],
+            prefabs: vec![ScenePrefabDescriptor {
+                id: "crate".to_string(),
+                entities: vec![SceneEntityDescriptor {
+                    kind: SceneEntityKind::Mesh {
+                        primitive: Default::default(),
+                        material: SceneMaterialDescriptor {
+                            albedo_texture: Some("textures/prefab.png".to_string()),
+                            ..Default::default()
+                        },
+                    },
+                    ..Default::default()
+                }],
+            }],
+            ..Default::default()
+        };
+
+        let sources = scene_descriptor_texture_sources("assets/scenes/level.oxscene", &scene);
+
+        assert_eq!(
+            sources,
+            vec![
+                (
+                    "textures/entity.png".to_string(),
+                    PathBuf::from("assets/scenes/textures/entity.png")
+                ),
+                (
+                    "textures/override.png".to_string(),
+                    PathBuf::from("assets/scenes/textures/override.png")
+                ),
+                (
+                    "textures/prefab.png".to_string(),
+                    PathBuf::from("assets/scenes/textures/prefab.png")
+                ),
             ]
         );
     }
@@ -491,6 +725,51 @@ mod tests {
                     }}
                 }}"#
             ),
+        )
+        .unwrap();
+    }
+
+    fn write_scene_with_material_texture(path: &std::path::Path, name: &str, texture: &str) {
+        fs::write(
+            path,
+            format!(
+                r#"{{
+                    "format": "oxide.oxscene",
+                    "version": 1,
+                    "scene": {{
+                        "materials": [
+                            {{
+                                "name": "scene_lit",
+                                "shader": "lit",
+                                "color": [1.0, 1.0, 1.0, 1.0],
+                                "albedo_texture": "{texture}"
+                            }}
+                        ],
+                        "entities": [
+                            {{
+                                "name": "{name}",
+                                "type": "mesh",
+                                "primitive": "cube",
+                                "material": {{ "ref": "scene_lit" }}
+                            }}
+                        ]
+                    }}
+                }}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    fn write_png_1x1(path: &std::path::Path) {
+        fs::write(
+            path,
+            [
+                0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+                0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+                0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78,
+                0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99,
+                0x3d, 0x1d, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+            ],
         )
         .unwrap();
     }

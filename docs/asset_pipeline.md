@@ -64,6 +64,11 @@ Scene documents can declare relative or absolute dependency paths in
 `scene.dependencies`; the runtime records them against the loaded scene handle
 so changes to referenced material, sprite, or imported data files can invalidate
 the scene without app code manually updating the `AssetServer`.
+The native scene loader also records non-virtual `albedo_texture` paths from
+top-level scene materials, inline mesh materials, prefab materials, and prefab
+material overrides. Those image files are loaded into `TextureImageAssets` with
+their authored labels, so a scene material can use `"albedo_texture":
+"textures/crate.png"` without a separate `.oxmat` descriptor.
 
 `examples/minimal_game` demonstrates this path with
 `assets/scenes/starter.oxscene`.
