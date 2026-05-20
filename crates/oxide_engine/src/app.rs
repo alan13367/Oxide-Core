@@ -140,6 +140,19 @@ pub trait App: 'static {
 }
 
 pub trait Plugin<T: App> {
+    /// Stable plugin name used for diagnostics and duplicate registration checks.
+    fn name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+
+    /// Returns true when only one instance of this plugin should be registered.
+    ///
+    /// Most engine plugins are unique. Override this for plugin types that are
+    /// intentionally installed multiple times with different configuration.
+    fn is_unique(&self) -> bool {
+        true
+    }
+
     fn build(&self, app: &mut AppBuilder<T>);
 }
 
@@ -326,8 +339,18 @@ impl<T: App> PluginGroup<T> for DefaultPlugins {
     }
 }
 
+/// Metadata for a plugin registered with an [`AppBuilder`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PluginRegistration {
+    /// Stable name returned by [`Plugin::name`].
+    pub name: &'static str,
+    /// Whether this plugin suppresses later registrations with the same name.
+    pub unique: bool,
+}
+
 pub struct AppBuilder<T: App> {
     systems: RunnerSystems,
+    plugins: Vec<PluginRegistration>,
     _marker: PhantomData<T>,
 }
 
@@ -341,8 +364,19 @@ impl<T: App> AppBuilder<T> {
     pub fn new() -> Self {
         Self {
             systems: RunnerSystems::default(),
+            plugins: Vec::new(),
             _marker: PhantomData,
         }
+    }
+
+    /// Returns metadata for plugins already registered with this builder.
+    pub fn plugins(&self) -> &[PluginRegistration] {
+        &self.plugins
+    }
+
+    /// Returns true when a plugin with `name` has already been registered.
+    pub fn has_plugin(&self, name: &str) -> bool {
+        self.plugins.iter().any(|plugin| plugin.name == name)
     }
 
     pub fn add_system<S, Marker>(mut self, stage: AppStage, system: S) -> Self
@@ -785,6 +819,16 @@ impl<T: App> AppBuilder<T> {
     where
         P: Plugin<T>,
     {
+        let registration = PluginRegistration {
+            name: plugin.name(),
+            unique: plugin.is_unique(),
+        };
+        if registration.unique && self.has_plugin(registration.name) {
+            tracing::debug!("Skipping duplicate plugin {}", registration.name);
+            return self;
+        }
+
+        self.plugins.push(registration);
         plugin.build(self);
         self
     }
@@ -1222,5 +1266,76 @@ mod tests {
         RunnerSystems::run(&mut builder.systems.startup_schedule, &mut world);
 
         assert_eq!(world.resource::<StartupCounter>().0, 12);
+    }
+
+    struct UniqueCounterPlugin;
+
+    impl Plugin<TestApp> for UniqueCounterPlugin {
+        fn name(&self) -> &'static str {
+            "test.unique_counter"
+        }
+
+        fn build(&self, app: &mut AppBuilder<TestApp>) {
+            app.add_system_mut(AppStage::Startup, increment_startup_counter);
+        }
+    }
+
+    struct RepeatableCounterPlugin;
+
+    impl Plugin<TestApp> for RepeatableCounterPlugin {
+        fn name(&self) -> &'static str {
+            "test.repeatable_counter"
+        }
+
+        fn is_unique(&self) -> bool {
+            false
+        }
+
+        fn build(&self, app: &mut AppBuilder<TestApp>) {
+            app.add_system_mut(AppStage::Startup, increment_startup_counter);
+        }
+    }
+
+    #[test]
+    fn unique_plugins_are_registered_once() {
+        let mut builder = AppBuilder::<TestApp>::new();
+        builder.add_plugin_mut(UniqueCounterPlugin);
+        builder.add_plugin_mut(UniqueCounterPlugin);
+
+        assert_eq!(
+            builder.plugins(),
+            &[PluginRegistration {
+                name: "test.unique_counter",
+                unique: true,
+            }]
+        );
+        assert!(builder.has_plugin("test.unique_counter"));
+
+        let mut world = World::new();
+        world.insert_resource(StartupCounter::default());
+
+        RunnerSystems::run(&mut builder.systems.startup_schedule, &mut world);
+
+        assert_eq!(world.resource::<StartupCounter>().0, 1);
+    }
+
+    #[test]
+    fn non_unique_plugins_can_be_registered_multiple_times() {
+        let mut builder = AppBuilder::<TestApp>::new();
+        builder.add_plugin_mut(RepeatableCounterPlugin);
+        builder.add_plugin_mut(RepeatableCounterPlugin);
+
+        assert_eq!(builder.plugins().len(), 2);
+        assert!(builder
+            .plugins()
+            .iter()
+            .all(|plugin| plugin.name == "test.repeatable_counter" && !plugin.unique));
+
+        let mut world = World::new();
+        world.insert_resource(StartupCounter::default());
+
+        RunnerSystems::run(&mut builder.systems.startup_schedule, &mut world);
+
+        assert_eq!(world.resource::<StartupCounter>().0, 2);
     }
 }

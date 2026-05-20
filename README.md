@@ -23,7 +23,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Descriptor Pipeline**: JSON, RON, TOML, and `.oxmat` material descriptors for built-in and project-level shader assets
 - **Hot-Reloading**: Automatically reload shader assets during development
 - **Robust Validation**: Static checks to ensure custom shaders comply with engine bindings
-- **Plugin Architecture**: Group engine setup with `Plugin`/`DefaultPlugins` to reduce app boilerplate
+- **Plugin Architecture**: Group engine setup with `Plugin`/`DefaultPlugins`, plugin registration metadata, and duplicate guards to reduce app boilerplate
 - **Ergonomic Systems**: Signature-driven systems via `IntoSystem` + params (`Res`, `ResMut`, `Query`, `Commands`) in both app stages and standalone ECS schedules
 - **ECS Change Revisions**: `World` tracks component/resource mutation ticks so renderer, asset, editor, and gameplay caches can invalidate only changed data
 - **System Ordering**: Label systems, group them into sets, and register before/after constraints inside app stages or standalone schedules
@@ -76,6 +76,7 @@ Oxide Core uses a data-driven architecture powered by an Entity-Component-System
 ### 1. Start With Scene Authoring Plugins
 
 For code-first games, use `DefaultPlugins` plus `SceneAuthoringPlugins`. The engine will render `RenderMesh` entities automatically, so small games do not need to own a `wgpu::RenderPipeline`, camera buffer, light buffer, depth texture, or primitive GPU mesh.
+Plugins are unique by default; custom plugin authors can override `Plugin::name` for stable diagnostics and `Plugin::is_unique` for intentionally repeatable plugin types.
 
 ```rust
 use oxide_engine::prelude::*;

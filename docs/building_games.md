@@ -13,6 +13,8 @@ the engine prelude for normal game code.
 
 - Use `DefaultPlugins` for input, transforms, renderer resources, and asset
   setup.
+- Plugins are unique by default. Override `Plugin::name` for stable diagnostics
+  and `Plugin::is_unique` only when a plugin is intentionally repeatable.
 - Use `AppStage::Startup` for one-shot setup systems that should use normal
   ECS params such as `Commands`, `ResMut<T>`, or `Res<Window>`.
 - Use `AppStage::FixedUpdate` and `FixedTime` for deterministic gameplay

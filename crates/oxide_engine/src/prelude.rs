@@ -2,9 +2,9 @@
 
 pub use crate::app::{
     app, create_renderer, run_app, App, AppBuilder, AppRunner, AppStage, DefaultPlugins,
-    FixedUpdate, InputPlugin, Plugin, PluginGroup, PostUpdate, PreUpdate, Render, RenderPlugin,
-    Startup, TransformPlugin, Update, GLTF_SCENE_SPAWN_SYSTEM, MATERIAL_DESCRIPTOR_ASSET_SYSTEM,
-    OXSCENE_SPAWN_SYSTEM, TRANSFORM_PROPAGATE_SYSTEM,
+    FixedUpdate, InputPlugin, Plugin, PluginGroup, PluginRegistration, PostUpdate, PreUpdate,
+    Render, RenderPlugin, Startup, TransformPlugin, Update, GLTF_SCENE_SPAWN_SYSTEM,
+    MATERIAL_DESCRIPTOR_ASSET_SYSTEM, OXSCENE_SPAWN_SYSTEM, TRANSFORM_PROPAGATE_SYSTEM,
 };
 #[cfg(feature = "gltf-import")]
 pub use crate::asset::{load_gltf_async, GltfSceneAssets};
