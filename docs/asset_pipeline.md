@@ -110,6 +110,23 @@ let same_mesh = server.handle_for_labeled_path::<MeshAsset>(
 );
 ```
 
+When an importer parses one container and already has ready runtime assets, it
+can publish all outputs without spawning one loader per sub-asset:
+
+```rust
+let mut meshes = Assets::<MeshAsset>::new();
+let parsed = import_level_gltf("assets/level.gltf")?;
+
+for mesh in parsed.meshes {
+    server.insert_loaded_labeled_path(
+        &mut meshes,
+        "assets/level.gltf",
+        Some(mesh.name.as_str()),
+        mesh.asset,
+    );
+}
+```
+
 Labeled and unlabeled handles are distinct, but a watcher change for
 `assets/level.gltf` still matches every loaded label from that source. Use
 `asset_source(handle)` or `asset_label(handle)` when tools need to display or

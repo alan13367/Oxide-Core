@@ -19,9 +19,11 @@ global drain owner.
 `AssetServer` tracks typed path identity, optional sub-asset labels, async load
 status, and optional dependency paths. Use `load_labeled_path_async` when one
 container file produces multiple stable typed assets, such as meshes or
-materials from a glTF source. Importers can record secondary files with
-`set_asset_dependencies` or `add_asset_dependency`, then hot-reload systems can
-ask `handles_for_changed_path::<T>(path)` which typed assets should be
-reloaded when a source file changes. Use `reload_path_async` to load a
-replacement value into the existing handle so entities and resources keep stable
-asset references while `poll_loaded` updates `Assets<T>`.
+materials from a glTF source. Use `insert_loaded_labeled_path` when an importer
+has already parsed a container and wants to publish ready sub-assets into
+`Assets<T>` while preserving stable source identity. Importers can record
+secondary files with `set_asset_dependencies` or `add_asset_dependency`, then
+hot-reload systems can ask `handles_for_changed_path::<T>(path)` which typed
+assets should be reloaded when a source file changes. Use `reload_path_async` to
+load a replacement value into the existing handle so entities and resources keep
+stable asset references while `poll_loaded` updates `Assets<T>`.

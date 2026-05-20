@@ -146,6 +146,86 @@ impl AssetServer {
         self.load_labeled_path_async(path, None::<String>, |path, _label| loader(path))
     }
 
+    /// Registers an already-loaded typed asset under a source path.
+    ///
+    /// This is useful for synchronous importers and tools that parse a file
+    /// outside the asset server but still want stable path identity, status, and
+    /// hot-reload lookup. The asset value is inserted into `assets` immediately.
+    pub fn insert_loaded_path<T: 'static>(
+        &mut self,
+        assets: &mut Assets<T>,
+        path: impl Into<PathBuf>,
+        asset: T,
+    ) -> Handle<T> {
+        self.insert_loaded_labeled_path(assets, path, None::<String>, asset)
+    }
+
+    /// Registers an already-loaded typed sub-asset under a source path and label.
+    ///
+    /// If the same typed source identity already exists, its handle is reused
+    /// and any pending async load for that handle is cancelled locally. The
+    /// supplied value is inserted into `assets`, producing a normal add/modify
+    /// change record and revision.
+    pub fn insert_loaded_labeled_path<T: 'static>(
+        &mut self,
+        assets: &mut Assets<T>,
+        path: impl Into<PathBuf>,
+        label: Option<impl Into<String>>,
+        asset: T,
+    ) -> Handle<T> {
+        let handle = self.register_loaded_labeled_path::<T>(path, label);
+        assets.insert(handle, asset);
+        handle
+    }
+
+    /// Registers a loaded typed source path and returns its stable handle.
+    pub fn register_loaded_path<T: 'static>(&mut self, path: impl Into<PathBuf>) -> Handle<T> {
+        self.register_loaded_labeled_path(path, None::<String>)
+    }
+
+    /// Registers a loaded typed source path plus optional sub-asset label.
+    ///
+    /// This updates only server metadata. Use
+    /// [`insert_loaded_labeled_path`](Self::insert_loaded_labeled_path) when the
+    /// asset value should also be inserted into [`Assets<T>`].
+    pub fn register_loaded_labeled_path<T: 'static>(
+        &mut self,
+        path: impl Into<PathBuf>,
+        label: Option<impl Into<String>>,
+    ) -> Handle<T> {
+        let asset_path = AssetPath::with_label(path, label);
+        let type_id = TypeId::of::<T>();
+        let id = match self.paths.get(&(type_id, asset_path.clone())).copied() {
+            Some(id) => id,
+            None => {
+                let handle = self.allocate_handle::<T>();
+                let id = handle.id();
+                self.paths.insert((type_id, asset_path.clone()), id);
+                id
+            }
+        };
+
+        let _ = self.pending.remove(&id);
+        let (path, label) = asset_path.into_parts();
+        self.metadata.insert(
+            id,
+            AssetMetadata {
+                type_id,
+                path: Some(path),
+                label,
+                status: AssetLoadStatus::Loaded,
+                dependencies: self
+                    .metadata
+                    .get(&id)
+                    .filter(|metadata| metadata.type_id == type_id)
+                    .map(|metadata| metadata.dependencies.clone())
+                    .unwrap_or_default(),
+            },
+        );
+
+        Handle::new(id)
+    }
+
     /// Starts loading a typed asset from a source path plus optional sub-asset label.
     ///
     /// Labeled paths let importers publish multiple stable typed handles from
@@ -508,6 +588,23 @@ mod tests {
         server.poll_ready::<T>()
     }
 
+    fn poll_until_ready_count<T: Send + 'static>(
+        server: &mut AssetServer,
+        expected: usize,
+    ) -> Vec<Result<(Handle<T>, T), AssetServerError>> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut completed = Vec::new();
+        while Instant::now() < deadline && completed.len() < expected {
+            completed.extend(server.poll_ready::<T>());
+            if completed.len() >= expected {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        completed.extend(server.poll_ready::<T>());
+        completed
+    }
+
     fn poll_until_loaded<T: Send + 'static>(
         server: &mut AssetServer,
         assets: &mut Assets<T>,
@@ -603,7 +700,7 @@ mod tests {
         assert_eq!(source.path(), Path::new("assets/level.gltf"));
         assert_eq!(source.label(), Some("Mesh1"));
 
-        let ready = poll_until_ready::<String>(&mut server);
+        let ready = poll_until_ready_count::<String>(&mut server, 2);
         assert_eq!(ready.len(), 2);
     }
 
@@ -679,6 +776,77 @@ mod tests {
         assert_eq!(loaded.into_iter().next().unwrap().unwrap(), handle);
         assert_eq!(assets.get(&handle).map(String::as_str), Some("Mesh0:v2"));
         assert_eq!(server.asset_label(&handle), Some("Mesh0"));
+    }
+
+    #[test]
+    fn insert_loaded_labeled_path_registers_ready_sub_assets() {
+        let mut server = AssetServer::new();
+        let mut assets = Assets::<String>::new();
+
+        let mesh_0 = server.insert_loaded_labeled_path(
+            &mut assets,
+            "assets/level.gltf",
+            Some("Mesh0"),
+            "mesh-zero".to_string(),
+        );
+        let mesh_1 = server.insert_loaded_labeled_path(
+            &mut assets,
+            "assets/level.gltf",
+            Some("Mesh1"),
+            "mesh-one".to_string(),
+        );
+
+        assert_ne!(mesh_0, mesh_1);
+        assert_eq!(assets.get(&mesh_0).map(String::as_str), Some("mesh-zero"));
+        assert_eq!(assets.get(&mesh_1).map(String::as_str), Some("mesh-one"));
+        assert_eq!(assets.revision(&mesh_0), Some(1));
+        assert_eq!(server.asset_status(&mesh_0), Some(AssetLoadStatus::Loaded));
+        assert_eq!(server.asset_label(&mesh_0), Some("Mesh0"));
+        assert_eq!(
+            server.handles_for_changed_path::<String>("assets/level.gltf"),
+            vec![mesh_0, mesh_1]
+        );
+    }
+
+    #[test]
+    fn insert_loaded_labeled_path_reuses_handle_and_marks_modified() {
+        let mut server = AssetServer::new();
+        let mut assets = Assets::<u32>::new();
+
+        let handle =
+            server.insert_loaded_labeled_path(&mut assets, "assets/level.gltf", Some("Mesh0"), 1);
+        assert!(server.add_asset_dependency(&handle, "assets/level.bin"));
+
+        let reused =
+            server.insert_loaded_labeled_path(&mut assets, "assets/level.gltf", Some("Mesh0"), 2);
+
+        assert_eq!(reused, handle);
+        assert_eq!(assets.get(&handle), Some(&2));
+        assert_eq!(assets.revision(&handle), Some(2));
+        assert_eq!(
+            server.asset_dependencies(&handle).unwrap(),
+            &[PathBuf::from("assets/level.bin")]
+        );
+        assert_eq!(assets.changes().len(), 2);
+        assert_eq!(assets.changes()[1].kind, crate::AssetChangeKind::Modified);
+    }
+
+    #[test]
+    fn register_loaded_labeled_path_cancels_local_pending_load() {
+        let mut server = AssetServer::new();
+        let handle =
+            server.load_labeled_path_async("assets/level.gltf", Some("Mesh0"), |_path, _label| {
+                Ok::<_, AssetServerError>("async".to_string())
+            });
+        assert!(server.is_loading(&handle));
+
+        let registered =
+            server.register_loaded_labeled_path::<String>("assets/level.gltf", Some("Mesh0"));
+
+        assert_eq!(registered, handle);
+        assert!(!server.is_loading(&handle));
+        assert_eq!(server.asset_status(&handle), Some(AssetLoadStatus::Loaded));
+        assert!(poll_until_ready::<String>(&mut server).is_empty());
     }
 
     #[test]
