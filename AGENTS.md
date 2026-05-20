@@ -14,7 +14,7 @@ Oxide Core is a high-performance 3D game engine built from scratch in Rust. It i
 - **Diagnostics**: `FrameDiagnosticsPlugin` records `DELTA_SECONDS`, `FRAME_TIME_MS`, and `FPS` into the `Diagnostics` resource. `DefaultPlugins` installs it, and scene authoring UI uses it for the debug overlay.
 - **Math**: `glam` for efficient 3D linear algebra
 - **Physics**: in-house `oxide_physics` runtime for rigid body simulation
-- **Audio**: `oxide_audio` for Oxide-owned audio playback, WAV clips, generated tones, and software mixing over the `cpal` platform backend
+- **Audio**: `oxide_audio` for Oxide-owned audio playback, WAV clips, generated tones, lightweight spatial panning/attenuation, and software mixing over the `cpal` platform backend
 - **Windowing**: `winit` for cross-platform windowing and event handling
 - **Diagnostics**: `tracing` and `tracing-subscriber` for logging and instrumentation
 - **Serialization**: `serde` and `serde_json` for material, terrain, world, `.oxscene`, and `.oxmat` descriptors
@@ -28,7 +28,7 @@ The workspace is divided into several specialized crates:
 - **`oxide_renderer`**: A low-level abstraction over `wgpu`. It handles device/queue initialization, swapchain management (Surface), and provides primitives for meshes, pipelines, descriptor-driven materials, and shaders.
 - **`oxide_math`**: Provides math types and utilities, re-exporting `glam` types and adding engine-specific transforms and camera math.
 - **`oxide_asset`**: Generic typed handles, revision-tracked handle-indexed asset storage with added/modified/removed change records and per-consumer change cursors, async loading/reload primitives, load status, typed path identity, and dependency path metadata for hot reload/import invalidation. Renderer-specific caches and imported asset types should live in renderer or engine-facing crates.
-- **`oxide_audio`**: Audio playback, generated tones, WAV clip loading, software mixing, volume control, and sound instance handles. Engine integration lives in `oxide_engine::audio::AudioPlugin`.
+- **`oxide_audio`**: Audio playback, generated tones, WAV clip loading, software mixing, lightweight spatial panning/attenuation, volume control, and sound instance handles. Engine integration lives in `oxide_engine::audio::AudioPlugin`.
 - **`oxide_camera`**: Camera components, ordered `CameraRenderView` metadata, normalized `CameraViewport` rectangles, FPS controller system, and GPU camera buffer helpers. Engine integration is a compatibility re-export.
 - **`oxide_light`**: Ambient/directional/point light components plus GPU light uniform/buffer helpers. Engine integration is a compatibility re-export.
 - **`oxide_scene`**: Scene descriptors, versioned `.oxscene` documents, validation diagnostics, scene-declared dependency metadata and material registration, nested entity/prefab/sprite spawning with prefab instance overrides, renderable scene components, named `SceneMaterialLibrary` materials, camera/renderable `RenderLayers`, native RGBA/PNG sprites, terrain/world descriptors, transform hierarchy re-exports, scene gizmo line overlays, and the automatic `SceneRenderer`. Engine integration lives in `oxide_engine::scene::SceneRendererPlugin`.

@@ -23,7 +23,7 @@ pub use crate::asset::{
 };
 pub use crate::audio::{
     initialize_audio, Audio, AudioClip, AudioClipError, AudioError, AudioPlugin, AudioTone,
-    AudioWaveform, PlaySoundSettings, SoundInstanceId,
+    AudioWaveform, PlaySoundSettings, SoundInstanceId, SpatialSoundSettings,
 };
 pub use crate::camera::{
     camera_controller_system, CameraBuffer, CameraComponent, CameraController, CameraRenderView,

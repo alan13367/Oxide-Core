@@ -8,7 +8,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **ECS**: custom `oxide_ecs` runtime for entity-component-system architecture
 - **Math**: glam for fast 3D math operations
 - **Physics**: optional in-house 3D backend via `oxide_physics` (fixed-step simulation, spatial-hash broadphase, warm-started contact manifolds, collision layers/events, OBB cuboid support, ray/sphere cast queries)
-- **Audio**: `oxide_audio` playback, software mixing, generated tones, and WAV clip loading via an engine `AudioPlugin`
+- **Audio**: `oxide_audio` playback, lightweight spatial panning/attenuation, software mixing, generated tones, and WAV clip loading via an engine `AudioPlugin`
 - **Focused Runtime Crates**: camera, lighting, scene, UI, editor, audio, physics, asset, input, transform, renderer, and ECS code live outside the façade crate behind Oxide-owned APIs
 - **Materials + Shaders**: built-in shader pack plus custom WGSL (inline/file) with fallback support
 - **Native Asset Documents**: versioned `.oxscene` and `.oxmat` JSON wrappers with legacy descriptor loading support, nested scene entities, scene-declared dependencies/materials, registered sprite billboards, reusable scene prefabs with instance overrides, and descriptor validation diagnostics
@@ -567,7 +567,7 @@ See `docs/scene_authoring.md` for the automatic scene renderer and editor model.
 | `oxide_ecs` | Custom ECS runtime (world, entities, storage, resources, queries, events) |
 | `oxide_ecs_derive` | Proc-macro derives for ECS traits (`Component`, `Resource`, `ScheduleLabel`) |
 | `oxide_asset` | Generic asset handles, typed storage, and async asset loading primitives |
-| `oxide_audio` | Audio playback, generated tones, WAV clips, and software mixing |
+| `oxide_audio` | Audio playback, generated tones, WAV clips, spatial panning/attenuation, and software mixing |
 | `oxide_camera` | Camera components, FPS controller system, and GPU camera buffer helpers |
 | `oxide_light` | Light components, GPU light uniforms, and light buffer update helpers |
 | `oxide_scene` | Scene descriptors, sprites, terrain/world descriptors, renderable scene components, transform re-exports, and automatic scene renderer |

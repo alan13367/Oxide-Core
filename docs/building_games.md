@@ -83,7 +83,8 @@ the engine prelude for normal game code.
 - Use `RemovedComponents<T>` when a cache should remove entries for despawned
   entities or components removed from still-alive entities.
 - Use `AudioPlugin` for sound playback. It inserts an `Audio` resource from
-  `oxide_audio`, which can play generated tones or `AudioClip` WAV assets.
+  `oxide_audio`, which can play generated tones, spatial clips, or `AudioClip`
+  WAV assets.
 - Use `RuntimeUiPlugin` for HUD/menu data and `DevOverlayPlugin` for debug
   overlay state.
 - Use `Diagnostics` for lightweight runtime scalar metrics. `DefaultPlugins`
@@ -358,6 +359,22 @@ if let Some(audio) = world.get_resource::<Audio>() {
 }
 ```
 
+Spatial playback uses the audio listener position/right vector for distance
+attenuation and stereo panning:
+
+```rust
+if let Some(audio) = world.get_resource::<Audio>() {
+    audio.set_listener_position([player.x, player.y, player.z]);
+    audio.set_listener_right([camera_right.x, camera_right.y, camera_right.z]);
+    audio.play_spatial_tone(AudioTone::sine(220.0, 0.08, 0.2), [impact.x, impact.y, impact.z]);
+    audio.play_spatial_clip(
+        explosion_clip,
+        [impact.x, impact.y, impact.z],
+        PlaySoundSettings::default().with_volume(0.7),
+    );
+}
+```
+
 Inside systems, optional plugin resources can be declared directly:
 
 ```rust
@@ -539,7 +556,8 @@ The editor is implemented as normal engine data, not a separate tool runtime:
 - `GameFonts` stores the built-in bitmap font plus custom TrueType/OpenType
   fonts registered with `load_game_font` or `register_game_font_bytes`.
 - `AudioPlugin` installs `oxide_audio::Audio` for generated tones, WAV clips,
-  volume control, repeated playback, and stopping active sound instances.
+  lightweight spatial playback, volume control, repeated playback, and stopping
+  active sound instances.
 - `show_scene_editor_egui(world, ctx)` draws the hierarchy and inspector.
 - `show_scene_authoring_egui(world, ctx)` draws the scene editor plus runtime
   UI and debug overlay models.

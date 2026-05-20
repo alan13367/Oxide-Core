@@ -6,7 +6,7 @@ use crate::window::Window;
 
 pub use oxide_audio::{
     Audio, AudioClip, AudioClipError, AudioError, AudioTone, AudioWaveform, PlaySoundSettings,
-    SoundInstanceId,
+    SoundInstanceId, SpatialSoundSettings,
 };
 
 pub struct AudioPlugin;

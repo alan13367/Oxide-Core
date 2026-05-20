@@ -85,6 +85,7 @@ impl AudioTone {
 pub struct PlaySoundSettings {
     pub volume: f32,
     pub repeat: bool,
+    pub spatial: Option<SpatialSoundSettings>,
 }
 
 impl Default for PlaySoundSettings {
@@ -92,6 +93,7 @@ impl Default for PlaySoundSettings {
         Self {
             volume: 1.0,
             repeat: false,
+            spatial: None,
         }
     }
 }
@@ -104,6 +106,50 @@ impl PlaySoundSettings {
 
     pub fn repeating(mut self, repeat: bool) -> Self {
         self.repeat = repeat;
+        self
+    }
+
+    pub fn with_spatial(mut self, spatial: SpatialSoundSettings) -> Self {
+        self.spatial = Some(spatial);
+        self
+    }
+
+    pub fn at_position(mut self, position: [f32; 3]) -> Self {
+        self.spatial = Some(SpatialSoundSettings::new(position));
+        self
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpatialSoundSettings {
+    pub position: [f32; 3],
+    pub max_distance: f32,
+    pub rolloff: f32,
+    pub pan_strength: f32,
+}
+
+impl SpatialSoundSettings {
+    pub fn new(position: [f32; 3]) -> Self {
+        Self {
+            position,
+            max_distance: 32.0,
+            rolloff: 1.0,
+            pan_strength: 1.0,
+        }
+    }
+
+    pub fn with_max_distance(mut self, max_distance: f32) -> Self {
+        self.max_distance = max_distance.max(0.0);
+        self
+    }
+
+    pub fn with_rolloff(mut self, rolloff: f32) -> Self {
+        self.rolloff = rolloff.max(0.0);
+        self
+    }
+
+    pub fn with_pan_strength(mut self, pan_strength: f32) -> Self {
+        self.pan_strength = pan_strength.max(0.0);
         self
     }
 }
@@ -326,6 +372,7 @@ struct ActiveSound {
     step: f64,
     volume: f32,
     repeat: bool,
+    spatial: Option<SpatialSoundSettings>,
     finished: bool,
 }
 
@@ -346,6 +393,8 @@ struct MixerState {
     sample_rate: u32,
     channels: u16,
     master_volume: f32,
+    listener_position: [f32; 3],
+    listener_right: [f32; 3],
     next_id: u64,
 }
 
@@ -356,6 +405,8 @@ impl MixerState {
             sample_rate: sample_rate.max(1),
             channels: channels.max(1),
             master_volume: 1.0,
+            listener_position: [0.0, 0.0, 0.0],
+            listener_right: [1.0, 0.0, 0.0],
             next_id: 1,
         }
     }
@@ -371,9 +422,23 @@ impl MixerState {
             step,
             volume: settings.volume.max(0.0),
             repeat: settings.repeat,
+            spatial: settings.spatial,
             finished: false,
         });
         id
+    }
+
+    fn set_listener_position(&mut self, position: [f32; 3]) {
+        self.listener_position = position;
+    }
+
+    fn set_listener_right(&mut self, right: [f32; 3]) {
+        let length = vec3_length(right);
+        self.listener_right = if length > 0.0 {
+            [right[0] / length, right[1] / length, right[2] / length]
+        } else {
+            [1.0, 0.0, 0.0]
+        };
     }
 
     fn set_master_volume(&mut self, volume: f32) {
@@ -395,6 +460,8 @@ impl MixerState {
     fn mix_into(&mut self, output: &mut [f32]) {
         output.fill(0.0);
         let output_channels = self.channels as usize;
+        let listener_position = self.listener_position;
+        let listener_right = self.listener_right;
 
         for frame in output.chunks_mut(output_channels) {
             for sound in &mut self.active {
@@ -419,11 +486,22 @@ impl MixerState {
                 let source_frame = sound.cursor as usize;
                 let next_frame = (source_frame + 1).min(frame_count - 1);
                 let mix = (sound.cursor - source_frame as f64) as f32;
+                let spatial = sound
+                    .spatial
+                    .map(|spatial| spatial_gains(spatial, listener_position, listener_right))
+                    .unwrap_or([1.0, 1.0]);
 
                 for (channel, sample) in frame.iter_mut().enumerate() {
                     let a = sound.sample(source_frame, channel);
                     let b = sound.sample(next_frame, channel);
-                    *sample += (a + (b - a) * mix) * sound.volume * self.master_volume;
+                    let spatial_gain = match output_channels {
+                        1 => (spatial[0] + spatial[1]) * 0.5,
+                        _ if channel == 0 => spatial[0],
+                        _ if channel == 1 => spatial[1],
+                        _ => 1.0,
+                    };
+                    *sample +=
+                        (a + (b - a) * mix) * sound.volume * self.master_volume * spatial_gain;
                 }
 
                 sound.cursor += sound.step;
@@ -435,6 +513,37 @@ impl MixerState {
         }
         self.active.retain(|sound| !sound.finished);
     }
+}
+
+fn spatial_gains(
+    spatial: SpatialSoundSettings,
+    listener_position: [f32; 3],
+    listener_right: [f32; 3],
+) -> [f32; 2] {
+    let relative = [
+        spatial.position[0] - listener_position[0],
+        spatial.position[1] - listener_position[1],
+        spatial.position[2] - listener_position[2],
+    ];
+    let distance = vec3_length(relative);
+    let max_distance = spatial.max_distance.max(0.0001);
+    let attenuation = (1.0 - distance / max_distance)
+        .clamp(0.0, 1.0)
+        .powf(spatial.rolloff.max(0.0001));
+    let pan =
+        (vec3_dot(relative, listener_right) / max_distance).clamp(-1.0, 1.0) * spatial.pan_strength;
+    let pan = pan.clamp(-1.0, 1.0);
+    let left = ((1.0 - pan) * 0.5).sqrt() * attenuation;
+    let right = ((1.0 + pan) * 0.5).sqrt() * attenuation;
+    [left, right]
+}
+
+fn vec3_dot(left: [f32; 3], right: [f32; 3]) -> f32 {
+    left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
+}
+
+fn vec3_length(value: [f32; 3]) -> f32 {
+    vec3_dot(value, value).sqrt()
 }
 
 pub struct Audio {
@@ -503,6 +612,15 @@ impl Audio {
             .map(|mut mixer| mixer.play(clip.into(), settings))
     }
 
+    pub fn play_spatial_clip(
+        &self,
+        clip: impl Into<Arc<AudioClip>>,
+        position: [f32; 3],
+        settings: PlaySoundSettings,
+    ) -> Option<SoundInstanceId> {
+        self.play_clip(clip, settings.at_position(position))
+    }
+
     pub fn play_tone(&self, tone: AudioTone) -> Option<SoundInstanceId> {
         let clip = AudioClip::tone(
             tone.waveform,
@@ -513,9 +631,39 @@ impl Audio {
         self.play_clip(clip, PlaySoundSettings::default().with_volume(tone.volume))
     }
 
+    pub fn play_spatial_tone(
+        &self,
+        tone: AudioTone,
+        position: [f32; 3],
+    ) -> Option<SoundInstanceId> {
+        let clip = AudioClip::tone(
+            tone.waveform,
+            tone.frequency_hz,
+            tone.duration_secs,
+            self.output_sample_rate(),
+        );
+        self.play_spatial_clip(
+            clip,
+            position,
+            PlaySoundSettings::default().with_volume(tone.volume),
+        )
+    }
+
     pub fn set_master_volume(&self, volume: f32) {
         if let Ok(mut mixer) = self.mixer.lock() {
             mixer.set_master_volume(volume);
+        }
+    }
+
+    pub fn set_listener_position(&self, position: [f32; 3]) {
+        if let Ok(mut mixer) = self.mixer.lock() {
+            mixer.set_listener_position(position);
+        }
+    }
+
+    pub fn set_listener_right(&self, right: [f32; 3]) {
+        if let Ok(mut mixer) = self.mixer.lock() {
+            mixer.set_listener_right(right);
         }
     }
 
@@ -630,5 +778,57 @@ mod tests {
         assert_eq!(clip.channels(), 1);
         assert_eq!(clip.frame_count(), 2);
         assert!(clip.samples()[1] > 0.9);
+    }
+
+    #[test]
+    fn spatial_settings_pan_mono_sound_to_listener_right() {
+        let mut mixer = MixerState::new(48_000, 2);
+        let clip = Arc::new(AudioClip::new(vec![1.0, 1.0], 48_000, 1));
+        mixer.play(
+            clip,
+            PlaySoundSettings::default()
+                .with_spatial(SpatialSoundSettings::new([8.0, 0.0, 0.0]).with_max_distance(16.0)),
+        );
+
+        let mut output = vec![0.0; 4];
+        mixer.mix_into(&mut output);
+
+        assert!(output[1] > output[0]);
+        assert!(output[3] > output[2]);
+    }
+
+    #[test]
+    fn spatial_settings_attenuate_distant_sounds() {
+        let near = spatial_gains(
+            SpatialSoundSettings::new([1.0, 0.0, 0.0]).with_max_distance(16.0),
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+        );
+        let far = spatial_gains(
+            SpatialSoundSettings::new([12.0, 0.0, 0.0]).with_max_distance(16.0),
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+        );
+
+        assert!(near[0] > far[0]);
+        assert!(near[1] > far[1]);
+    }
+
+    #[test]
+    fn listener_right_controls_spatial_pan_axis() {
+        let mut mixer = MixerState::new(48_000, 2);
+        mixer.set_listener_right([0.0, 0.0, 1.0]);
+        let clip = Arc::new(AudioClip::new(vec![1.0], 48_000, 1));
+        mixer.play(
+            clip,
+            PlaySoundSettings::default()
+                .at_position([0.0, 0.0, 8.0])
+                .with_spatial(SpatialSoundSettings::new([0.0, 0.0, 8.0])),
+        );
+
+        let mut output = vec![0.0; 2];
+        mixer.mix_into(&mut output);
+
+        assert!(output[1] > output[0]);
     }
 }
