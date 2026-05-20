@@ -18,8 +18,8 @@ use oxide_renderer::wgpu;
 use oxide_transform::{is_visible, GlobalTransform, TransformComponent};
 
 use crate::{
-    MeshPrimitive, RenderMaterial, RenderMesh, SceneGizmoLines, SpriteAssets, SpriteBillboard,
-    SpriteDepthMode, SpriteFacing, SpriteId, Terrain,
+    MeshPrimitive, RenderLayers, RenderMaterial, RenderMesh, SceneGizmoLines, SpriteAssets,
+    SpriteBillboard, SpriteDepthMode, SpriteFacing, SpriteId, Terrain,
 };
 
 const SCENE_RENDERER_SHADER: &str = r#"
@@ -617,12 +617,15 @@ impl SceneRenderer {
 
     fn update_camera(&self, queue: &wgpu::Queue, world: &mut World, aspect_ratio: f32) {
         let camera = {
-            let mut query = world.query::<&CameraComponent>();
-            query.iter(world).next().copied()
+            let mut query = world.query::<(Entity, &CameraComponent)>();
+            query
+                .iter(world)
+                .next()
+                .map(|(entity, camera)| (entity, *camera))
         };
 
         let mut uniform = CameraUniform::new();
-        if let Some(camera) = camera {
+        if let Some((_entity, camera)) = camera {
             uniform.update(
                 camera.0.view_projection_matrix(aspect_ratio),
                 camera.0.position,
@@ -632,7 +635,8 @@ impl SceneRenderer {
     }
 
     fn prepare_instances(&mut self, device: &wgpu::Device, world: &mut World) {
-        let renderables = collect_renderables(world);
+        let camera_layers = active_camera_layers(world);
+        let renderables = collect_renderables(world, camera_layers);
         let mut cube_instances = BTreeMap::<MaterialBatchKey, Vec<SceneInstanceRaw>>::new();
         let mut sphere_instances =
             BTreeMap::<(u32, u32, MaterialBatchKey), Vec<SceneInstanceRaw>>::new();
@@ -702,7 +706,8 @@ impl SceneRenderer {
     }
 
     fn prepare_terrain(&mut self, device: &wgpu::Device, world: &mut World) {
-        let terrains = collect_terrains(world);
+        let camera_layers = active_camera_layers(world);
+        let terrains = collect_terrains(world, camera_layers);
         let active_entities: HashSet<Entity> = terrains.iter().map(|(entity, _)| *entity).collect();
         self.terrain_meshes
             .retain(|entity, _| active_entities.contains(entity));
@@ -743,7 +748,7 @@ impl SceneRenderer {
             return;
         };
 
-        let sprites = collect_sprites(world);
+        let sprites = collect_sprites(world, camera.layers);
         let mut batches = BTreeMap::<(SpriteDepthMode, SpriteId), Vec<SpriteInstanceRaw>>::new();
         for (entity, sprite) in sprites {
             if !self.sprite_textures.contains_key(&sprite.sprite) {
@@ -1192,29 +1197,38 @@ fn create_instance_batch<T: Pod>(
     })
 }
 
-fn collect_renderables(world: &mut World) -> Vec<(Entity, RenderMesh)> {
+fn collect_renderables(
+    world: &mut World,
+    camera_layers: RenderLayers,
+) -> Vec<(Entity, RenderMesh)> {
     let mut query = world.query::<(Entity, &RenderMesh)>();
     query
         .iter(world)
         .filter(|(entity, _)| is_visible(world, *entity))
+        .filter(|(entity, _)| render_layers(world, *entity).intersects(camera_layers))
         .map(|(entity, render_mesh)| (entity, render_mesh.clone()))
         .collect()
 }
 
-fn collect_terrains(world: &mut World) -> Vec<(Entity, Terrain)> {
+fn collect_terrains(world: &mut World, camera_layers: RenderLayers) -> Vec<(Entity, Terrain)> {
     let mut query = world.query::<(Entity, &Terrain)>();
     query
         .iter(world)
         .filter(|(entity, _)| is_visible(world, *entity))
+        .filter(|(entity, _)| render_layers(world, *entity).intersects(camera_layers))
         .map(|(entity, terrain)| (entity, terrain.clone()))
         .collect()
 }
 
-fn collect_sprites(world: &mut World) -> Vec<(Entity, SpriteBillboard)> {
+fn collect_sprites(
+    world: &mut World,
+    camera_layers: RenderLayers,
+) -> Vec<(Entity, SpriteBillboard)> {
     let mut query = world.query::<(Entity, &SpriteBillboard)>();
     query
         .iter(world)
         .filter(|(entity, _)| is_visible(world, *entity))
+        .filter(|(entity, _)| render_layers(world, *entity).intersects(camera_layers))
         .map(|(entity, sprite)| (entity, sprite.clone()))
         .collect()
 }
@@ -1232,12 +1246,16 @@ struct CameraFrame {
     position: Vec3,
     right: Vec3,
     up: Vec3,
+    layers: RenderLayers,
 }
 
 fn active_camera_frame(world: &mut World) -> Option<CameraFrame> {
-    let camera = {
-        let mut query = world.query::<&CameraComponent>();
-        query.iter(world).next().copied()?
+    let (entity, camera) = {
+        let mut query = world.query::<(Entity, &CameraComponent)>();
+        query
+            .iter(world)
+            .next()
+            .map(|(entity, camera)| (entity, *camera))?
     };
 
     let forward = camera.0.forward().normalize_or_zero();
@@ -1255,7 +1273,25 @@ fn active_camera_frame(world: &mut World) -> Option<CameraFrame> {
         position: camera.0.position,
         right,
         up,
+        layers: render_layers(world, entity),
     })
+}
+
+fn active_camera_layers(world: &mut World) -> RenderLayers {
+    let entity = {
+        let mut query = world.query::<(Entity, &CameraComponent)>();
+        query.iter(world).next().map(|(entity, _)| entity)
+    };
+    entity
+        .map(|entity| render_layers(world, entity))
+        .unwrap_or_default()
+}
+
+fn render_layers(world: &World, entity: Entity) -> RenderLayers {
+    world
+        .get::<RenderLayers>(entity)
+        .copied()
+        .unwrap_or_default()
 }
 
 fn sprite_axes(
@@ -1426,9 +1462,42 @@ mod tests {
             .id();
 
         visibility_propagate_system(&mut world);
-        let renderables = collect_renderables(&mut world);
+        let renderables = collect_renderables(&mut world, RenderLayers::default());
 
         assert!(renderables.iter().any(|(entity, _)| *entity == visible));
         assert!(!renderables.iter().any(|(entity, _)| *entity == hidden));
+    }
+
+    #[test]
+    fn collect_renderables_filters_by_camera_layers() {
+        let mut world = World::new();
+        let world_entity = world
+            .spawn(RenderMesh::new(
+                MeshPrimitive::Cube,
+                RenderMaterial::default(),
+            ))
+            .id();
+        let weapon_entity = world
+            .spawn((
+                RenderLayers::layer(1),
+                RenderMesh::new(MeshPrimitive::Cube, RenderMaterial::default()),
+            ))
+            .id();
+
+        let default_renderables = collect_renderables(&mut world, RenderLayers::default());
+        assert!(default_renderables
+            .iter()
+            .any(|(entity, _)| *entity == world_entity));
+        assert!(!default_renderables
+            .iter()
+            .any(|(entity, _)| *entity == weapon_entity));
+
+        let weapon_renderables = collect_renderables(&mut world, RenderLayers::layer(1));
+        assert!(!weapon_renderables
+            .iter()
+            .any(|(entity, _)| *entity == world_entity));
+        assert!(weapon_renderables
+            .iter()
+            .any(|(entity, _)| *entity == weapon_entity));
     }
 }

@@ -68,6 +68,8 @@ The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
 - `Terrain` stores a heightfield mesh with tint/material intent.
 - `Visibility` hides renderable entities and propagates through hierarchy
   children via `InheritedVisibility`.
+- `RenderLayers` filters meshes, terrain, and sprites against the active
+  camera's layer mask. Cameras and renderables default to layer `0`.
 - `TerrainDescriptor` and `SceneWorldDescriptor` describe terrain and blockout
   objects for code-first maps.
 - `SceneMaterialDescriptor` includes a `color` field used by the automatic
@@ -83,7 +85,8 @@ entities; the prefab contents are attached as children so translating, rotating,
 or scaling the instance root moves the whole reusable object.
 Scene entities also support a `visible` field; setting it to `false` spawns
 `Visibility::Hidden` and hides that entity's subtree from the scene renderer
-without despawning it.
+without despawning it. Add `render_layers` with a raw bit mask when authored
+entities should only render through cameras on matching layers.
 
 ```json
 {
@@ -98,6 +101,7 @@ without despawning it.
             "name": "Crate Base",
             "type": "mesh",
             "primitive": "cube",
+            "render_layers": 1,
             "children": [
               {
                 "name": "Crate Top",

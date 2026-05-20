@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    MeshPrimitive, RenderMaterial, RenderMesh, SpriteBillboard, SpriteDepthMode, SpriteFacing,
+    MeshPrimitive, RenderLayers, RenderMaterial, RenderMesh, SpriteBillboard, SpriteDepthMode,
+    SpriteFacing,
 };
 
 pub const OXSCENE_FORMAT: &str = "oxide.oxscene";
@@ -213,6 +214,9 @@ pub struct SceneEntityDescriptor {
     pub transform: SceneTransform,
     #[serde(default = "default_visible")]
     pub visible: bool,
+    /// Optional raw `RenderLayers` mask for camera/renderable filtering.
+    #[serde(default)]
+    pub render_layers: Option<u32>,
     #[serde(flatten)]
     pub kind: SceneEntityKind,
     /// Child entities attached under this entity with local transforms.
@@ -226,6 +230,7 @@ impl Default for SceneEntityDescriptor {
             name: None,
             transform: SceneTransform::default(),
             visible: true,
+            render_layers: None,
             kind: SceneEntityKind::Empty,
             children: Vec::new(),
         }
@@ -714,6 +719,9 @@ fn spawn_scene_entity(
     if !descriptor.visible {
         entity_mut.insert(Visibility::Hidden);
     }
+    if let Some(mask) = descriptor.render_layers {
+        entity_mut.insert(RenderLayers::from_mask(mask));
+    }
 
     let entity = entity_mut.id();
     if let Some(parent) = parent {
@@ -1109,6 +1117,30 @@ mod tests {
         let roots = spawn_scene_descriptor(&mut world, &scene);
         assert_eq!(roots.len(), 1);
         assert_eq!(world.get::<Visibility>(roots[0]), Some(&Visibility::Hidden));
+    }
+
+    #[test]
+    fn scene_entities_spawn_render_layer_masks() {
+        let scene = SceneDescriptor {
+            prefabs: Vec::new(),
+            entities: vec![SceneEntityDescriptor {
+                name: Some("Layered Mesh".to_string()),
+                render_layers: Some(RenderLayers::layer(2).mask()),
+                kind: SceneEntityKind::Mesh {
+                    primitive: SceneMeshPrimitive::Cube,
+                    material: SceneMaterialDescriptor::default(),
+                },
+                ..Default::default()
+            }],
+        };
+
+        let mut world = World::new();
+        let roots = spawn_scene_descriptor(&mut world, &scene);
+        assert_eq!(roots.len(), 1);
+        assert_eq!(
+            world.get::<RenderLayers>(roots[0]),
+            Some(&RenderLayers::layer(2))
+        );
     }
 
     #[test]

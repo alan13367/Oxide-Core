@@ -25,6 +25,8 @@ the engine prelude for normal game code.
   looping, or ping-pong playback. `DefaultPlugins` installs `AnimationPlugin`.
 - Use `Visibility::Hidden` to hide a renderable entity or hierarchy subtree
   without despawning it. `InheritedVisibility` is propagated automatically.
+- Use `RenderLayers` to filter meshes, terrain, and sprites per camera for
+  first-person weapons, debug-only helpers, editor overlays, or alternate views.
 - Use `ActionBindings<T>`, `ActionInput<T>`, and
   `sync_action_input_system::<T>` for semantic keyboard/mouse controls such as
   jump, fire, interact, or pause.
@@ -193,6 +195,24 @@ commands.spawn((
     TransformComponent::default(),
     RenderMesh::new(MeshPrimitive::Cube, RenderMaterial::default()),
     Visibility::Hidden,
+));
+```
+
+`RenderLayers` controls which camera sees a renderable entity. Entities and
+cameras default to layer `0`; a mesh, terrain, or sprite only renders when its
+layer mask intersects the active camera's layer mask:
+
+```rust
+commands.spawn((
+    CameraComponent::default(),
+    TransformComponent::default(),
+    RenderLayers::layer(1),
+));
+
+commands.spawn((
+    TransformComponent::default(),
+    RenderMesh::new(MeshPrimitive::Cube, RenderMaterial::default()),
+    RenderLayers::layer(1),
 ));
 ```
 
