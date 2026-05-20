@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::Path;
 
 use glam::{Quat, Vec2, Vec3};
-use oxide_camera::{CameraComponent, CameraController};
+use oxide_camera::{CameraComponent, CameraController, CameraRenderView};
 use oxide_ecs::prelude::{Entity, World};
 use oxide_ecs::{Component, Resource};
 use oxide_light::{AmbientLight, DirectionalLight, PointLight};
@@ -79,6 +79,9 @@ impl SceneDescriptor {
                     kind: SceneEntityKind::Camera {
                         target: [0.0, 0.0, 0.0],
                         controller: true,
+                        order: 0,
+                        active: true,
+                        clear_color: None,
                     },
                     children: Vec::new(),
                     ..Default::default()
@@ -246,6 +249,15 @@ pub enum SceneEntityKind {
         target: [f32; 3],
         #[serde(default)]
         controller: bool,
+        /// Lower values are preferred by the automatic scene renderer.
+        #[serde(default)]
+        order: i32,
+        /// Disabled cameras stay in the world but are ignored for rendering.
+        #[serde(default = "default_visible")]
+        active: bool,
+        /// Optional per-camera clear color used by the automatic renderer.
+        #[serde(default)]
+        clear_color: Option<[f64; 4]>,
     },
     AmbientLight {
         #[serde(default = "default_one_vec3")]
@@ -730,11 +742,24 @@ fn spawn_scene_entity(
 
     match &descriptor.kind {
         SceneEntityKind::Empty => {}
-        SceneEntityKind::Camera { target, controller } => {
+        SceneEntityKind::Camera {
+            target,
+            controller,
+            order,
+            active,
+            clear_color,
+        } => {
             let mut camera = CameraComponent::new();
             camera.0.position = transform.position;
             camera.0.target = vec3(*target);
-            world.entity_mut(entity).insert(camera);
+            world.entity_mut(entity).insert((
+                camera,
+                CameraRenderView {
+                    order: *order,
+                    is_active: *active,
+                    clear_color: *clear_color,
+                },
+            ));
             if *controller {
                 world.entity_mut(entity).insert(CameraController::new());
             }
@@ -1140,6 +1165,38 @@ mod tests {
         assert_eq!(
             world.get::<RenderLayers>(roots[0]),
             Some(&RenderLayers::layer(2))
+        );
+    }
+
+    #[test]
+    fn camera_entities_spawn_render_view_metadata() {
+        let scene = SceneDescriptor {
+            prefabs: Vec::new(),
+            entities: vec![SceneEntityDescriptor {
+                name: Some("Debug Camera".to_string()),
+                render_layers: Some(RenderLayers::layer(3).mask()),
+                kind: SceneEntityKind::Camera {
+                    target: [0.0, 1.0, 0.0],
+                    controller: false,
+                    order: -5,
+                    active: false,
+                    clear_color: Some([0.2, 0.3, 0.4, 1.0]),
+                },
+                ..Default::default()
+            }],
+        };
+
+        let mut world = World::new();
+        let roots = spawn_scene_descriptor(&mut world, &scene);
+        assert_eq!(roots.len(), 1);
+
+        let view = world.get::<CameraRenderView>(roots[0]).unwrap();
+        assert_eq!(view.order, -5);
+        assert!(!view.is_active);
+        assert_eq!(view.clear_color, Some([0.2, 0.3, 0.4, 1.0]));
+        assert_eq!(
+            world.get::<RenderLayers>(roots[0]),
+            Some(&RenderLayers::layer(3))
         );
     }
 

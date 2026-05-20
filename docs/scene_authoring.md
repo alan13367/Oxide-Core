@@ -70,6 +70,8 @@ The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
   children via `InheritedVisibility`.
 - `RenderLayers` filters meshes, terrain, and sprites against the active
   camera's layer mask. Cameras and renderables default to layer `0`.
+- `CameraRenderView` selects the active camera deterministically by `order`,
+  supports disabled cameras, and can override the scene clear color.
 - `TerrainDescriptor` and `SceneWorldDescriptor` describe terrain and blockout
   objects for code-first maps.
 - `SceneMaterialDescriptor` includes a `color` field used by the automatic
@@ -87,6 +89,8 @@ Scene entities also support a `visible` field; setting it to `false` spawns
 `Visibility::Hidden` and hides that entity's subtree from the scene renderer
 without despawning it. Add `render_layers` with a raw bit mask when authored
 entities should only render through cameras on matching layers.
+Camera entities also support `order`, `active`, and `clear_color` fields for
+view selection and clear behavior.
 
 ```json
 {
@@ -120,6 +124,14 @@ entities should only render through cameras on matching layers.
         "transform": { "position": [2.0, 0.0, -1.5] },
         "type": "prefab",
         "id": "crate_pair"
+      },
+      {
+        "name": "Gameplay Camera",
+        "type": "camera",
+        "order": -1,
+        "active": true,
+        "clear_color": [0.02, 0.03, 0.04, 1.0],
+        "render_layers": 1
       }
     ]
   }

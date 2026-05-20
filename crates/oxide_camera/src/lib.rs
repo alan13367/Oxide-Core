@@ -3,5 +3,7 @@
 mod controller;
 mod uniform;
 
-pub use controller::{camera_controller_system, CameraComponent, CameraController};
+pub use controller::{
+    camera_controller_system, CameraComponent, CameraController, CameraRenderView,
+};
 pub use uniform::{CameraBuffer, CameraUniform};

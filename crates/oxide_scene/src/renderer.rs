@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Quat, Vec2, Vec3};
-use oxide_camera::{CameraBuffer, CameraComponent, CameraUniform};
+use oxide_camera::{CameraBuffer, CameraComponent, CameraRenderView, CameraUniform};
 use oxide_ecs::entity::Entity;
 use oxide_ecs::world::World;
 use oxide_light::LightBuffer;
@@ -437,6 +437,7 @@ pub struct SceneRenderer {
     gizmo_vertex_buffer: wgpu::Buffer,
     gizmo_vertex_count: u32,
     clear_color: wgpu::Color,
+    frame_clear_color: wgpu::Color,
     stats: SceneRendererStats,
 }
 
@@ -500,6 +501,13 @@ impl SceneRenderer {
             mapped_at_creation: false,
         });
 
+        let clear_color = wgpu::Color {
+            r: 0.07,
+            g: 0.09,
+            b: 0.12,
+            a: 1.0,
+        };
+
         Self {
             camera_buffer,
             light_buffer,
@@ -522,18 +530,15 @@ impl SceneRenderer {
             gizmo_pipeline,
             gizmo_vertex_buffer,
             gizmo_vertex_count: 0,
-            clear_color: wgpu::Color {
-                r: 0.07,
-                g: 0.09,
-                b: 0.12,
-                a: 1.0,
-            },
+            clear_color,
+            frame_clear_color: clear_color,
             stats: SceneRendererStats::default(),
         }
     }
 
     pub fn set_clear_color(&mut self, clear_color: wgpu::Color) {
         self.clear_color = clear_color;
+        self.frame_clear_color = clear_color;
     }
 
     pub fn stats(&self) -> SceneRendererStats {
@@ -547,11 +552,16 @@ impl SceneRenderer {
         world: &mut World,
         aspect_ratio: f32,
     ) {
-        self.update_camera(queue, world, aspect_ratio);
+        let camera = active_camera_view(world);
+        self.frame_clear_color = camera
+            .and_then(|camera| camera.clear_color)
+            .unwrap_or(self.clear_color);
+        self.update_camera(queue, camera, aspect_ratio);
         self.light_buffer.update(device, queue, world);
-        self.prepare_instances(device, world);
-        self.prepare_terrain(device, world);
-        self.prepare_sprites(device, queue, world);
+        let camera_layers = camera.map(|camera| camera.layers).unwrap_or_default();
+        self.prepare_instances(device, world, camera_layers);
+        self.prepare_terrain(device, world, camera_layers);
+        self.prepare_sprites(device, queue, world, camera);
         self.prepare_gizmo_lines(queue, world);
     }
 
@@ -563,7 +573,7 @@ impl SceneRenderer {
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(self.clear_color),
+                    load: wgpu::LoadOp::Clear(self.frame_clear_color),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -615,27 +625,28 @@ impl SceneRenderer {
         self.depth_texture.resize(device, width, height);
     }
 
-    fn update_camera(&self, queue: &wgpu::Queue, world: &mut World, aspect_ratio: f32) {
-        let camera = {
-            let mut query = world.query::<(Entity, &CameraComponent)>();
-            query
-                .iter(world)
-                .next()
-                .map(|(entity, camera)| (entity, *camera))
-        };
-
+    fn update_camera(
+        &self,
+        queue: &wgpu::Queue,
+        camera: Option<PreparedCameraView>,
+        aspect_ratio: f32,
+    ) {
         let mut uniform = CameraUniform::new();
-        if let Some((_entity, camera)) = camera {
+        if let Some(camera) = camera {
             uniform.update(
-                camera.0.view_projection_matrix(aspect_ratio),
-                camera.0.position,
+                camera.camera.0.view_projection_matrix(aspect_ratio),
+                camera.camera.0.position,
             );
         }
         self.camera_buffer.update(queue, &uniform);
     }
 
-    fn prepare_instances(&mut self, device: &wgpu::Device, world: &mut World) {
-        let camera_layers = active_camera_layers(world);
+    fn prepare_instances(
+        &mut self,
+        device: &wgpu::Device,
+        world: &mut World,
+        camera_layers: RenderLayers,
+    ) {
         let renderables = collect_renderables(world, camera_layers);
         let mut cube_instances = BTreeMap::<MaterialBatchKey, Vec<SceneInstanceRaw>>::new();
         let mut sphere_instances =
@@ -705,8 +716,12 @@ impl SceneRenderer {
         };
     }
 
-    fn prepare_terrain(&mut self, device: &wgpu::Device, world: &mut World) {
-        let camera_layers = active_camera_layers(world);
+    fn prepare_terrain(
+        &mut self,
+        device: &wgpu::Device,
+        world: &mut World,
+        camera_layers: RenderLayers,
+    ) {
         let terrains = collect_terrains(world, camera_layers);
         let active_entities: HashSet<Entity> = terrains.iter().map(|(entity, _)| *entity).collect();
         self.terrain_meshes
@@ -740,11 +755,17 @@ impl SceneRenderer {
         }
     }
 
-    fn prepare_sprites(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, world: &mut World) {
+    fn prepare_sprites(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        world: &mut World,
+        camera: Option<PreparedCameraView>,
+    ) {
         self.sync_sprite_textures(device, queue, world);
         self.sprite_batches.clear();
 
-        let Some(camera) = active_camera_frame(world) else {
+        let Some(camera) = camera.and_then(CameraFrame::from_view) else {
             return;
         };
 
@@ -1242,6 +1263,13 @@ fn collect_sprite_ids(world: &mut World) -> Vec<SpriteId> {
 }
 
 #[derive(Clone, Copy)]
+struct PreparedCameraView {
+    camera: CameraComponent,
+    layers: RenderLayers,
+    clear_color: Option<wgpu::Color>,
+}
+
+#[derive(Clone, Copy)]
 struct CameraFrame {
     position: Vec3,
     right: Vec3,
@@ -1249,42 +1277,57 @@ struct CameraFrame {
     layers: RenderLayers,
 }
 
-fn active_camera_frame(world: &mut World) -> Option<CameraFrame> {
-    let (entity, camera) = {
+impl CameraFrame {
+    fn from_view(view: PreparedCameraView) -> Option<Self> {
+        let forward = view.camera.0.forward().normalize_or_zero();
+        if forward.length_squared() <= f32::EPSILON {
+            return None;
+        }
+        let mut up = view.camera.0.up.normalize_or_zero();
+        if up.length_squared() <= f32::EPSILON {
+            up = Vec3::Y;
+        }
+        let right = forward.cross(up).normalize_or_zero();
+        let up = right.cross(forward).normalize_or_zero();
+
+        Some(Self {
+            position: view.camera.0.position,
+            right,
+            up,
+            layers: view.layers,
+        })
+    }
+}
+
+fn active_camera_view(world: &mut World) -> Option<PreparedCameraView> {
+    let cameras = {
         let mut query = world.query::<(Entity, &CameraComponent)>();
         query
             .iter(world)
-            .next()
-            .map(|(entity, camera)| (entity, *camera))?
+            .map(|(entity, camera)| (entity, *camera))
+            .collect::<Vec<_>>()
     };
 
-    let forward = camera.0.forward().normalize_or_zero();
-    if forward.length_squared() <= f32::EPSILON {
-        return None;
-    }
-    let mut up = camera.0.up.normalize_or_zero();
-    if up.length_squared() <= f32::EPSILON {
-        up = Vec3::Y;
-    }
-    let right = forward.cross(up).normalize_or_zero();
-    let up = right.cross(forward).normalize_or_zero();
-
-    Some(CameraFrame {
-        position: camera.0.position,
-        right,
-        up,
-        layers: render_layers(world, entity),
-    })
-}
-
-fn active_camera_layers(world: &mut World) -> RenderLayers {
-    let entity = {
-        let mut query = world.query::<(Entity, &CameraComponent)>();
-        query.iter(world).next().map(|(entity, _)| entity)
-    };
-    entity
-        .map(|entity| render_layers(world, entity))
-        .unwrap_or_default()
+    cameras
+        .into_iter()
+        .filter_map(|(entity, camera)| {
+            let view = world
+                .get::<CameraRenderView>(entity)
+                .copied()
+                .unwrap_or_default();
+            if !view.is_active {
+                return None;
+            }
+            Some((entity, camera, view))
+        })
+        .min_by_key(|(entity, _, view)| (view.order, entity.index(), entity.generation()))
+        .map(|(entity, camera, view)| PreparedCameraView {
+            camera,
+            layers: render_layers(world, entity),
+            clear_color: view
+                .clear_color
+                .map(|[r, g, b, a]| wgpu::Color { r, g, b, a }),
+        })
 }
 
 fn render_layers(world: &World, entity: Entity) -> RenderLayers {
@@ -1499,5 +1542,39 @@ mod tests {
         assert!(weapon_renderables
             .iter()
             .any(|(entity, _)| *entity == weapon_entity));
+    }
+
+    #[test]
+    fn active_camera_view_uses_lowest_active_order() {
+        let mut world = World::new();
+        world.spawn((
+            CameraComponent::default(),
+            CameraRenderView::disabled().with_order(-10),
+            RenderLayers::layer(4),
+        ));
+        world.spawn((
+            CameraComponent::default(),
+            CameraRenderView::new().with_order(10),
+            RenderLayers::layer(1),
+        ));
+        world.spawn((
+            CameraComponent::default(),
+            CameraRenderView::new()
+                .with_order(-1)
+                .with_clear_color([0.1, 0.2, 0.3, 1.0]),
+            RenderLayers::layer(2),
+        ));
+
+        let camera = active_camera_view(&mut world).expect("active camera");
+        assert_eq!(camera.layers, RenderLayers::layer(2));
+        assert_eq!(
+            camera.clear_color,
+            Some(wgpu::Color {
+                r: 0.1,
+                g: 0.2,
+                b: 0.3,
+                a: 1.0,
+            })
+        );
     }
 }
