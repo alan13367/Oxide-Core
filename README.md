@@ -166,9 +166,13 @@ app::<MyApp>()
 
 Render pass labels can target `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
 `RENDER_PASS_APP_QUEUE`, and `RENDER_PASS_EGUI`. Use
-`add_render_pass_before`, `add_render_pass_after`, render pass sets, and
+`add_render_pass_before`, `add_render_pass_after`, render pass sets,
+`RenderPassSchedule::ordered_pass_infos`, and
 `RenderPassSchedule::ordering_diagnostics` for plugin-owned overlays,
 post-processing, capture passes, or debug drawing without copying the runner.
+Custom passes can be toggled with `disable_render_pass` /
+`enable_render_pass`, which keeps their metadata visible for editor/debug
+tooling while skipping the callback at frame time.
 
 ### 2. Register Native Sprites And Worlds
 

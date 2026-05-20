@@ -146,6 +146,12 @@ app::<MyGame>()
     .run();
 ```
 
+Tooling can inspect the resolved frame pipeline with
+`RenderPassSchedule::ordered_pass_infos`. Temporarily disable custom passes
+with `disable_render_pass` and restore them with `enable_render_pass`; disabled
+passes remain visible in `RenderPassSchedule::pass_infos` but are skipped by the
+runner.
+
 ```rust
 app::<MyGame>()
     .add_plugins(DefaultPlugins)

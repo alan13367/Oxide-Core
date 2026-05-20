@@ -33,13 +33,58 @@ struct RenderPassEntry {
     sets: Vec<String>,
     before: Vec<String>,
     after: Vec<String>,
+    enabled: bool,
     insertion_index: usize,
     callback: RenderPassEntryKind,
+}
+
+impl RenderPassEntry {
+    fn kind(&self) -> RenderPassKind {
+        match self.callback {
+            RenderPassEntryKind::Anchor(_) => RenderPassKind::Anchor,
+            RenderPassEntryKind::Pass(_) => RenderPassKind::Pass,
+        }
+    }
 }
 
 enum RenderPassEntryKind {
     Anchor(RenderPassAnchor),
     Pass(RenderPassFn),
+}
+
+/// Public kind metadata for a registered render pass schedule entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderPassKind {
+    /// Built-in runner anchor such as scene rendering, game text, app queue, or egui.
+    Anchor,
+    /// Plugin or app-provided render callback.
+    Pass,
+}
+
+/// Snapshot metadata for one render pass schedule entry.
+///
+/// Use this for tooling, diagnostics, editor UIs, or tests that need to inspect
+/// the frame pipeline without reaching into runner internals. The snapshot is
+/// owned so it can be logged or stored independently of the schedule.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RenderPassInfo {
+    /// Stable label used for ordering and diagnostics.
+    pub label: String,
+    /// Whether this entry is a built-in anchor or a custom callback.
+    pub kind: RenderPassKind,
+    /// Named ordering sets this entry belongs to.
+    pub sets: Vec<String>,
+    /// Labels or sets this entry should run before.
+    pub before: Vec<String>,
+    /// Labels or sets this entry should run after.
+    pub after: Vec<String>,
+    /// Whether this entry currently participates in execution.
+    pub enabled: bool,
+    /// Current resolved execution index when enabled.
+    ///
+    /// Disabled entries are retained for inspection but return `None` because
+    /// they are skipped by the runner.
+    pub order_index: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -222,6 +267,69 @@ impl RenderPassSchedule {
         self.entries.is_empty()
     }
 
+    /// Returns metadata for every registered entry in insertion order.
+    ///
+    /// Disabled custom passes remain visible here so editor/debug tooling can
+    /// present the complete pipeline even when parts of it are temporarily
+    /// skipped.
+    pub fn pass_infos(&self) -> Vec<RenderPassInfo> {
+        let mut order_lookup = HashMap::new();
+        for (order_index, entry_index) in self.run_order().into_iter().enumerate() {
+            order_lookup.insert(entry_index, order_index);
+        }
+
+        self.entries
+            .iter()
+            .enumerate()
+            .map(|(entry_index, entry)| RenderPassInfo {
+                label: entry.label.clone(),
+                kind: entry.kind(),
+                sets: entry.sets.clone(),
+                before: entry.before.clone(),
+                after: entry.after.clone(),
+                enabled: entry.enabled,
+                order_index: order_lookup.get(&entry_index).copied(),
+            })
+            .collect()
+    }
+
+    /// Returns metadata for enabled entries in resolved execution order.
+    pub fn ordered_pass_infos(&self) -> Vec<RenderPassInfo> {
+        let infos = self.pass_infos();
+        let mut ordered: Vec<_> = infos
+            .into_iter()
+            .filter(|info| info.order_index.is_some())
+            .collect();
+        ordered.sort_by_key(|info| info.order_index);
+        ordered
+    }
+
+    /// Sets enabled state for every custom pass matching `label`.
+    ///
+    /// Built-in anchors are intentionally not affected. Returns the number of
+    /// custom passes whose state was updated.
+    pub fn set_pass_enabled(&mut self, label: impl AsRef<str>, enabled: bool) -> usize {
+        let label = label.as_ref();
+        let mut updated = 0;
+        for entry in &mut self.entries {
+            if entry.label == label && matches!(entry.callback, RenderPassEntryKind::Pass(_)) {
+                entry.enabled = enabled;
+                updated += 1;
+            }
+        }
+        updated
+    }
+
+    /// Enables every custom pass matching `label`.
+    pub fn enable_pass(&mut self, label: impl AsRef<str>) -> usize {
+        self.set_pass_enabled(label, true)
+    }
+
+    /// Disables every custom pass matching `label` without unregistering it.
+    pub fn disable_pass(&mut self, label: impl AsRef<str>) -> usize {
+        self.set_pass_enabled(label, false)
+    }
+
     /// Returns non-fatal ordering diagnostics for this schedule.
     pub fn ordering_diagnostics(&self) -> Vec<RenderPassOrderDiagnostic> {
         let mut diagnostics = Vec::new();
@@ -314,6 +422,7 @@ impl RenderPassSchedule {
             sets: Vec::new(),
             before: Vec::new(),
             after: Vec::new(),
+            enabled: true,
             insertion_index: self.next_insertion_index,
             callback: RenderPassEntryKind::Anchor(anchor),
         });
@@ -331,6 +440,7 @@ impl RenderPassSchedule {
             sets: Vec::new(),
             before: Vec::new(),
             after: vec![after_label.into()],
+            enabled: true,
             insertion_index: self.next_insertion_index,
             callback: RenderPassEntryKind::Anchor(anchor),
         });
@@ -350,10 +460,18 @@ impl RenderPassSchedule {
             sets,
             before,
             after,
+            enabled: true,
             insertion_index: self.next_insertion_index,
             callback: RenderPassEntryKind::Pass(pass),
         });
         self.next_insertion_index += 1;
+    }
+
+    fn is_entry_enabled(&self, index: usize) -> bool {
+        self.entries
+            .get(index)
+            .map(|entry| entry.enabled)
+            .unwrap_or(false)
     }
 
     fn target_lookup(&self) -> HashMap<&str, Vec<usize>> {
@@ -373,10 +491,16 @@ impl RenderPassSchedule {
         let mut seen = HashSet::new();
 
         for (index, entry) in self.entries.iter().enumerate() {
+            if !entry.enabled {
+                continue;
+            }
             for before in &entry.before {
                 if let Some(targets) = lookup.get(before.as_str()) {
                     for &target in targets {
-                        if index != target && seen.insert((index, target)) {
+                        if index != target
+                            && self.is_entry_enabled(target)
+                            && seen.insert((index, target))
+                        {
                             edges.push((index, target));
                         }
                     }
@@ -385,7 +509,10 @@ impl RenderPassSchedule {
             for after in &entry.after {
                 if let Some(sources) = lookup.get(after.as_str()) {
                     for &source in sources {
-                        if source != index && seen.insert((source, index)) {
+                        if source != index
+                            && self.is_entry_enabled(source)
+                            && seen.insert((source, index))
+                        {
                             edges.push((source, index));
                         }
                     }
@@ -400,8 +527,14 @@ impl RenderPassSchedule {
             for before in &constraint.before {
                 if let Some(targets) = lookup.get(before.as_str()) {
                     for &member in members {
+                        if !self.is_entry_enabled(member) {
+                            continue;
+                        }
                         for &target in targets {
-                            if member != target && seen.insert((member, target)) {
+                            if member != target
+                                && self.is_entry_enabled(target)
+                                && seen.insert((member, target))
+                            {
                                 edges.push((member, target));
                             }
                         }
@@ -411,8 +544,14 @@ impl RenderPassSchedule {
             for after in &constraint.after {
                 if let Some(sources) = lookup.get(after.as_str()) {
                     for &source in sources {
+                        if !self.is_entry_enabled(source) {
+                            continue;
+                        }
                         for &member in members {
-                            if source != member && seen.insert((source, member)) {
+                            if source != member
+                                && self.is_entry_enabled(member)
+                                && seen.insert((source, member))
+                            {
                                 edges.push((source, member));
                             }
                         }
@@ -425,15 +564,16 @@ impl RenderPassSchedule {
     }
 
     fn has_ordering_cycle(&self) -> bool {
-        self.topological_order(false).len() != self.entries.len()
+        self.topological_order(false).len() != self.enabled_entry_count()
     }
 
     fn run_order(&self) -> Vec<usize> {
         let mut order = self.topological_order(true);
-        if order.len() < self.entries.len() {
+        let enabled_entry_count = self.enabled_entry_count();
+        if order.len() < enabled_entry_count {
             let emitted: HashSet<_> = order.iter().copied().collect();
             let mut remaining: Vec<_> = (0..self.entries.len())
-                .filter(|index| !emitted.contains(index))
+                .filter(|index| self.entries[*index].enabled && !emitted.contains(index))
                 .collect();
             remaining.sort_by_key(|index| self.entries[*index].insertion_index);
             order.extend(remaining);
@@ -455,7 +595,9 @@ impl RenderPassSchedule {
 
         loop {
             let next = (0..self.entries.len())
-                .filter(|index| !emitted[*index] && incoming[*index] == 0)
+                .filter(|index| {
+                    self.entries[*index].enabled && !emitted[*index] && incoming[*index] == 0
+                })
                 .min_by_key(|index| self.entries[*index].insertion_index);
 
             let Some(index) = next else {
@@ -470,6 +612,10 @@ impl RenderPassSchedule {
         }
 
         order
+    }
+
+    fn enabled_entry_count(&self) -> usize {
+        self.entries.iter().filter(|entry| entry.enabled).count()
     }
 }
 
@@ -557,5 +703,65 @@ mod tests {
         assert!(diagnostics
             .iter()
             .any(|diagnostic| diagnostic.message.contains("missing before-label")));
+    }
+
+    #[test]
+    fn render_pass_schedule_can_disable_custom_passes_without_removing_metadata() {
+        let mut schedule = RenderPassSchedule::new();
+        schedule.add_pass("custom.overlay", noop_pass);
+
+        assert_eq!(schedule.disable_pass("custom.overlay"), 1);
+        assert_eq!(
+            schedule.ordered_labels(),
+            vec![
+                RENDER_PASS_SCENE,
+                RENDER_PASS_GAME_TEXT,
+                RENDER_PASS_APP_QUEUE,
+                RENDER_PASS_EGUI,
+            ]
+        );
+
+        let info = schedule
+            .pass_infos()
+            .into_iter()
+            .find(|info| info.label == "custom.overlay")
+            .expect("custom pass info should remain available");
+        assert_eq!(info.kind, RenderPassKind::Pass);
+        assert!(!info.enabled);
+        assert_eq!(info.order_index, None);
+
+        assert_eq!(schedule.enable_pass("custom.overlay"), 1);
+        assert!(schedule.ordered_labels().contains(&"custom.overlay"));
+    }
+
+    #[test]
+    fn render_pass_schedule_reports_ordered_pass_infos() {
+        let mut schedule = RenderPassSchedule::new();
+        schedule.add_pass_to_set("capture.depth", "capture", noop_pass);
+        schedule.configure_set_before("capture", RENDER_PASS_EGUI);
+
+        let ordered_infos = schedule.ordered_pass_infos();
+        let labels: Vec<_> = ordered_infos
+            .iter()
+            .map(|info| info.label.as_str())
+            .collect();
+
+        assert_eq!(
+            labels,
+            vec![
+                RENDER_PASS_SCENE,
+                RENDER_PASS_GAME_TEXT,
+                "capture.depth",
+                RENDER_PASS_APP_QUEUE,
+                RENDER_PASS_EGUI,
+            ]
+        );
+        assert_eq!(
+            ordered_infos
+                .iter()
+                .find(|info| info.label == "capture.depth")
+                .map(|info| info.sets.as_slice()),
+            Some(&["capture".to_string()][..])
+        );
     }
 }

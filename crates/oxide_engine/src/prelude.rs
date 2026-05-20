@@ -55,8 +55,9 @@ pub use crate::light::{
     MAX_POINT_LIGHTS,
 };
 pub use crate::render::{
-    RenderFrame, RenderPassFn, RenderPassOrderDiagnostic, RenderPassSchedule,
-    RENDER_PASS_APP_QUEUE, RENDER_PASS_EGUI, RENDER_PASS_GAME_TEXT, RENDER_PASS_SCENE,
+    RenderFrame, RenderPassFn, RenderPassInfo, RenderPassKind, RenderPassOrderDiagnostic,
+    RenderPassSchedule, RENDER_PASS_APP_QUEUE, RENDER_PASS_EGUI, RENDER_PASS_GAME_TEXT,
+    RENDER_PASS_SCENE,
 };
 #[cfg(feature = "image-import")]
 pub use crate::scene::SpriteImageLoadError;

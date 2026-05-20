@@ -703,6 +703,58 @@ impl<T: App> AppBuilder<T> {
         self
     }
 
+    /// Returns the current render pass schedule.
+    pub fn render_pass_schedule(&self) -> &RenderPassSchedule {
+        &self.systems.render_passes
+    }
+
+    /// Returns the current render pass schedule for direct configuration.
+    pub fn render_pass_schedule_mut(&mut self) -> &mut RenderPassSchedule {
+        &mut self.systems.render_passes
+    }
+
+    /// Sets enabled state for every custom render pass matching `label`.
+    ///
+    /// Built-in anchors are retained and always enabled.
+    pub fn set_render_pass_enabled(mut self, label: impl AsRef<str>, enabled: bool) -> Self {
+        self.set_render_pass_enabled_mut(label, enabled);
+        self
+    }
+
+    /// Mutable form of [`Self::set_render_pass_enabled`].
+    pub fn set_render_pass_enabled_mut(
+        &mut self,
+        label: impl AsRef<str>,
+        enabled: bool,
+    ) -> &mut Self {
+        self.systems.render_passes.set_pass_enabled(label, enabled);
+        self
+    }
+
+    /// Enables every custom render pass matching `label`.
+    pub fn enable_render_pass(mut self, label: impl AsRef<str>) -> Self {
+        self.enable_render_pass_mut(label);
+        self
+    }
+
+    /// Mutable form of [`Self::enable_render_pass`].
+    pub fn enable_render_pass_mut(&mut self, label: impl AsRef<str>) -> &mut Self {
+        self.systems.render_passes.enable_pass(label);
+        self
+    }
+
+    /// Disables every custom render pass matching `label` without unregistering it.
+    pub fn disable_render_pass(mut self, label: impl AsRef<str>) -> Self {
+        self.disable_render_pass_mut(label);
+        self
+    }
+
+    /// Mutable form of [`Self::disable_render_pass`].
+    pub fn disable_render_pass_mut(&mut self, label: impl AsRef<str>) -> &mut Self {
+        self.systems.render_passes.disable_pass(label);
+        self
+    }
+
     /// Adds a render pass to a named render ordering set.
     pub fn add_render_pass_to_set(
         mut self,
