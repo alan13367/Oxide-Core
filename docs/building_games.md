@@ -42,7 +42,7 @@ the engine prelude for normal game code.
   scene editor resource, runtime UI model, and debug overlay.
 - Use `SceneDescriptor` for small data-driven scenes, child hierarchies,
   registered sprite billboards, and reusable prefabs that can be instantiated
-  from `.oxscene` data or Rust.
+  from `.oxscene` data or Rust with per-instance child overrides.
 - Use `reload_oxscene_path` or `reload_changed_oxscenes` when development tools
   should refresh native scene descriptors while preserving handles.
 - Use `RenderMesh` to describe render intent without storing GPU buffers in
@@ -296,6 +296,24 @@ Prefab instances are normal entities with `TransformComponent`,
 `GlobalTransform`, and `Children`, so gameplay systems and the editor can move
 or inspect them like any other hierarchy root.
 
+`.oxscene` prefab entities can provide `overrides` for named prefab children
+when an instance needs a different child transform, visibility, render layer, or
+mesh material:
+
+```json
+{
+  "type": "prefab",
+  "id": "crate_pair",
+  "overrides": [
+    {
+      "path": "Crate Base/Crate Top",
+      "transform": { "position": [0.0, 1.35, 0.0] },
+      "material": { "ref": "crate_unlit", "color": [1.0, 0.45, 0.35, 1.0] }
+    }
+  ]
+}
+```
+
 Frame metrics are available through the shared diagnostics resource:
 
 ```rust
@@ -316,7 +334,7 @@ Editor and import tooling should call `SceneDescriptor::validate()` before
 publishing authored data. Native `.oxscene` loads also validate automatically,
 and `try_spawn_scene_descriptor` / `try_spawn_scene_prefab` return structured
 diagnostics for missing prefab IDs, duplicate IDs, recursive prefab graphs, and
-empty sprite IDs without partially spawning invalid content.
+invalid prefab overrides without partially spawning invalid content.
 
 During development, native scene descriptors can be reloaded in place:
 

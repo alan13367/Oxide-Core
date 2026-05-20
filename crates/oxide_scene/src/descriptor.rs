@@ -320,7 +320,33 @@ pub enum SceneEntityKind {
     Prefab {
         /// Prefab ID from `SceneDescriptor::prefabs`.
         id: String,
+        /// Per-instance changes applied to named prefab entities before spawn.
+        #[serde(default)]
+        overrides: Vec<ScenePrefabOverride>,
     },
+}
+
+/// Per-instance changes for an entity inside a prefab instance.
+///
+/// `path` is a slash-separated path of prefab entity names, such as
+/// `"Crate Base/Crate Top"`. Unnamed entities can be targeted by their sibling
+/// index segment, such as `"#0/#1"`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ScenePrefabOverride {
+    /// Slash-separated path to a prefab entity.
+    pub path: String,
+    /// Optional replacement local transform.
+    #[serde(default)]
+    pub transform: Option<SceneTransform>,
+    /// Optional replacement visibility flag.
+    #[serde(default)]
+    pub visible: Option<bool>,
+    /// Optional replacement render layer mask.
+    #[serde(default)]
+    pub render_layers: Option<u32>,
+    /// Optional replacement mesh material.
+    #[serde(default)]
+    pub material: Option<SceneMaterialDescriptor>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -752,7 +778,10 @@ fn spawn_scene_prefab_unchecked(
     let descriptor = SceneEntityDescriptor {
         name: Some(prefab_id.clone()),
         transform,
-        kind: SceneEntityKind::Prefab { id: prefab_id },
+        kind: SceneEntityKind::Prefab {
+            id: prefab_id,
+            overrides: Vec::new(),
+        },
         children: Vec::new(),
         ..Default::default()
     };
@@ -862,12 +891,18 @@ fn spawn_scene_entity(
                 .entity_mut(entity)
                 .insert(SpriteBillboard::from(sprite.clone()));
         }
-        SceneEntityKind::Prefab { id } => {
+        SceneEntityKind::Prefab { id, overrides } => {
             if !prefab_stack.iter().any(|active| active == id) {
                 if let Some(prefab) = prefabs.get(id.as_str()) {
                     prefab_stack.push(id.clone());
-                    for child in &prefab.entities {
-                        spawn_scene_entity(world, child, prefabs, Some(entity), prefab_stack);
+                    for (index, child) in prefab.entities.iter().enumerate() {
+                        let child = descriptor_with_prefab_overrides(
+                            child,
+                            index,
+                            "",
+                            overrides.as_slice(),
+                        );
+                        spawn_scene_entity(world, &child, prefabs, Some(entity), prefab_stack);
                     }
                     let _ = prefab_stack.pop();
                 }
@@ -882,6 +917,77 @@ fn spawn_scene_entity(
     entity
 }
 
+fn descriptor_with_prefab_overrides(
+    descriptor: &SceneEntityDescriptor,
+    index: usize,
+    parent_path: &str,
+    overrides: &[ScenePrefabOverride],
+) -> SceneEntityDescriptor {
+    let path = prefab_entity_path(descriptor, index, parent_path);
+    let mut descriptor = descriptor.clone();
+    for prefab_override in overrides {
+        if normalize_prefab_override_path(&prefab_override.path) == path {
+            apply_prefab_override(&mut descriptor, prefab_override);
+        }
+    }
+    descriptor.children = descriptor
+        .children
+        .iter()
+        .enumerate()
+        .map(|(index, child)| {
+            descriptor_with_prefab_overrides(child, index, path.as_str(), overrides)
+        })
+        .collect();
+    descriptor
+}
+
+fn apply_prefab_override(
+    descriptor: &mut SceneEntityDescriptor,
+    prefab_override: &ScenePrefabOverride,
+) {
+    if let Some(transform) = prefab_override.transform {
+        descriptor.transform = transform;
+    }
+    if let Some(visible) = prefab_override.visible {
+        descriptor.visible = visible;
+    }
+    if let Some(render_layers) = prefab_override.render_layers {
+        descriptor.render_layers = Some(render_layers);
+    }
+    if let (SceneEntityKind::Mesh { material, .. }, Some(override_material)) =
+        (&mut descriptor.kind, &prefab_override.material)
+    {
+        *material = override_material.clone();
+    }
+}
+
+fn prefab_entity_path(
+    descriptor: &SceneEntityDescriptor,
+    index: usize,
+    parent_path: &str,
+) -> String {
+    let segment = descriptor
+        .name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+        .map(str::trim)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("#{index}"));
+    if parent_path.is_empty() {
+        segment
+    } else {
+        format!("{parent_path}/{segment}")
+    }
+}
+
+fn normalize_prefab_override_path(path: &str) -> String {
+    path.split('/')
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 fn validate_scene_entity(
     descriptor: &SceneEntityDescriptor,
     path: String,
@@ -890,7 +996,7 @@ fn validate_scene_entity(
     diagnostics: &mut Vec<SceneValidationDiagnostic>,
 ) {
     match &descriptor.kind {
-        SceneEntityKind::Prefab { id } => {
+        SceneEntityKind::Prefab { id, overrides } => {
             if id.trim().is_empty() {
                 diagnostics.push(SceneValidationDiagnostic::new(
                     format!("{path}.id"),
@@ -912,6 +1018,7 @@ fn validate_scene_entity(
                     format!("recursive prefab reference '{chain}'"),
                 ));
             } else if let Some(prefab) = prefabs.get(id.as_str()) {
+                validate_prefab_overrides(path.as_str(), prefab, overrides, diagnostics);
                 prefab_stack.push(id.clone());
                 for (index, entity) in prefab.entities.iter().enumerate() {
                     validate_scene_entity(
@@ -942,6 +1049,77 @@ fn validate_scene_entity(
             prefab_stack,
             diagnostics,
         );
+    }
+}
+
+fn validate_prefab_overrides(
+    path: &str,
+    prefab: &ScenePrefabDescriptor,
+    overrides: &[ScenePrefabOverride],
+    diagnostics: &mut Vec<SceneValidationDiagnostic>,
+) {
+    let mut targets = HashMap::new();
+    let mut duplicate_targets = HashSet::new();
+    for (index, entity) in prefab.entities.iter().enumerate() {
+        collect_prefab_override_targets(entity, index, "", &mut targets, &mut duplicate_targets);
+    }
+
+    let mut seen_overrides = HashSet::new();
+    for (index, prefab_override) in overrides.iter().enumerate() {
+        let override_path = normalize_prefab_override_path(&prefab_override.path);
+        let diagnostic_path = format!("{path}.overrides[{index}].path");
+        if override_path.is_empty() {
+            diagnostics.push(SceneValidationDiagnostic::new(
+                diagnostic_path,
+                "prefab override paths must not be empty",
+            ));
+            continue;
+        }
+        if !seen_overrides.insert(override_path.clone()) {
+            diagnostics.push(SceneValidationDiagnostic::new(
+                diagnostic_path,
+                format!("duplicate prefab override path '{override_path}'"),
+            ));
+            continue;
+        }
+        if duplicate_targets.contains(override_path.as_str()) {
+            diagnostics.push(SceneValidationDiagnostic::new(
+                diagnostic_path,
+                format!("ambiguous prefab override path '{override_path}'"),
+            ));
+            continue;
+        }
+        let Some(target) = targets.get(override_path.as_str()) else {
+            diagnostics.push(SceneValidationDiagnostic::new(
+                diagnostic_path,
+                format!("unknown prefab override path '{override_path}'"),
+            ));
+            continue;
+        };
+        if prefab_override.material.is_some()
+            && !matches!(target.kind, SceneEntityKind::Mesh { .. })
+        {
+            diagnostics.push(SceneValidationDiagnostic::new(
+                format!("{path}.overrides[{index}].material"),
+                format!("material overrides require a mesh target '{override_path}'"),
+            ));
+        }
+    }
+}
+
+fn collect_prefab_override_targets<'a>(
+    descriptor: &'a SceneEntityDescriptor,
+    index: usize,
+    parent_path: &str,
+    targets: &mut HashMap<String, &'a SceneEntityDescriptor>,
+    duplicate_targets: &mut HashSet<String>,
+) {
+    let path = prefab_entity_path(descriptor, index, parent_path);
+    if targets.insert(path.clone(), descriptor).is_some() {
+        duplicate_targets.insert(path.clone());
+    }
+    for (index, child) in descriptor.children.iter().enumerate() {
+        collect_prefab_override_targets(child, index, path.as_str(), targets, duplicate_targets);
     }
 }
 
@@ -1146,6 +1324,45 @@ mod tests {
             SceneTransform::default()
         )
         .is_none());
+    }
+
+    #[test]
+    fn prefab_instance_overrides_apply_to_named_prefab_entities() {
+        let mut scene = prefab_test_scene();
+        scene.entities[0].kind = SceneEntityKind::Prefab {
+            id: "crate_pair".to_string(),
+            overrides: vec![ScenePrefabOverride {
+                path: "Crate Base/Crate Top".to_string(),
+                transform: Some(SceneTransform::from_position([0.0, 2.0, 0.0])),
+                visible: Some(false),
+                render_layers: Some(RenderLayers::layer(4).mask()),
+                material: Some(SceneMaterialDescriptor {
+                    reference: Some("materials.highlight".to_string()),
+                    color: [1.0, 0.2, 0.1, 1.0],
+                    ..Default::default()
+                }),
+            }],
+        };
+
+        let mut world = World::new();
+        let roots = spawn_scene_descriptor(&mut world, &scene);
+        let base = child_named(&world, roots[0], "Crate Base").unwrap();
+        let top = child_named(&world, base, "Crate Top").unwrap();
+
+        let transform = world.get::<TransformComponent>(top).unwrap();
+        assert_eq!(transform.transform.position, Vec3::new(0.0, 2.0, 0.0));
+        assert_eq!(world.get::<Visibility>(top), Some(&Visibility::Hidden));
+        assert_eq!(
+            world.get::<RenderLayers>(top),
+            Some(&RenderLayers::layer(4))
+        );
+
+        let mesh = world.get::<RenderMesh>(top).unwrap();
+        assert!(matches!(
+            &mesh.material,
+            RenderMaterial::Named(name) if name == "materials.highlight"
+        ));
+        assert_eq!(mesh.tint, [1.0, 0.2, 0.1, 1.0]);
     }
 
     #[test]
@@ -1367,6 +1584,71 @@ mod tests {
     }
 
     #[test]
+    fn load_scene_descriptor_accepts_prefab_instance_overrides() {
+        let path = temp_path("prefab_override_scene", "oxscene");
+        fs::write(
+            &path,
+            r#"{
+                "format": "oxide.oxscene",
+                "version": 1,
+                "scene": {
+                    "prefabs": [
+                        {
+                            "id": "crate_pair",
+                            "entities": [
+                                {
+                                    "name": "Crate Base",
+                                    "type": "mesh",
+                                    "children": [
+                                        {
+                                            "name": "Crate Top",
+                                            "type": "mesh"
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ],
+                    "entities": [
+                        {
+                            "type": "prefab",
+                            "id": "crate_pair",
+                            "overrides": [
+                                {
+                                    "path": "Crate Base/Crate Top",
+                                    "visible": false,
+                                    "material": {
+                                        "ref": "materials.highlight",
+                                        "color": [1.0, 0.2, 0.1, 1.0]
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let scene = load_scene_descriptor(&path).unwrap();
+        let SceneEntityKind::Prefab { id, overrides } = &scene.entities[0].kind else {
+            panic!("expected prefab entity");
+        };
+        assert_eq!(id, "crate_pair");
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[0].path, "Crate Base/Crate Top");
+        assert_eq!(overrides[0].visible, Some(false));
+        assert!(matches!(
+            overrides[0]
+                .material
+                .as_ref()
+                .and_then(|material| material.reference.as_deref()),
+            Some("materials.highlight")
+        ));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn scene_validation_reports_prefab_authoring_errors() {
         let scene = SceneDescriptor {
             materials: Vec::new(),
@@ -1376,6 +1658,7 @@ mod tests {
                     entities: vec![SceneEntityDescriptor {
                         kind: SceneEntityKind::Prefab {
                             id: "loop".to_string(),
+                            overrides: Vec::new(),
                         },
                         ..Default::default()
                     }],
@@ -1389,6 +1672,7 @@ mod tests {
                 SceneEntityDescriptor {
                     kind: SceneEntityKind::Prefab {
                         id: "missing".to_string(),
+                        overrides: Vec::new(),
                     },
                     ..Default::default()
                 },
@@ -1425,6 +1709,64 @@ mod tests {
         assert!(messages
             .iter()
             .any(|message| message.contains("sprite IDs must not be empty")));
+    }
+
+    #[test]
+    fn scene_validation_reports_prefab_override_authoring_errors() {
+        let scene = SceneDescriptor {
+            materials: Vec::new(),
+            prefabs: vec![ScenePrefabDescriptor {
+                id: "crate_pair".to_string(),
+                entities: vec![
+                    SceneEntityDescriptor {
+                        name: Some("Duplicate".to_string()),
+                        kind: SceneEntityKind::Empty,
+                        ..Default::default()
+                    },
+                    SceneEntityDescriptor {
+                        name: Some("Duplicate".to_string()),
+                        kind: SceneEntityKind::Empty,
+                        ..Default::default()
+                    },
+                ],
+            }],
+            entities: vec![SceneEntityDescriptor {
+                kind: SceneEntityKind::Prefab {
+                    id: "crate_pair".to_string(),
+                    overrides: vec![
+                        ScenePrefabOverride {
+                            path: "missing".to_string(),
+                            ..Default::default()
+                        },
+                        ScenePrefabOverride {
+                            path: "Duplicate".to_string(),
+                            ..Default::default()
+                        },
+                        ScenePrefabOverride {
+                            path: String::new(),
+                            ..Default::default()
+                        },
+                    ],
+                },
+                ..Default::default()
+            }],
+        };
+
+        let err = scene.validate().unwrap_err();
+        let messages: Vec<_> = err
+            .diagnostics()
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("unknown prefab override path")));
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("ambiguous prefab override path")));
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("prefab override paths must not be empty")));
     }
 
     #[test]
@@ -1497,6 +1839,7 @@ mod tests {
             entities: vec![SceneEntityDescriptor {
                 kind: SceneEntityKind::Prefab {
                     id: "missing".to_string(),
+                    overrides: Vec::new(),
                 },
                 ..Default::default()
             }],
@@ -1542,6 +1885,7 @@ mod tests {
                 transform: SceneTransform::from_position([2.0, 0.0, -3.0]),
                 kind: SceneEntityKind::Prefab {
                     id: "crate_pair".to_string(),
+                    overrides: Vec::new(),
                 },
                 children: vec![SceneEntityDescriptor {
                     name: Some("Instance Marker".to_string()),
@@ -1551,6 +1895,13 @@ mod tests {
                 ..Default::default()
             }],
         }
+    }
+
+    fn child_named(world: &World, parent: Entity, name: &str) -> Option<Entity> {
+        world
+            .get::<oxide_transform::Children>(parent)?
+            .iter()
+            .find(|entity| world.get::<Name>(*entity).map(|n| n.0.as_str()) == Some(name))
     }
 
     fn temp_path(name: &str, extension: &str) -> std::path::PathBuf {

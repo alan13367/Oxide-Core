@@ -83,7 +83,20 @@
           "position": [2.0, 0.0, -1.5]
         },
         "type": "prefab",
-        "id": "crate_pair"
+        "id": "crate_pair",
+        "overrides": [
+          {
+            "path": "Crate Base/Crate Top",
+            "transform": {
+              "position": [0.0, 1.35, 0.0],
+              "scale": [0.75, 0.75, 0.75]
+            },
+            "material": {
+              "ref": "crate_unlit",
+              "color": [1.0, 0.45, 0.35, 1.0]
+            }
+          }
+        ]
       },
       {
         "name": "Sprite Marker",

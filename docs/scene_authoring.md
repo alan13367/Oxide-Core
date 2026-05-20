@@ -87,7 +87,10 @@ The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
 `.oxscene` files can define reusable prefabs in `SceneDescriptor::prefabs` and
 instantiate them with `"type": "prefab"`. Prefab instances spawn as empty root
 entities; the prefab contents are attached as children so translating, rotating,
-or scaling the instance root moves the whole reusable object.
+or scaling the instance root moves the whole reusable object. Instances can also
+provide `overrides` for named prefab children when one placement needs a
+different child transform, visibility, render layer, or mesh material without
+duplicating the whole prefab.
 Scene entities also support a `visible` field; setting it to `false` spawns
 `Visibility::Hidden` and hides that entity's subtree from the scene renderer
 without despawning it. Add `render_layers` with a raw bit mask when authored
@@ -136,7 +139,14 @@ existing color target so viewports can be composited.
         "name": "Crate Pair",
         "transform": { "position": [2.0, 0.0, -1.5] },
         "type": "prefab",
-        "id": "crate_pair"
+        "id": "crate_pair",
+        "overrides": [
+          {
+            "path": "Crate Base/Crate Top",
+            "transform": { "position": [0.0, 1.35, 0.0] },
+            "material": { "ref": "crate_lit", "color": [1.0, 0.45, 0.35, 1.0] }
+          }
+        ]
       },
       {
         "name": "Gameplay Camera",
@@ -164,9 +174,13 @@ let root = try_spawn_scene_prefab(
 ```
 
 Native scene loads validate authored data before publishing the descriptor.
+Prefab override paths use slash-separated entity names, such as
+`"Crate Base/Crate Top"`. Unnamed prefab entities can be addressed by sibling
+index segments such as `"#0/#1"`.
+
 Validation reports duplicate material names, empty material names, duplicate
-prefab IDs, missing prefab references, recursive prefab graphs, and empty
-sprite IDs with descriptor paths such as
+prefab IDs, missing prefab references, recursive prefab graphs, invalid prefab
+override paths, and empty sprite IDs with descriptor paths such as
 `entities[0].children[1].id`. Use `SceneDescriptor::validate()` in editor tools
 and `try_spawn_scene_descriptor` / `try_spawn_scene_prefab` when code wants
 structured `SceneValidationError` diagnostics before mutating the world.
