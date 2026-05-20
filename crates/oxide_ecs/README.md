@@ -81,3 +81,5 @@ initialize, or remove resources at the end of the current schedule/stage.
 `Commands::spawn` reserves and returns an entity ID immediately, so systems can
 queue follow-up component edits or store that ID in events/resources while the
 spawned components remain deferred until commands are applied.
+Use `Commands::send_event` to defer event emission with other command-buffered
+world edits; it creates the matching `Events<T>` resource on apply if needed.

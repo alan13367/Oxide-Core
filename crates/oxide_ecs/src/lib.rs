@@ -698,6 +698,23 @@ pub mod system {
             });
         }
 
+        /// Queues an event to be sent when deferred commands are applied.
+        ///
+        /// If the matching [`Events<T>`] resource is missing, it is inserted
+        /// before the event is sent. The event becomes visible after the
+        /// current schedule/stage applies its command queue.
+        pub fn send_event<T>(&mut self, event: T)
+        where
+            T: 'static,
+        {
+            unsafe { &mut *self.queue }.push(move |world| {
+                if !world.contains_resource::<Events<T>>() {
+                    world.insert_resource(Events::<T>::new());
+                }
+                world.resource_mut::<Events<T>>().send(event);
+            });
+        }
+
         /// Queues an arbitrary world mutation for the end of the current schedule/stage.
         ///
         /// This is intended for higher-level engine crates that need to expose
@@ -3651,6 +3668,11 @@ mod tests {
         stats.cursor_reads += 1;
     }
 
+    fn command_send_events(mut commands: Commands) {
+        commands.send_event(4_i32);
+        commands.send_event(5_i32);
+    }
+
     #[test]
     fn event_system_params_write_read_and_drain() {
         let mut world = World::new();
@@ -3709,6 +3731,39 @@ mod tests {
         world.resource_mut::<Events<i32>>().send(5);
         cursor_system.run(&mut world, &mut queue);
         assert_eq!(world.resource::<EventStats>().cursor_sum, 11);
+    }
+
+    #[test]
+    fn commands_can_defer_events_and_create_event_resource() {
+        let mut world = World::new();
+        let mut queue = CommandQueue::new();
+
+        command_send_events
+            .into_system()
+            .run(&mut world, &mut queue);
+        assert!(!world.contains_resource::<Events<i32>>());
+
+        queue.apply(&mut world);
+
+        let events = world.resource::<Events<i32>>();
+        assert_eq!(events.iter().copied().collect::<Vec<_>>(), vec![4, 5]);
+    }
+
+    #[test]
+    fn schedule_command_events_are_visible_on_next_schedule_run() {
+        let mut world = World::new();
+        world.insert_resource(Events::<i32>::default());
+        world.insert_resource(EventStats::default());
+
+        let mut schedule = Schedule::new();
+        schedule.add_system(command_send_events);
+        schedule.add_system(read_events);
+
+        schedule.run(&mut world);
+        assert_eq!(world.resource::<EventStats>().read_sum, 0);
+
+        schedule.run(&mut world);
+        assert_eq!(world.resource::<EventStats>().read_sum, 9);
     }
 
     fn spawn_with_commands(mut commands: Commands) {

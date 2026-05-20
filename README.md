@@ -239,6 +239,11 @@ fn fire(mut writer: EventWriter<GameEvent>) {
     writer.send(GameEvent::Pulse);
 }
 
+fn spawn_and_fire(mut commands: Commands) {
+    let entity = commands.spawn(Player::default()).id();
+    commands.send_event(GameEvent::Spawned(entity));
+}
+
 fn handle(mut events: EventDrain<GameEvent>) {
     for event in events.drain() {
         // consume event
@@ -251,6 +256,10 @@ fn observe_new(mut events: EventCursor<GameEvent>) {
     }
 }
 ```
+
+Events sent through `Commands::send_event` are deferred with other commands and
+become visible after the current schedule or app stage applies its command
+queue.
 
 Optional resources are supported both in app code and system parameters. Use
 `World::get_resource` / `get_resource_mut` outside systems, or

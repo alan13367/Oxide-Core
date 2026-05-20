@@ -350,17 +350,21 @@ fn observe_pulses(mut pulses: EventCursor<GameEvent>, mut state: ResMut<GameStat
 ```
 
 Deferred commands can reserve entity IDs immediately while keeping component
-insertion deferred until the current stage completes:
+insertion and event emission deferred until the current stage completes:
 
 ```rust
-fn spawn_pickup(mut commands: Commands, mut events: EventWriter<GameEvent>) {
+fn spawn_pickup(mut commands: Commands) {
     let pickup = commands
         .spawn(Pickup)
         .insert(TransformComponent::from_position(Vec3::new(0.0, 1.0, -4.0)))
         .id();
-    events.send(GameEvent::PickupSpawned(pickup));
+    commands.send_event(GameEvent::PickupSpawned(pickup));
 }
 ```
+
+Use `EventWriter<T>` when the event should be visible immediately to later
+systems in the same schedule run. Use `Commands::send_event` when event
+emission belongs with other deferred world edits.
 
 Import `HierarchyCommandsExt` from the engine prelude to queue hierarchy edits
 through the same command buffer:
