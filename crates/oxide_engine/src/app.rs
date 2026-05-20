@@ -18,7 +18,9 @@ use crate::asset::{
     material_descriptor_asset_system, AssetServerResource, MaterialAssets, MaterialDescriptorAssets,
 };
 use crate::diagnostics::FrameDiagnosticsPlugin;
-use crate::ecs::{FixedTime, IntoSystem, RendererResource, Schedule, Time, WindowResource, World};
+use crate::ecs::{
+    AppExit, FixedTime, IntoSystem, RendererResource, Schedule, Time, WindowResource, World,
+};
 use crate::event::{window_event_to_engine, EngineEvent};
 use crate::input::{KeyboardInput, MouseInput};
 use crate::render::{
@@ -894,12 +896,23 @@ impl<T: App> AppRunner<T> {
             if !app.world().contains_resource::<Window>() {
                 app.world_mut().insert_resource(window.clone());
             }
+            if !app.world().contains_resource::<AppExit>() {
+                app.world_mut().insert_resource(AppExit::default());
+            }
             for startup in &self.systems.startup {
                 startup(app.world_mut(), window);
             }
             RunnerSystems::run(&mut self.systems.startup_schedule, app.world_mut());
             self.startup_ran = true;
         }
+    }
+
+    fn exit_requested(&self) -> bool {
+        self.app
+            .as_ref()
+            .and_then(|app| app.world().get_resource::<AppExit>())
+            .map(AppExit::is_requested)
+            .unwrap_or(false)
     }
 }
 
@@ -913,6 +926,9 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
             self.app = Some(app);
             self.window = Some(window);
             self.run_startup_systems();
+            if self.exit_requested() {
+                event_loop.exit();
+            }
         }
     }
 
@@ -967,6 +983,10 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
                 app.on_event(engine_event);
             }
         }
+        if self.exit_requested() {
+            event_loop.exit();
+            return;
+        }
 
         match event {
             WindowEvent::CloseRequested => {
@@ -992,6 +1012,15 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
                     app.update();
                     RunnerSystems::run(&mut self.systems.update, app.world_mut());
                     RunnerSystems::run(&mut self.systems.post_update, app.world_mut());
+                    if app
+                        .world()
+                        .get_resource::<AppExit>()
+                        .map(AppExit::is_requested)
+                        .unwrap_or(false)
+                    {
+                        event_loop.exit();
+                        return;
+                    }
                     if let Some(window) = self.window.as_ref() {
                         sync_cursor_capture(
                             app.world_mut(),
@@ -1337,5 +1366,27 @@ mod tests {
         RunnerSystems::run(&mut builder.systems.startup_schedule, &mut world);
 
         assert_eq!(world.resource::<StartupCounter>().0, 2);
+    }
+
+    #[test]
+    fn app_runner_detects_system_requested_exit() {
+        let mut runner = AppRunner::<TestApp>::with_systems(RunnerSystems::default());
+        runner.app = Some(TestApp {
+            world: World::new(),
+        });
+        assert!(!runner.exit_requested());
+
+        let app = runner.app.as_mut().unwrap();
+        app.world_mut().insert_resource(AppExit::default());
+        assert!(!runner.exit_requested());
+
+        runner
+            .app
+            .as_mut()
+            .unwrap()
+            .world_mut()
+            .resource_mut::<AppExit>()
+            .request_with_code(2);
+        assert!(runner.exit_requested());
     }
 }

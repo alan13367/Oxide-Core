@@ -5,6 +5,42 @@ use std::time::{Duration, Instant};
 use oxide_ecs::Resource;
 use oxide_renderer::Renderer;
 
+/// App lifecycle control resource used by systems to request a clean shutdown.
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct AppExit {
+    requested: bool,
+    code: i32,
+}
+
+impl AppExit {
+    /// Requests a successful app shutdown.
+    pub fn request(&mut self) {
+        self.request_with_code(0);
+    }
+
+    /// Requests app shutdown with an application-defined exit code.
+    pub fn request_with_code(&mut self, code: i32) {
+        self.requested = true;
+        self.code = code;
+    }
+
+    /// Clears a pending shutdown request.
+    pub fn clear(&mut self) {
+        self.requested = false;
+        self.code = 0;
+    }
+
+    /// Returns true when a system has requested app shutdown.
+    pub fn is_requested(&self) -> bool {
+        self.requested
+    }
+
+    /// Returns the application-defined exit code.
+    pub fn code(&self) -> i32 {
+        self.code
+    }
+}
+
 #[derive(Resource)]
 pub struct Time {
     pub delta: Duration,
@@ -173,6 +209,25 @@ impl WindowResource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_exit_tracks_requested_code_and_clear() {
+        let mut exit = AppExit::default();
+        assert!(!exit.is_requested());
+        assert_eq!(exit.code(), 0);
+
+        exit.request();
+        assert!(exit.is_requested());
+        assert_eq!(exit.code(), 0);
+
+        exit.request_with_code(7);
+        assert!(exit.is_requested());
+        assert_eq!(exit.code(), 7);
+
+        exit.clear();
+        assert!(!exit.is_requested());
+        assert_eq!(exit.code(), 0);
+    }
 
     #[test]
     fn fixed_time_accumulates_until_step_is_due() {

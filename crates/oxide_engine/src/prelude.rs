@@ -34,7 +34,7 @@ pub use crate::ecs::{
     Resource, ResourceCursor, Schedule, ScheduleOrderDiagnostic, State, StateTransition, System,
     SystemParam, TypeKind, TypeMetadata, TypeRegistry, With, Without, World,
 };
-pub use crate::ecs::{FixedTime, RendererResource, Time, WindowResource};
+pub use crate::ecs::{AppExit, FixedTime, RendererResource, Time, WindowResource};
 pub use crate::event::{window_event_to_engine, EngineEvent};
 pub use crate::input::{
     sync_action_input_system, sync_axis_input_system, ActionBindings, ActionInput, AxisBindings,

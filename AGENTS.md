@@ -75,7 +75,8 @@ Engine users implement the `App` trait found in `oxide_engine::app`. The lifecyc
 4. `update`: Process input and update ECS world state (called every frame). Hot-reloading checks can be performed here using `AssetWatcher`.
 5. `extract` / `prepare` / `queue`: Render pipeline stages executed each frame.
 6. `on_event`: Respond to windowing or system events.
-7. If `SceneRendererPlugin` is installed, the runner automatically prepares and queues `RenderMesh`, `Terrain`, `SpriteBillboard`, and scene gizmo lines at the `RENDER_PASS_SCENE` anchor, then resizes the scene depth texture. If `GameUiPlugin` is installed, it also installs the native overlay text renderer and `GameFonts` registry used by `GameUi` text widgets. If `EguiPlugin` is installed, the runner owns egui input, frame execution, and rendering at `RENDER_PASS_EGUI`. Egui authoring panels are hidden by default and toggled with `F1`.
+7. Systems can request clean shutdown through the `AppExit` resource inserted by the runner before startup.
+8. If `SceneRendererPlugin` is installed, the runner automatically prepares and queues `RenderMesh`, `Terrain`, `SpriteBillboard`, and scene gizmo lines at the `RENDER_PASS_SCENE` anchor, then resizes the scene depth texture. If `GameUiPlugin` is installed, it also installs the native overlay text renderer and `GameFonts` registry used by `GameUi` text widgets. If `EguiPlugin` is installed, the runner owns egui input, frame execution, and rendering at `RENDER_PASS_EGUI`. Egui authoring panels are hidden by default and toggled with `F1`.
 
 ### ECS Runtime Notes
 - **Deferred Commands**: `Commands` queue entity/resource world mutations and optional `send_event` emissions, then apply them at stage boundaries.

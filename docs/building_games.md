@@ -17,6 +17,8 @@ the engine prelude for normal game code.
   and `Plugin::is_unique` only when a plugin is intentionally repeatable.
 - Use `AppStage::Startup` for one-shot setup systems that should use normal
   ECS params such as `Commands`, `ResMut<T>`, or `Res<Window>`.
+- Use `ResMut<AppExit>` when a system needs to request a clean application
+  shutdown after save, menu, or fatal-error handling.
 - Use `AppStage::FixedUpdate` and `FixedTime` for deterministic gameplay
   systems that should advance at a stable tick rate independent of rendering.
 - Use `ActionBindings<T>`, `ActionInput<T>`, and
@@ -145,6 +147,17 @@ fn setup_level(mut commands: Commands, window: Res<Window>) {
 
     let size = window.size();
     tracing::info!("window size: {}x{}", size.width, size.height);
+}
+```
+
+`AppExit` is inserted by the runner before startup systems. Any startup or frame
+system can request shutdown:
+
+```rust
+fn quit_from_menu(mut exit: ResMut<AppExit>, input: Res<ActionInput<MenuAction>>) {
+    if input.just_pressed(MenuAction::Quit) {
+        exit.request();
+    }
 }
 ```
 

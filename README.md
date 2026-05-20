@@ -29,6 +29,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Type Metadata Registry**: lightweight component/resource type identity for editor, scene, and tooling workflows without a reflection dependency
 - **System Ordering**: Label systems, group them into sets, and register before/after constraints inside app stages or standalone schedules
 - **Startup Schedule**: Register one-shot setup systems with normal ECS params through `AppStage::Startup`
+- **System-Requested Exit**: Gameplay and tooling systems can request clean shutdown through the `AppExit` resource
 - **Action + Axis Input Mapping**: Bind game-defined actions and movement axes to keyboard/mouse triggers with `ActionBindings`, `AxisBindings`, and sync systems
 - **Fixed-Step Scheduling**: Use `AppStage::FixedUpdate` with `FixedTime` for deterministic gameplay ticks inside the normal app runner
 - **Runtime Diagnostics**: `DefaultPlugins` records frame time, FPS, and delta seconds into a lightweight `Diagnostics` resource used by tooling and the dev overlay
