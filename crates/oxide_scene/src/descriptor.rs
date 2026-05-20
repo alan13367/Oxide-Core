@@ -10,7 +10,7 @@ use oxide_ecs::prelude::{Entity, World};
 use oxide_ecs::{Component, Resource};
 use oxide_light::{AmbientLight, DirectionalLight, PointLight};
 use oxide_math::transform::Transform;
-use oxide_transform::{attach_child, GlobalTransform, TransformComponent};
+use oxide_transform::{attach_child, GlobalTransform, TransformComponent, Visibility};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -80,6 +80,7 @@ impl SceneDescriptor {
                         controller: true,
                     },
                     children: Vec::new(),
+                    ..Default::default()
                 },
                 SceneEntityDescriptor {
                     name: Some("Key Light".to_string()),
@@ -210,6 +211,8 @@ pub struct SceneEntityDescriptor {
     pub name: Option<String>,
     #[serde(default)]
     pub transform: SceneTransform,
+    #[serde(default = "default_visible")]
+    pub visible: bool,
     #[serde(flatten)]
     pub kind: SceneEntityKind,
     /// Child entities attached under this entity with local transforms.
@@ -222,6 +225,7 @@ impl Default for SceneEntityDescriptor {
         Self {
             name: None,
             transform: SceneTransform::default(),
+            visible: true,
             kind: SceneEntityKind::Empty,
             children: Vec::new(),
         }
@@ -680,6 +684,7 @@ fn spawn_scene_prefab_unchecked(
         transform,
         kind: SceneEntityKind::Prefab { id: prefab_id },
         children: Vec::new(),
+        ..Default::default()
     };
     Some(spawn_scene_entity(
         world,
@@ -705,6 +710,9 @@ fn spawn_scene_entity(
 
     if let Some(name) = &descriptor.name {
         entity_mut.insert(Name(name.clone()));
+    }
+    if !descriptor.visible {
+        entity_mut.insert(Visibility::Hidden);
     }
 
     let entity = entity_mut.id();
@@ -854,6 +862,10 @@ fn vec3(value: [f32; 3]) -> Vec3 {
 
 fn default_rotation() -> [f32; 4] {
     [0.0, 0.0, 0.0, 1.0]
+}
+
+fn default_visible() -> bool {
+    true
 }
 
 fn default_one_vec3() -> [f32; 3] {
@@ -1079,6 +1091,27 @@ mod tests {
     }
 
     #[test]
+    fn hidden_scene_entities_spawn_visibility_component() {
+        let scene = SceneDescriptor {
+            prefabs: Vec::new(),
+            entities: vec![SceneEntityDescriptor {
+                name: Some("Hidden Mesh".to_string()),
+                visible: false,
+                kind: SceneEntityKind::Mesh {
+                    primitive: SceneMeshPrimitive::Cube,
+                    material: SceneMaterialDescriptor::default(),
+                },
+                ..Default::default()
+            }],
+        };
+
+        let mut world = World::new();
+        let roots = spawn_scene_descriptor(&mut world, &scene);
+        assert_eq!(roots.len(), 1);
+        assert_eq!(world.get::<Visibility>(roots[0]), Some(&Visibility::Hidden));
+    }
+
+    #[test]
     fn load_scene_descriptor_accepts_sprite_entity_defaults() {
         let path = temp_path("sprite_scene", "oxscene");
         fs::write(
@@ -1241,6 +1274,7 @@ mod tests {
                             material: SceneMaterialDescriptor::default(),
                         },
                         children: Vec::new(),
+                        ..Default::default()
                     }],
                     ..Default::default()
                 }],
@@ -1256,6 +1290,7 @@ mod tests {
                     kind: SceneEntityKind::Empty,
                     ..Default::default()
                 }],
+                ..Default::default()
             }],
         }
     }

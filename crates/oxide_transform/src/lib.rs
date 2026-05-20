@@ -1,5 +1,7 @@
 //! Transform and hierarchy components plus propagation utilities.
 
+use std::collections::HashSet;
+
 use glam::{Mat4, Quat, Vec3};
 use oxide_ecs::entity::Entity;
 use oxide_ecs::system::Commands;
@@ -47,6 +49,44 @@ impl Children {
 pub struct TransformComponent {
     pub transform: Transform,
     pub is_dirty: bool,
+}
+
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Visibility {
+    #[default]
+    Visible,
+    Hidden,
+}
+
+impl Visibility {
+    pub fn is_visible(self) -> bool {
+        matches!(self, Self::Visible)
+    }
+}
+
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InheritedVisibility {
+    pub visible: bool,
+}
+
+impl Default for InheritedVisibility {
+    fn default() -> Self {
+        Self { visible: true }
+    }
+}
+
+impl InheritedVisibility {
+    pub fn visible() -> Self {
+        Self { visible: true }
+    }
+
+    pub fn hidden() -> Self {
+        Self { visible: false }
+    }
+
+    pub fn is_visible(self) -> bool {
+        self.visible
+    }
 }
 
 impl Default for TransformComponent {
@@ -253,6 +293,83 @@ pub fn transform_propagate_system(world: &mut World) {
     }
 }
 
+pub fn visibility_propagate_system(world: &mut World) {
+    let root_entities = visibility_roots(world);
+    for root in root_entities {
+        propagate_visibility(world, root, true);
+    }
+}
+
+fn visibility_roots(world: &mut World) -> Vec<Entity> {
+    let mut roots = Vec::new();
+    let mut seen = HashSet::new();
+
+    {
+        let mut query = world
+            .query_filtered::<Entity, (query::With<TransformComponent>, query::Without<Parent>)>();
+        for entity in query.iter(world) {
+            if seen.insert(entity) {
+                roots.push(entity);
+            }
+        }
+    }
+
+    {
+        let mut query =
+            world.query_filtered::<Entity, (query::With<Visibility>, query::Without<Parent>)>();
+        for entity in query.iter(world) {
+            if seen.insert(entity) {
+                roots.push(entity);
+            }
+        }
+    }
+
+    roots
+}
+
+fn propagate_visibility(world: &mut World, entity: Entity, parent_visible: bool) {
+    let self_visible = world
+        .get::<Visibility>(entity)
+        .copied()
+        .unwrap_or_default()
+        .is_visible();
+    let inherited = parent_visible && self_visible;
+
+    if let Some(visibility) = world.get_mut::<InheritedVisibility>(entity) {
+        visibility.visible = inherited;
+    } else {
+        world
+            .entity_mut(entity)
+            .insert(InheritedVisibility { visible: inherited });
+    }
+
+    let children = world
+        .get::<Children>(entity)
+        .map(|children| children.0.clone())
+        .unwrap_or_default();
+
+    for child in children {
+        propagate_visibility(world, child, inherited);
+    }
+}
+
+pub fn is_visible(world: &World, entity: Entity) -> bool {
+    if !world
+        .get::<Visibility>(entity)
+        .copied()
+        .unwrap_or_default()
+        .is_visible()
+    {
+        return false;
+    }
+
+    world
+        .get::<InheritedVisibility>(entity)
+        .copied()
+        .map(InheritedVisibility::is_visible)
+        .unwrap_or(true)
+}
+
 fn propagate_from_root(
     world: &mut World,
     entity: Entity,
@@ -440,5 +557,41 @@ mod tests {
         queue.apply(&mut world);
         assert!(world.get::<TransformComponent>(parent).unwrap().is_dirty);
         assert!(world.get::<TransformComponent>(child).unwrap().is_dirty);
+    }
+
+    #[test]
+    fn visibility_propagates_through_hierarchy() {
+        let mut world = World::new();
+        let root = world
+            .spawn((TransformComponent::default(), Visibility::Hidden))
+            .id();
+        let child = world.spawn(TransformComponent::default()).id();
+        let grandchild = world
+            .spawn((TransformComponent::default(), Visibility::Visible))
+            .id();
+        attach_child(&mut world, root, child);
+        attach_child(&mut world, child, grandchild);
+
+        visibility_propagate_system(&mut world);
+
+        assert!(!is_visible(&world, root));
+        assert!(!is_visible(&world, child));
+        assert!(!is_visible(&world, grandchild));
+
+        world.entity_mut(root).insert(Visibility::Visible);
+        world.entity_mut(child).insert(Visibility::Hidden);
+        visibility_propagate_system(&mut world);
+
+        assert!(is_visible(&world, root));
+        assert!(!is_visible(&world, child));
+        assert!(!is_visible(&world, grandchild));
+    }
+
+    #[test]
+    fn direct_hidden_visibility_hides_without_propagation() {
+        let mut world = World::new();
+        let entity = world.spawn(Visibility::Hidden).id();
+
+        assert!(!is_visible(&world, entity));
     }
 }

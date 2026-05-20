@@ -66,6 +66,8 @@ The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
 - `SpriteBillboard` attaches a registered sprite to an entity as a world
   billboard, fixed-orientation sprite, or overlay weapon/HUD sprite.
 - `Terrain` stores a heightfield mesh with tint/material intent.
+- `Visibility` hides renderable entities and propagates through hierarchy
+  children via `InheritedVisibility`.
 - `TerrainDescriptor` and `SceneWorldDescriptor` describe terrain and blockout
   objects for code-first maps.
 - `SceneMaterialDescriptor` includes a `color` field used by the automatic
@@ -79,6 +81,9 @@ The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
 instantiate them with `"type": "prefab"`. Prefab instances spawn as empty root
 entities; the prefab contents are attached as children so translating, rotating,
 or scaling the instance root moves the whole reusable object.
+Scene entities also support a `visible` field; setting it to `false` spawns
+`Visibility::Hidden` and hides that entity's subtree from the scene renderer
+without despawning it.
 
 ```json
 {

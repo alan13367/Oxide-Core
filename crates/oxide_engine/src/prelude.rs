@@ -9,6 +9,7 @@ pub use crate::app::{
     FixedUpdate, InputPlugin, Plugin, PluginGroup, PluginRegistration, PostUpdate, PreUpdate,
     Render, RenderPlugin, Startup, TransformPlugin, Update, GLTF_SCENE_SPAWN_SYSTEM,
     MATERIAL_DESCRIPTOR_ASSET_SYSTEM, OXSCENE_SPAWN_SYSTEM, TRANSFORM_PROPAGATE_SYSTEM,
+    VISIBILITY_PROPAGATE_SYSTEM,
 };
 #[cfg(feature = "gltf-import")]
 pub use crate::asset::{load_gltf_async, GltfSceneAssets};
@@ -63,18 +64,18 @@ pub use crate::scene::{
     save_scene_descriptor, scene_editor_viewport_system, show_scene_authoring_egui,
     show_scene_editor_egui, spawn_scene_descriptor, spawn_scene_prefab, spawn_world_descriptor,
     take_spawned_oxscene_roots, transform_propagate_system, try_spawn_scene_descriptor,
-    try_spawn_scene_prefab, viewport_pick_ray, with_scene_editor, Children, GizmoAxis,
-    GlobalTransform, HierarchyCommandsExt, MeshPrimitive, MeshRenderer, Name, OxSceneDocument,
-    Parent, PendingOxSceneSpawns, RenderMaterial, RenderMesh, SceneAuthoringPlugins,
-    SceneBuiltinShader, SceneDescriptor, SceneDescriptorAssets, SceneEditor, SceneEditorPlugin,
-    SceneEditorTool, SceneEntityDescriptor, SceneEntityKind, SceneEntitySummary, SceneGizmoLine,
-    SceneGizmoLines, SceneMaterialDescriptor, SceneMeshPrimitive, ScenePickHit, ScenePickRay,
-    ScenePrefabDescriptor, SceneRenderer, SceneRendererPlugin, SceneRendererStats,
+    try_spawn_scene_prefab, viewport_pick_ray, visibility_propagate_system, with_scene_editor,
+    Children, GizmoAxis, GlobalTransform, HierarchyCommandsExt, InheritedVisibility, MeshPrimitive,
+    MeshRenderer, Name, OxSceneDocument, Parent, PendingOxSceneSpawns, RenderMaterial, RenderMesh,
+    SceneAuthoringPlugins, SceneBuiltinShader, SceneDescriptor, SceneDescriptorAssets, SceneEditor,
+    SceneEditorPlugin, SceneEditorTool, SceneEntityDescriptor, SceneEntityKind, SceneEntitySummary,
+    SceneGizmoLine, SceneGizmoLines, SceneMaterialDescriptor, SceneMeshPrimitive, ScenePickHit,
+    ScenePickRay, ScenePrefabDescriptor, SceneRenderer, SceneRendererPlugin, SceneRendererStats,
     SceneSpawnResult, SceneSpriteDepthMode, SceneSpriteDescriptor, SceneSpriteFacing,
     SceneTransform, SceneValidationDiagnostic, SceneValidationError, SceneWorldDescriptor,
     SceneWorldSpawnResult, SpawnedOxScenes, SpriteAssets, SpriteBillboard, SpriteDepthMode,
     SpriteFacing, SpriteId, SpriteImage, SpriteImageError, Terrain, TerrainDescriptor,
-    TerrainWaveDescriptor, TransformComponent, WorldObjectDescriptor, OXSCENE_FORMAT,
+    TerrainWaveDescriptor, TransformComponent, Visibility, WorldObjectDescriptor, OXSCENE_FORMAT,
     OXSCENE_VERSION,
 };
 #[cfg(feature = "gltf-import")]

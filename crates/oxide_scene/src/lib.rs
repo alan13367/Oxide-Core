@@ -11,8 +11,9 @@ pub use descriptor::*;
 pub use gizmo::*;
 pub use mesh_renderer::*;
 pub use oxide_transform::{
-    attach_child, detach_child, mark_subtree_dirty, transform_propagate_system, Children,
-    GlobalTransform, HierarchyCommandsExt, Parent, TransformComponent,
+    attach_child, detach_child, is_visible, mark_subtree_dirty, transform_propagate_system,
+    visibility_propagate_system, Children, GlobalTransform, HierarchyCommandsExt,
+    InheritedVisibility, Parent, TransformComponent, Visibility,
 };
 pub use renderer::*;
 pub use sprite::*;

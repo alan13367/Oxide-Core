@@ -15,7 +15,7 @@ use oxide_renderer::pipeline::create_shader;
 use oxide_renderer::shader::BuiltinShader;
 use oxide_renderer::texture::{SamplerDescriptor, Texture};
 use oxide_renderer::wgpu;
-use oxide_transform::{GlobalTransform, TransformComponent};
+use oxide_transform::{is_visible, GlobalTransform, TransformComponent};
 
 use crate::{
     MeshPrimitive, RenderMaterial, RenderMesh, SceneGizmoLines, SpriteAssets, SpriteBillboard,
@@ -1196,6 +1196,7 @@ fn collect_renderables(world: &mut World) -> Vec<(Entity, RenderMesh)> {
     let mut query = world.query::<(Entity, &RenderMesh)>();
     query
         .iter(world)
+        .filter(|(entity, _)| is_visible(world, *entity))
         .map(|(entity, render_mesh)| (entity, render_mesh.clone()))
         .collect()
 }
@@ -1204,6 +1205,7 @@ fn collect_terrains(world: &mut World) -> Vec<(Entity, Terrain)> {
     let mut query = world.query::<(Entity, &Terrain)>();
     query
         .iter(world)
+        .filter(|(entity, _)| is_visible(world, *entity))
         .map(|(entity, terrain)| (entity, terrain.clone()))
         .collect()
 }
@@ -1212,6 +1214,7 @@ fn collect_sprites(world: &mut World) -> Vec<(Entity, SpriteBillboard)> {
     let mut query = world.query::<(Entity, &SpriteBillboard)>();
     query
         .iter(world)
+        .filter(|(entity, _)| is_visible(world, *entity))
         .map(|(entity, sprite)| (entity, sprite.clone()))
         .collect()
 }
@@ -1368,6 +1371,7 @@ fn draw_mesh_batch<'pass>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oxide_transform::{visibility_propagate_system, Visibility};
 
     #[test]
     fn builtin_unlit_material_maps_to_unlit_instance_mode() {
@@ -1403,5 +1407,28 @@ mod tests {
         let second = MaterialBatchKey::from_material(&RenderMaterial::Named("glass".to_string()));
 
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn collect_renderables_skips_hidden_entities() {
+        let mut world = World::new();
+        let visible = world
+            .spawn(RenderMesh::new(
+                MeshPrimitive::Cube,
+                RenderMaterial::default(),
+            ))
+            .id();
+        let hidden = world
+            .spawn((
+                Visibility::Hidden,
+                RenderMesh::new(MeshPrimitive::Cube, RenderMaterial::default()),
+            ))
+            .id();
+
+        visibility_propagate_system(&mut world);
+        let renderables = collect_renderables(&mut world);
+
+        assert!(renderables.iter().any(|(entity, _)| *entity == visible));
+        assert!(!renderables.iter().any(|(entity, _)| *entity == hidden));
     }
 }

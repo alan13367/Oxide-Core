@@ -31,7 +31,8 @@ use crate::render::{
 use crate::scene::{gltf_scene_spawn_system, PendingGltfSceneSpawns, SpawnedGltfScenes};
 use crate::scene::{
     oxscene_spawn_system, prepare_scene_renderer, queue_scene_renderer, resize_scene_renderer,
-    transform_propagate_system, PendingOxSceneSpawns, SceneDescriptorAssets, SpawnedOxScenes,
+    transform_propagate_system, visibility_propagate_system, PendingOxSceneSpawns,
+    SceneDescriptorAssets, SpawnedOxScenes,
 };
 use crate::ui::{
     authoring_ui_visible, begin_engine_egui_frame, handle_egui_event, handle_engine_egui_event,
@@ -80,6 +81,8 @@ pub enum AppStage {
 
 /// Stable label for the built-in transform propagation system.
 pub const TRANSFORM_PROPAGATE_SYSTEM: &str = "oxide.transform.propagate";
+/// Stable label for the built-in visibility propagation system.
+pub const VISIBILITY_PROPAGATE_SYSTEM: &str = "oxide.visibility.propagate";
 /// Stable label for the built-in material descriptor asset polling system.
 pub const MATERIAL_DESCRIPTOR_ASSET_SYSTEM: &str = "oxide.asset.material_descriptors";
 /// Stable label for the built-in native `.oxscene` spawn system.
@@ -190,6 +193,12 @@ pub struct TransformPlugin;
 
 impl<T: App> Plugin<T> for TransformPlugin {
     fn build(&self, app: &mut AppBuilder<T>) {
+        app.add_labeled_system_before_mut(
+            AppStage::PostUpdate,
+            VISIBILITY_PROPAGATE_SYSTEM,
+            TRANSFORM_PROPAGATE_SYSTEM,
+            visibility_propagate_system,
+        );
         app.add_labeled_system_mut(
             AppStage::PostUpdate,
             TRANSFORM_PROPAGATE_SYSTEM,

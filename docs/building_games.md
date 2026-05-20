@@ -23,6 +23,8 @@ the engine prelude for normal game code.
   systems that should advance at a stable tick rate independent of rendering.
 - Use `TransformTween` for lightweight transform animation with one-shot,
   looping, or ping-pong playback. `DefaultPlugins` installs `AnimationPlugin`.
+- Use `Visibility::Hidden` to hide a renderable entity or hierarchy subtree
+  without despawning it. `InheritedVisibility` is propagated automatically.
 - Use `ActionBindings<T>`, `ActionInput<T>`, and
   `sync_action_input_system::<T>` for semantic keyboard/mouse controls such as
   jump, fire, interact, or pause.
@@ -179,6 +181,18 @@ commands.spawn((
         Duration::from_secs(2),
     )
     .with_easing(TweenEasing::SmoothStep),
+));
+```
+
+`Visibility` controls scene renderer collection for meshes, sprites, and
+terrain. Visibility propagates through `Parent`/`Children`, so hiding a parent
+hides its descendants:
+
+```rust
+commands.spawn((
+    TransformComponent::default(),
+    RenderMesh::new(MeshPrimitive::Cube, RenderMaterial::default()),
+    Visibility::Hidden,
 ));
 ```
 
