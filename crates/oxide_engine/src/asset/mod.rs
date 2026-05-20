@@ -10,7 +10,7 @@ use oxide_asset::{AssetServer as CoreAssetServer, Assets as CoreAssets, Handle a
 use oxide_ecs::world::World;
 use oxide_ecs::Resource;
 use oxide_renderer::descriptor::{
-    load_material_descriptor, MaterialDescriptor, MaterialDescriptorError, ShaderDescriptor,
+    load_material_descriptor, MaterialDescriptorError, ShaderDescriptor,
 };
 #[cfg(feature = "gltf-import")]
 use oxide_renderer::gltf::{load_gltf, GltfScene};
@@ -23,7 +23,10 @@ use crate::scene::{reload_changed_oxscenes, SceneDescriptor, SceneMaterialLibrar
 use crate::watcher::AssetWatcher;
 
 pub use oxide_asset::*;
-pub use oxide_scene::{MaterialFilter, MeshCache, MeshFilter, TextureImageAssets};
+pub use oxide_renderer::descriptor::MaterialDescriptor;
+pub use oxide_scene::{
+    MaterialDescriptorAssets, MaterialFilter, MeshCache, MeshFilter, TextureImageAssets,
+};
 
 /// ECS resource wrapper for the engine asset server.
 #[derive(Resource, Default)]
@@ -37,16 +40,9 @@ pub struct MaterialAssets {
     pub assets: CoreAssets<MaterialPipeline>,
 }
 
-/// ECS resource storing CPU-side material descriptors loaded from `.oxmat`,
-/// JSON, RON, or TOML files.
-#[derive(Resource, Default)]
-pub struct MaterialDescriptorAssets {
-    pub assets: CoreAssets<MaterialDescriptor>,
-}
-
 pub type MeshHandle = CoreHandle<Mesh3D>;
 pub type MaterialHandle = CoreHandle<MaterialPipeline>;
-pub type MaterialDescriptorHandle = CoreHandle<MaterialDescriptor>;
+pub type MaterialDescriptorHandle = oxide_scene::MaterialDescriptorHandle;
 pub type TextureImageHandle = oxide_scene::TextureImageHandle;
 
 /// ECS resource storing handle-indexed glTF scenes.

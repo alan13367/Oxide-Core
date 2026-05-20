@@ -61,6 +61,8 @@ The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
 
 - `SceneDescriptor` is the data format for small native scenes and prefabs.
 - `RenderMesh` describes a primitive, material intent, and tint.
+- `MaterialFilter` can point at a loaded `MaterialDescriptorAssets` handle; the
+  automatic renderer resolves it before falling back to `RenderMesh.material`.
 - `SceneMaterialLibrary` stores reusable named material intents. The automatic
   renderer resolves `RenderMaterial::Named` through it before batching.
 - `SceneSpriteDescriptor` describes sprite billboard entities inside `.oxscene`
@@ -281,8 +283,11 @@ When `DefaultPlugins` loads a `.oxmat` descriptor through
 `request_material_descriptor_load`, the descriptor is also registered into
 `SceneMaterialLibrary` under `MaterialDescriptor::name`. This gives small
 scenes a data-driven material path without forcing gameplay components to hold
-renderer pipelines. Material descriptors can set `base_color`; the automatic
-scene renderer multiplies that material color with each entity's `color` tint.
+renderer pipelines. Entities that carry `MaterialFilter` can render directly
+from the loaded descriptor handle, which keeps spawned/imported entities aligned
+with descriptor reloads. Material descriptors can set `base_color`; the
+automatic scene renderer multiplies that material color with each entity's
+`color` tint.
 
 Native scene descriptors can declare reusable material entries in the top-level
 `materials` array. Spawn registers those entries into `SceneMaterialLibrary`

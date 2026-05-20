@@ -20,9 +20,9 @@ use oxide_renderer::wgpu;
 use oxide_transform::{is_visible, GlobalTransform, TransformComponent};
 
 use crate::{
-    MeshCache, MeshFilter, MeshPrimitive, RenderLayers, RenderMaterial, RenderMesh,
-    SceneGizmoLines, SceneMaterialLibrary, SpriteAssets, SpriteBillboard, SpriteDepthMode,
-    SpriteFacing, SpriteId, Terrain, TextureImageAssets,
+    MaterialDescriptorAssets, MaterialFilter, MeshCache, MeshFilter, MeshPrimitive, RenderLayers,
+    RenderMaterial, RenderMesh, SceneGizmoLines, SceneMaterialLibrary, SpriteAssets,
+    SpriteBillboard, SpriteDepthMode, SpriteFacing, SpriteId, Terrain, TextureImageAssets,
 };
 
 const SCENE_RENDERER_SHADER: &str = r#"
@@ -844,13 +844,12 @@ impl SceneRenderer {
 
         for (entity, render_mesh) in renderables {
             let model = entity_model_matrix(world, entity);
+            let resolved_material = resolve_entity_material(world, entity, Some(&render_mesh));
             let material = MaterialBatchKey::from_material_with_library(
-                &render_mesh.material,
+                &resolved_material,
                 material_library.as_ref(),
             );
-            let base_color = render_mesh
-                .material
-                .base_color_with_library(material_library.as_ref());
+            let base_color = resolved_material.base_color_with_library(material_library.as_ref());
             let instance = SceneInstanceRaw::new(
                 model,
                 multiply_color(render_mesh.tint, base_color),
@@ -917,25 +916,12 @@ impl SceneRenderer {
 
         for (entity, mesh_filter) in renderables {
             let render_mesh = world.get::<RenderMesh>(entity).cloned();
-            let material = render_mesh
-                .as_ref()
-                .map(|render_mesh| {
-                    MaterialBatchKey::from_material_with_library(
-                        &render_mesh.material,
-                        material_library.as_ref(),
-                    )
-                })
-                .unwrap_or_else(|| {
-                    MaterialBatchKey::from_material_with_library(&RenderMaterial::default(), None)
-                });
-            let base_color = render_mesh
-                .as_ref()
-                .map(|render_mesh| {
-                    render_mesh
-                        .material
-                        .base_color_with_library(material_library.as_ref())
-                })
-                .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+            let resolved_material = resolve_entity_material(world, entity, render_mesh.as_ref());
+            let material = MaterialBatchKey::from_material_with_library(
+                &resolved_material,
+                material_library.as_ref(),
+            );
+            let base_color = resolved_material.base_color_with_library(material_library.as_ref());
             let tint = render_mesh
                 .as_ref()
                 .map(|render_mesh| render_mesh.tint)
@@ -1667,6 +1653,25 @@ fn collect_mesh_filter_renderables(
         .collect()
 }
 
+fn resolve_entity_material(
+    world: &World,
+    entity: Entity,
+    render_mesh: Option<&RenderMesh>,
+) -> RenderMaterial {
+    if let Some(material_filter) = world.get::<MaterialFilter>(entity) {
+        if let Some(descriptor) = world
+            .get_resource::<MaterialDescriptorAssets>()
+            .and_then(|assets| assets.assets.get(&material_filter.material))
+        {
+            return RenderMaterial::from_descriptor(descriptor);
+        }
+    }
+
+    render_mesh
+        .map(|render_mesh| render_mesh.material.clone())
+        .unwrap_or_default()
+}
+
 fn collect_terrains(world: &mut World, camera_layers: RenderLayers) -> Vec<(Entity, Terrain)> {
     let mut query = world.query::<(Entity, &Terrain)>();
     query
@@ -2075,6 +2080,56 @@ mod tests {
         );
 
         assert_eq!(instance.tint, [0.4, 0.15, 0.3, 0.25]);
+    }
+
+    #[test]
+    fn material_filter_resolves_descriptor_asset_before_render_mesh_material() {
+        let mut world = World::new();
+        let handle = oxide_asset::Handle::new(12);
+        let mut material_assets = MaterialDescriptorAssets::default();
+        material_assets.assets.insert(
+            handle,
+            oxide_renderer::descriptor::MaterialDescriptor {
+                name: "asset_material".to_string(),
+                material_type: MaterialType::Lit,
+                shader: oxide_renderer::descriptor::ShaderDescriptor::Builtin {
+                    shader: "lit".to_string(),
+                },
+                fallback_shader: Some("lit".to_string()),
+                base_color: [0.25, 0.5, 0.75, 1.0],
+                albedo_texture: Some("#image_0".to_string()),
+                normal_texture: None,
+                roughness_texture: None,
+            },
+        );
+        world.insert_resource(material_assets);
+        let entity = world
+            .spawn((
+                MaterialFilter::new(handle),
+                RenderMesh::new(
+                    MeshPrimitive::Cube,
+                    RenderMaterial::Builtin {
+                        shader: BuiltinShader::Unlit,
+                        material_type: MaterialType::Unlit,
+                        name: "component_material".to_string(),
+                        base_color: [1.0, 0.0, 0.0, 1.0],
+                        albedo_texture: None,
+                    },
+                ),
+            ))
+            .id();
+
+        let material = resolve_entity_material(&world, entity, world.get::<RenderMesh>(entity));
+
+        assert_eq!(
+            material.base_color_with_library(None),
+            [0.25, 0.5, 0.75, 1.0]
+        );
+        assert_eq!(material.albedo_texture_with_library(None), Some("#image_0"));
+        assert_eq!(
+            MaterialBatchKey::from_material(&material).mode,
+            MaterialMode::Lit
+        );
     }
 
     #[test]

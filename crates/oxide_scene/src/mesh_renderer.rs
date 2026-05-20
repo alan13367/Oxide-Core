@@ -64,6 +64,12 @@ impl Default for MeshCache {
     }
 }
 
+/// Resource storing CPU-side material descriptors by typed asset handle.
+#[derive(Resource, Default)]
+pub struct MaterialDescriptorAssets {
+    pub assets: oxide_asset::Assets<MaterialDescriptor>,
+}
+
 /// Resource storing CPU-side texture images by typed asset handle and label.
 #[derive(Resource, Default)]
 pub struct TextureImageAssets {

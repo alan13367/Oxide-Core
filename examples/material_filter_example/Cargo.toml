@@ -1,0 +1,11 @@
+[package]
+name = "material_filter_example"
+description = "Oxide Core example - descriptor handle material rendering"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+oxide_engine.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

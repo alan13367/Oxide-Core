@@ -62,6 +62,7 @@ The workspace includes several examples demonstrating the engine's rendering cap
 cargo run -p hello_window         # Interactive lit scene
 cargo run -p physics_example      # In-house physics demo (falling/collision)
 cargo run -p minimal_game         # Minimal code-first game template
+cargo run -p material_filter_example # Descriptor handle material rendering
 cargo run -p zombie_shooter       # FPS zombie shooter with sprites, terrain, UI, audio, and physics
 cargo run -p unlit_example        # Basic unlit rendering
 cargo run -p sky_gradient_example # Skybox/gradient material demo
@@ -494,12 +495,15 @@ glTF materials/images are published into `MaterialDescriptorAssets` and
 mesh nodes receive `GltfMeshRef`/`GltfMaterialRef` plus
 `MeshFilter`/`MaterialFilter` when stable handles are available. The automatic
 scene renderer draws `MeshFilter` entities from `MeshCache`; if the entity also
-has a `RenderMesh`, its material, tint, and labeled albedo texture are used for
-the imported mesh instead of drawing a built-in primitive. Spawned glTF entities
-are tagged with `GltfSceneInstance`, so reloading the same glTF handle replaces
-the previous imported hierarchy instead of duplicating stale entities. External
-glTF buffer and image URIs are recorded as dependencies, so sidecar `.bin` and
-texture changes can drive `reload_changed_gltf_scenes(...)`.
+has a `RenderMesh`, its tint and render intent are used for the imported mesh
+instead of drawing a built-in primitive. `MaterialFilter` resolves through
+`MaterialDescriptorAssets` before falling back to copied `RenderMesh` material
+data, so descriptor reloads can affect already spawned imported entities.
+Spawned glTF entities are tagged with `GltfSceneInstance`, so reloading the same
+glTF handle replaces the previous imported hierarchy instead of duplicating
+stale entities. External glTF buffer and image URIs are recorded as
+dependencies, so sidecar `.bin` and texture changes can drive
+`reload_changed_gltf_scenes(...)`.
 
 ### 10. Physics Plugin Integration
 
@@ -529,7 +533,7 @@ Current physics runtime highlights include:
 - Load custom shaders through `ShaderSource::File` or `ShaderSource::WgslOwned`
 - Build pipelines through `MaterialPipeline` with optional fallback behavior
 - Load descriptor-driven materials from files via `load_material_descriptor(...)` (supports legacy JSON/RON/TOML plus versioned `.oxmat`, including material `base_color`)
-- Load material descriptors asynchronously with `request_material_descriptor_load(...)`; `DefaultPlugins` publishes ready descriptors into `MaterialDescriptorAssets`, registers them in `SceneMaterialLibrary` by descriptor name/base color, and tracks shader/texture dependencies for in-place reloads
+- Load material descriptors asynchronously with `request_material_descriptor_load(...)`; `DefaultPlugins` publishes ready descriptors into `MaterialDescriptorAssets`, registers them in `SceneMaterialLibrary` by descriptor name/base color, tracks shader/texture dependencies for in-place reloads, and lets `MaterialFilter` render directly from descriptor handles
 
 ### Hot-Reloading
 

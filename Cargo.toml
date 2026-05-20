@@ -22,6 +22,7 @@ members = [
     "examples/unlit_example",
     "examples/sky_gradient_example",
     "examples/sprite_ui_example",
+    "examples/material_filter_example",
     "examples/minimal_game",
     "examples/zombie_shooter",
 ]

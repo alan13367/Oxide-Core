@@ -92,9 +92,12 @@ container, not separate files.
 
 The automatic scene renderer can draw `MeshFilter` entities directly from
 `MeshCache`. When a handle-based mesh entity also carries `RenderMesh`, the
-renderer uses that component's material and tint for the imported mesh and skips
-the built-in primitive path, which lets imported glTF materials influence the
-rendered handle mesh without duplicating geometry. `TextureImageAssets` also
+renderer uses that component's tint and render intent for the imported mesh and
+skips the built-in primitive path. If the entity has `MaterialFilter`, the
+renderer resolves the descriptor handle from `MaterialDescriptorAssets` before
+falling back to the copied `RenderMesh` material. This lets imported glTF
+materials and reloaded `.oxmat` descriptors influence already spawned handle
+meshes without duplicating geometry. `TextureImageAssets` also
 maintains a label lookup, and the scene renderer uploads labeled images into a
 small material texture cache. A material albedo reference such as `#image_0`
 binds that uploaded texture for the relevant material batch, while untextured
@@ -119,8 +122,12 @@ Use `request_material_descriptor_load(server, path)` to asynchronously load a
 records dependencies for file shaders and texture paths. Loaded descriptors are
 also registered into `SceneMaterialLibrary` by `MaterialDescriptor::name`, so
 `RenderMaterial::Named("stone".to_string())` can resolve through the automatic
-scene renderer. `base_color` is preserved on the registered material and
-multiplied with each renderable's tint during scene rendering.
+scene renderer. Entities can also store `MaterialFilter` to render directly from
+a descriptor handle; this handle-backed path takes precedence over a copied
+`RenderMesh` material when the descriptor asset is available. `base_color` is
+preserved on the resolved material and multiplied with each renderable's tint
+during scene rendering. See `examples/material_filter_example` for a compact
+code-first scene that renders from a descriptor handle.
 
 ```rust
 let handle = request_material_descriptor_load(
