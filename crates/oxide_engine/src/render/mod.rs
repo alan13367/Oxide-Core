@@ -320,6 +320,25 @@ impl RenderPassSchedule {
         updated
     }
 
+    /// Sets enabled state for every custom pass in `set`.
+    ///
+    /// This is useful for plugin-owned pass groups such as capture,
+    /// post-processing, or debug drawing stacks. Built-in anchors are not
+    /// affected. Returns the number of custom passes whose state was updated.
+    pub fn set_pass_set_enabled(&mut self, set: impl AsRef<str>, enabled: bool) -> usize {
+        let set = set.as_ref();
+        let mut updated = 0;
+        for entry in &mut self.entries {
+            if matches!(entry.callback, RenderPassEntryKind::Pass(_))
+                && entry.sets.iter().any(|entry_set| entry_set == set)
+            {
+                entry.enabled = enabled;
+                updated += 1;
+            }
+        }
+        updated
+    }
+
     /// Enables every custom pass matching `label`.
     pub fn enable_pass(&mut self, label: impl AsRef<str>) -> usize {
         self.set_pass_enabled(label, true)
@@ -328,6 +347,16 @@ impl RenderPassSchedule {
     /// Disables every custom pass matching `label` without unregistering it.
     pub fn disable_pass(&mut self, label: impl AsRef<str>) -> usize {
         self.set_pass_enabled(label, false)
+    }
+
+    /// Enables every custom pass in `set`.
+    pub fn enable_set(&mut self, set: impl AsRef<str>) -> usize {
+        self.set_pass_set_enabled(set, true)
+    }
+
+    /// Disables every custom pass in `set` without unregistering it.
+    pub fn disable_set(&mut self, set: impl AsRef<str>) -> usize {
+        self.set_pass_set_enabled(set, false)
     }
 
     /// Returns non-fatal ordering diagnostics for this schedule.
@@ -732,6 +761,42 @@ mod tests {
 
         assert_eq!(schedule.enable_pass("custom.overlay"), 1);
         assert!(schedule.ordered_labels().contains(&"custom.overlay"));
+    }
+
+    #[test]
+    fn render_pass_schedule_can_disable_sets_without_removing_metadata() {
+        let mut schedule = RenderPassSchedule::new();
+        schedule.add_pass_to_set("capture.depth", "capture", noop_pass);
+        schedule.add_pass_to_set("capture.color", "capture", noop_pass);
+        schedule.add_pass_to_set("debug.lines", "debug", noop_pass);
+        schedule.configure_set_before("capture", RENDER_PASS_EGUI);
+
+        assert_eq!(schedule.disable_set("capture"), 2);
+        assert_eq!(
+            schedule.ordered_labels(),
+            vec![
+                RENDER_PASS_SCENE,
+                RENDER_PASS_GAME_TEXT,
+                "debug.lines",
+                RENDER_PASS_APP_QUEUE,
+                RENDER_PASS_EGUI,
+            ]
+        );
+
+        let capture_infos: Vec<_> = schedule
+            .pass_infos()
+            .into_iter()
+            .filter(|info| info.sets.iter().any(|set| set == "capture"))
+            .collect();
+        assert_eq!(capture_infos.len(), 2);
+        assert!(capture_infos
+            .iter()
+            .all(|info| !info.enabled && info.order_index.is_none()));
+
+        assert_eq!(schedule.enable_set("capture"), 2);
+        let labels = schedule.ordered_labels();
+        assert!(labels.contains(&"capture.depth"));
+        assert!(labels.contains(&"capture.color"));
     }
 
     #[test]

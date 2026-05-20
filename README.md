@@ -172,7 +172,9 @@ Render pass labels can target `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
 post-processing, capture passes, or debug drawing without copying the runner.
 Custom passes can be toggled with `disable_render_pass` /
 `enable_render_pass`, which keeps their metadata visible for editor/debug
-tooling while skipping the callback at frame time.
+tooling while skipping the callback at frame time. Whole render pass sets can
+be toggled with `disable_render_pass_set` / `enable_render_pass_set` for
+plugin-owned debug, capture, or post-processing stacks.
 
 ### 2. Register Native Sprites And Worlds
 

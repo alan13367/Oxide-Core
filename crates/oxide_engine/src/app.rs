@@ -821,6 +821,51 @@ impl<T: App> AppBuilder<T> {
         self
     }
 
+    /// Sets enabled state for every custom render pass in `set`.
+    ///
+    /// This is useful for plugin-owned pass groups such as debug overlays,
+    /// capture passes, or post-processing stacks.
+    pub fn set_render_pass_set_enabled(mut self, set: impl AsRef<str>, enabled: bool) -> Self {
+        self.set_render_pass_set_enabled_mut(set, enabled);
+        self
+    }
+
+    /// Mutable form of [`Self::set_render_pass_set_enabled`].
+    pub fn set_render_pass_set_enabled_mut(
+        &mut self,
+        set: impl AsRef<str>,
+        enabled: bool,
+    ) -> &mut Self {
+        self.systems
+            .render_passes
+            .set_pass_set_enabled(set, enabled);
+        self
+    }
+
+    /// Enables every custom render pass in `set`.
+    pub fn enable_render_pass_set(mut self, set: impl AsRef<str>) -> Self {
+        self.enable_render_pass_set_mut(set);
+        self
+    }
+
+    /// Mutable form of [`Self::enable_render_pass_set`].
+    pub fn enable_render_pass_set_mut(&mut self, set: impl AsRef<str>) -> &mut Self {
+        self.systems.render_passes.enable_set(set);
+        self
+    }
+
+    /// Disables every custom render pass in `set` without unregistering it.
+    pub fn disable_render_pass_set(mut self, set: impl AsRef<str>) -> Self {
+        self.disable_render_pass_set_mut(set);
+        self
+    }
+
+    /// Mutable form of [`Self::disable_render_pass_set`].
+    pub fn disable_render_pass_set_mut(&mut self, set: impl AsRef<str>) -> &mut Self {
+        self.systems.render_passes.disable_set(set);
+        self
+    }
+
     /// Adds a render pass to a named render ordering set.
     pub fn add_render_pass_to_set(
         mut self,
@@ -1410,6 +1455,8 @@ mod tests {
         counter.0 += 1;
     }
 
+    fn noop_render_pass(_world: &mut World, _frame: &mut RenderFrame) {}
+
     #[test]
     fn app_stage_startup_accepts_normal_system_params() {
         let mut builder = AppBuilder::<TestApp>::new();
@@ -1514,6 +1561,31 @@ mod tests {
         RunnerSystems::run(&mut builder.systems.startup_schedule, &mut world);
 
         assert_eq!(world.resource::<StartupCounter>().0, 2);
+    }
+
+    #[test]
+    fn app_builder_can_toggle_render_pass_sets() {
+        let mut builder = AppBuilder::<TestApp>::new();
+        builder.add_render_pass_to_set_mut("debug.lines", "debug", noop_render_pass);
+        builder.add_render_pass_to_set_mut("debug.bounds", "debug", noop_render_pass);
+
+        builder.disable_render_pass_set_mut("debug");
+        let disabled = builder
+            .render_pass_schedule()
+            .pass_infos()
+            .into_iter()
+            .filter(|info| info.sets.iter().any(|set| set == "debug"))
+            .collect::<Vec<_>>();
+        assert_eq!(disabled.len(), 2);
+        assert!(disabled.iter().all(|info| !info.enabled));
+
+        builder.enable_render_pass_set_mut("debug");
+        assert!(builder
+            .render_pass_schedule()
+            .pass_infos()
+            .into_iter()
+            .filter(|info| info.sets.iter().any(|set| set == "debug"))
+            .all(|info| info.enabled));
     }
 
     #[test]

@@ -150,7 +150,9 @@ Tooling can inspect the resolved frame pipeline with
 `RenderPassSchedule::ordered_pass_infos`. Temporarily disable custom passes
 with `disable_render_pass` and restore them with `enable_render_pass`; disabled
 passes remain visible in `RenderPassSchedule::pass_infos` but are skipped by the
-runner.
+runner. Larger plugins can also toggle a whole render pass set with
+`disable_render_pass_set` and `enable_render_pass_set`, which is useful for
+turning capture, debug, or post-processing stacks on and off from editor UI.
 
 ```rust
 app::<MyGame>()
