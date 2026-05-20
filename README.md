@@ -487,6 +487,10 @@ if let Some(roots) = take_spawned_scene_roots(&mut self.world, scene_handle) {
 }
 ```
 
+Loaded glTF meshes are also published into `MeshCache` as labeled mesh assets
+when the source path is known. Spawned mesh nodes receive `GltfMeshRef` and, when
+available, `MeshFilter` with the stable mesh handle.
+
 ### 10. Physics Plugin Integration
 
 Physics is provided by `oxide_physics` and intentionally exported through `oxide_physics::prelude`:

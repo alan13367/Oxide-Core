@@ -73,6 +73,7 @@ pub struct GltfSceneAssets {
 }
 
 /// Resource that caches GPU meshes by handle.
+#[derive(Resource)]
 pub struct MeshCache {
     meshes: CoreAssets<Mesh3D>,
 }
@@ -86,6 +87,16 @@ impl MeshCache {
 
     pub fn insert(&mut self, handle: CoreHandle<Mesh3D>, mesh: Mesh3D) {
         self.meshes.insert(handle, mesh);
+    }
+
+    /// Returns the typed mesh asset storage backing this cache.
+    pub fn assets(&self) -> &CoreAssets<Mesh3D> {
+        &self.meshes
+    }
+
+    /// Returns mutable access to the typed mesh asset storage backing this cache.
+    pub fn assets_mut(&mut self) -> &mut CoreAssets<Mesh3D> {
+        &mut self.meshes
     }
 
     pub fn get(&self, handle: CoreHandle<Mesh3D>) -> Option<&Mesh3D> {
@@ -360,8 +371,7 @@ pub fn load_gltf_async(
     queue: Arc<Queue>,
     path: impl Into<PathBuf>,
 ) -> CoreHandle<GltfScene> {
-    let path = path.into();
-    server.load_async(move || {
+    server.load_path_async(path.into(), move |path| {
         load_gltf(&device, &queue, &path)
             .map_err(|err| CoreAssetServerError::Message(err.to_string()))
     })

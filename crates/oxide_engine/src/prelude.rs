@@ -93,8 +93,8 @@ pub use crate::scene::{
 #[cfg(feature = "gltf-import")]
 pub use crate::scene::{
     gltf_scene_spawn_system, queue_gltf_scene_spawn, request_gltf_scene_spawn,
-    spawn_gltf_scene_hierarchy, take_spawned_scene_roots, GltfMeshRef, PendingGltfSceneSpawns,
-    SpawnedGltfScenes,
+    spawn_gltf_scene_hierarchy, spawn_gltf_scene_hierarchy_with_meshes, take_spawned_scene_roots,
+    GltfMeshRef, GltfSceneMeshHandles, PendingGltfSceneSpawns, SpawnedGltfScenes,
 };
 pub use crate::time::{Timer, TimerMode};
 pub use crate::ui::{

@@ -16,7 +16,8 @@ use crate::animation::AnimationPlugin;
 #[cfg(feature = "gltf-import")]
 use crate::asset::GltfSceneAssets;
 use crate::asset::{
-    material_descriptor_asset_system, AssetServerResource, MaterialAssets, MaterialDescriptorAssets,
+    material_descriptor_asset_system, AssetServerResource, MaterialAssets,
+    MaterialDescriptorAssets, MeshCache,
 };
 use crate::diagnostics::FrameDiagnosticsPlugin;
 use crate::ecs::{
@@ -28,7 +29,9 @@ use crate::render::{
     RenderFrame, RenderPassAnchor, RenderPassFn, RenderPassSchedule, RenderPassStep,
 };
 #[cfg(feature = "gltf-import")]
-use crate::scene::{gltf_scene_spawn_system, PendingGltfSceneSpawns, SpawnedGltfScenes};
+use crate::scene::{
+    gltf_scene_spawn_system, GltfSceneMeshHandles, PendingGltfSceneSpawns, SpawnedGltfScenes,
+};
 use crate::scene::{
     oxscene_spawn_system, prepare_scene_renderer, queue_scene_renderer, resize_scene_renderer,
     transform_propagate_system, visibility_propagate_system, PendingOxSceneSpawns,
@@ -249,6 +252,9 @@ fn initialize_asset_resources(world: &mut World, _window: &Window) {
     if !world.contains_resource::<MaterialDescriptorAssets>() {
         world.insert_resource(MaterialDescriptorAssets::default());
     }
+    if !world.contains_resource::<MeshCache>() {
+        world.insert_resource(MeshCache::default());
+    }
     if !world.contains_resource::<SceneDescriptorAssets>() {
         world.insert_resource(SceneDescriptorAssets::default());
     }
@@ -268,6 +274,9 @@ fn initialize_asset_resources(world: &mut World, _window: &Window) {
         }
         if !world.contains_resource::<SpawnedGltfScenes>() {
             world.insert_resource(SpawnedGltfScenes::default());
+        }
+        if !world.contains_resource::<GltfSceneMeshHandles>() {
+            world.insert_resource(GltfSceneMeshHandles::default());
         }
     }
 }

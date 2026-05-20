@@ -64,6 +64,18 @@ the scene without app code manually updating the `AssetServer`.
 `examples/minimal_game` demonstrates this path with
 `assets/scenes/starter.oxscene`.
 
+## glTF Import Handles
+
+With the `gltf-import` feature enabled, `request_gltf_scene_spawn(...)` loads a
+glTF source through `AssetServer` path identity. When the load resolves, Oxide
+publishes each imported mesh into `MeshCache` as a labeled `Mesh3D` asset using
+the glTF source path plus the mesh label emitted by the importer. Spawned nodes
+keep the lightweight `GltfMeshRef` index and also receive `MeshFilter` when a
+stable mesh handle is available.
+
+This keeps the compatibility glTF path useful for development while moving the
+runtime shape toward Oxide-owned handles and caches.
+
 ## Runtime Material Descriptor Loading
 
 Use `request_material_descriptor_load(server, path)` to asynchronously load a
