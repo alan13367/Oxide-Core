@@ -307,6 +307,11 @@ let mut query = world.query::<(Entity, &TransformComponent)>();
 for (entity, transform) in query.iter_changed_since(&world, last_sync) {
     // refresh a renderer/editor cache for this entity and transform
 }
+
+let mut changed_transforms = world.query_filtered::<(Entity, &TransformComponent), Changed<TransformComponent>>();
+for (entity, transform) in changed_transforms.iter_since(&world, last_sync) {
+    // same change filter through filtered-query syntax
+}
 ```
 
 ```rust

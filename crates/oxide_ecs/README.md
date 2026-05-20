@@ -65,9 +65,11 @@ insertion/replacement, mutable component access, resource insertion, and mutable
 resource access record revisions automatically. Use
 `Query<(Entity, &T)>::iter_added_since(tick)` to initialize caches for newly
 inserted components, then `iter_changed_since(tick)` to refresh all changed
-components. Systems can use `ComponentChanges<T>` to keep this revision cursor
-locally instead of storing a separate resource. `Added<T>` and `Changed<T>` are
-also available for entity-only filtered queries. Use `ResourceCursor<T>` in
+components. `query_filtered::<&T, Changed<T>>()` and
+`query_filtered::<(Entity, &T), Added<T>>()` provide the same revision filters
+through filtered-query syntax. Systems can use `ComponentChanges<T>` to keep
+this revision cursor locally instead of storing a separate resource. Use
+`ResourceCursor<T>` in
 systems that need to observe a resource only when its revision changes;
 `read_if_changed()` returns the resource once per system instance per revision.
 Use `RemovedComponents<T>` to clean up cache entries after components are

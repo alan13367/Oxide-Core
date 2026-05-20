@@ -289,6 +289,11 @@ let mut query = world.query::<(Entity, &TransformComponent)>();
 for (entity, transform) in query.iter_changed_since(&world, last_sync) {
     // update cached transform-dependent data
 }
+
+let mut changed = world.query_filtered::<(Entity, &TransformComponent), Changed<TransformComponent>>();
+for (entity, transform) in changed.iter_since(&world, last_sync) {
+    // filtered-query syntax for the same changed component data
+}
 ```
 
 ```rust

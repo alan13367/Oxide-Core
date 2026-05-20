@@ -2887,6 +2887,41 @@ pub mod world {
         index: usize,
     }
 
+    enum RevisionFilter {
+        Added,
+        Changed,
+    }
+
+    pub struct ComponentRefFilterIter<'w, T: Component> {
+        entities: Vec<Entity>,
+        index: usize,
+        revision: u64,
+        filter: RevisionFilter,
+        storage: Option<&'w Storage<T>>,
+    }
+
+    impl<'w, T: Component> Iterator for ComponentRefFilterIter<'w, T> {
+        type Item = &'w T;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let storage = self.storage?;
+            while self.index < self.entities.len() {
+                let entity = self.entities[self.index];
+                self.index += 1;
+                let matches = match self.filter {
+                    RevisionFilter::Added => storage.added_since(entity, self.revision),
+                    RevisionFilter::Changed => storage.changed_since(entity, self.revision),
+                };
+                if matches {
+                    if let Some(component) = storage.get(entity) {
+                        return Some(component);
+                    }
+                }
+            }
+            None
+        }
+    }
+
     impl Iterator for EntityWithWithoutIter {
         type Item = Entity;
 
@@ -2945,6 +2980,92 @@ pub mod world {
                 }
             }
             EntityWithWithoutIter { entities, index: 0 }
+        }
+    }
+
+    impl<T: Component> FilteredQueryState<&T, Changed<T>> {
+        /// Iterates `T` components changed after `revision`.
+        pub fn iter_since<'w>(
+            &mut self,
+            world: &'w World,
+            revision: u64,
+        ) -> ComponentRefFilterIter<'w, T> {
+            let storage = world.storage::<T>();
+            let entities = storage
+                .map(|component_storage| component_storage.entities().to_vec())
+                .unwrap_or_default();
+
+            ComponentRefFilterIter {
+                entities,
+                index: 0,
+                revision,
+                filter: RevisionFilter::Changed,
+                storage,
+            }
+        }
+    }
+
+    impl<T: Component> FilteredQueryState<&T, Added<T>> {
+        /// Iterates `T` components inserted after `revision`.
+        pub fn iter_since<'w>(
+            &mut self,
+            world: &'w World,
+            revision: u64,
+        ) -> ComponentRefFilterIter<'w, T> {
+            let storage = world.storage::<T>();
+            let entities = storage
+                .map(|component_storage| component_storage.entities().to_vec())
+                .unwrap_or_default();
+
+            ComponentRefFilterIter {
+                entities,
+                index: 0,
+                revision,
+                filter: RevisionFilter::Added,
+                storage,
+            }
+        }
+    }
+
+    impl<T: Component> FilteredQueryState<(Entity, &T), Changed<T>> {
+        /// Iterates entities and `T` components changed after `revision`.
+        pub fn iter_since<'w>(
+            &mut self,
+            world: &'w World,
+            revision: u64,
+        ) -> ChangedEntityRefIter<'w, T> {
+            let storage = world.storage::<T>();
+            let entities = storage
+                .map(|component_storage| component_storage.entities().to_vec())
+                .unwrap_or_default();
+
+            ChangedEntityRefIter {
+                entities,
+                index: 0,
+                revision,
+                storage,
+            }
+        }
+    }
+
+    impl<T: Component> FilteredQueryState<(Entity, &T), Added<T>> {
+        /// Iterates entities and `T` components inserted after `revision`.
+        pub fn iter_since<'w>(
+            &mut self,
+            world: &'w World,
+            revision: u64,
+        ) -> AddedEntityRefIter<'w, T> {
+            let storage = world.storage::<T>();
+            let entities = storage
+                .map(|component_storage| component_storage.entities().to_vec())
+                .unwrap_or_default();
+
+            AddedEntityRefIter {
+                entities,
+                index: 0,
+                revision,
+                storage,
+            }
         }
     }
 }
@@ -3458,6 +3579,46 @@ mod tests {
         let mut added_filter = world.query_filtered::<crate::entity::Entity, Added<Position>>();
         let filtered_entities: Vec<_> = added_filter.iter_since(&world, checkpoint).collect();
         assert_eq!(filtered_entities, vec![added_after_checkpoint]);
+    }
+
+    #[test]
+    fn filtered_added_and_changed_queries_can_return_components() {
+        let mut world = World::new();
+        let changed = world.spawn(Position(1)).id();
+        let _unchanged = world.spawn(Position(2)).id();
+        let checkpoint = world.change_tick();
+        let added = world.spawn(Position(3)).id();
+        world.get_mut::<Position>(changed).unwrap().0 = 10;
+
+        let mut changed_components = world.query_filtered::<&Position, Changed<Position>>();
+        let changed_values: Vec<_> = changed_components
+            .iter_since(&world, checkpoint)
+            .map(|position| position.0)
+            .collect();
+        assert_eq!(changed_values, vec![10, 3]);
+
+        let mut added_components = world.query_filtered::<&Position, Added<Position>>();
+        let added_values: Vec<_> = added_components
+            .iter_since(&world, checkpoint)
+            .map(|position| position.0)
+            .collect();
+        assert_eq!(added_values, vec![3]);
+
+        let mut changed_pairs =
+            world.query_filtered::<(crate::entity::Entity, &Position), Changed<Position>>();
+        let changed_entities: Vec<_> = changed_pairs
+            .iter_since(&world, checkpoint)
+            .map(|(entity, position)| (entity, position.0))
+            .collect();
+        assert_eq!(changed_entities, vec![(changed, 10), (added, 3)]);
+
+        let mut added_pairs =
+            world.query_filtered::<(crate::entity::Entity, &Position), Added<Position>>();
+        let added_entities: Vec<_> = added_pairs
+            .iter_since(&world, checkpoint)
+            .map(|(entity, position)| (entity, position.0))
+            .collect();
+        assert_eq!(added_entities, vec![(added, 3)]);
     }
 
     fn collect_changed_positions(
