@@ -46,6 +46,15 @@ pub struct MaterialDescriptor {
     /// Base material color multiplied with each renderable's per-entity tint.
     #[serde(default = "default_base_color")]
     pub base_color: [f32; 4],
+    /// Metallic response factor for lit materials.
+    #[serde(default = "default_metallic_factor")]
+    pub metallic_factor: f32,
+    /// Roughness response factor for lit materials.
+    #[serde(default = "default_roughness_factor")]
+    pub roughness_factor: f32,
+    /// Additive emissive color for lit and unlit materials.
+    #[serde(default)]
+    pub emissive_color: [f32; 3],
     /// Alpha compositing mode used by renderer-facing pipelines.
     #[serde(default)]
     pub alpha_mode: AlphaMode,
@@ -69,6 +78,14 @@ pub struct OxMaterialDocument {
 
 fn default_base_color() -> [f32; 4] {
     [1.0, 1.0, 1.0, 1.0]
+}
+
+fn default_metallic_factor() -> f32 {
+    0.0
+}
+
+fn default_roughness_factor() -> f32 {
+    0.5
 }
 
 impl OxMaterialDocument {
@@ -246,6 +263,9 @@ mod tests {
         assert_eq!(material.name, "Legacy");
         assert_eq!(material.material_type, MaterialType::Unlit);
         assert_eq!(material.base_color, [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(material.metallic_factor, 0.0);
+        assert_eq!(material.roughness_factor, 0.5);
+        assert_eq!(material.emissive_color, [0.0, 0.0, 0.0]);
         assert_eq!(material.alpha_mode, AlphaMode::Opaque);
         let _ = fs::remove_file(path);
     }
@@ -262,6 +282,9 @@ mod tests {
                     "name": "Wrapped",
                     "material_type": "lit",
                     "base_color": [0.8, 0.7, 0.6, 1.0],
+                    "metallic_factor": 0.2,
+                    "roughness_factor": 0.75,
+                    "emissive_color": [0.1, 0.05, 0.0],
                     "alpha_mode": "mask",
                     "shader": { "source": "builtin", "shader": "lit" }
                 }
@@ -273,6 +296,9 @@ mod tests {
         assert_eq!(material.name, "Wrapped");
         assert_eq!(material.material_type, MaterialType::Lit);
         assert_eq!(material.base_color, [0.8, 0.7, 0.6, 1.0]);
+        assert_eq!(material.metallic_factor, 0.2);
+        assert_eq!(material.roughness_factor, 0.75);
+        assert_eq!(material.emissive_color, [0.1, 0.05, 0.0]);
         assert_eq!(material.alpha_mode, AlphaMode::Mask);
         let _ = fs::remove_file(path);
     }
@@ -334,6 +360,9 @@ mod tests {
             },
             fallback_shader: None,
             base_color: [0.3, 0.4, 0.5, 1.0],
+            metallic_factor: 0.4,
+            roughness_factor: 0.8,
+            emissive_color: [0.0, 0.1, 0.2],
             alpha_mode: AlphaMode::Mask,
             albedo_texture: None,
             normal_texture: None,
@@ -343,6 +372,7 @@ mod tests {
         save_material_descriptor(&path, &material).unwrap();
         let raw = fs::read_to_string(&path).unwrap();
         assert!(raw.contains("\"format\": \"oxide.oxmat\""));
+        assert!(raw.contains("\"metallic_factor\": 0.4"));
         assert!(raw.contains("\"alpha_mode\": \"mask\""));
 
         let loaded = load_material_descriptor(&path).unwrap();

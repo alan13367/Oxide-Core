@@ -239,6 +239,9 @@ pub enum RenderMaterial {
         material_type: MaterialType,
         name: String,
         base_color: [f32; 4],
+        metallic_factor: f32,
+        roughness_factor: f32,
+        emissive_color: [f32; 3],
         alpha_mode: AlphaMode,
         albedo_texture: Option<String>,
     },
@@ -252,6 +255,9 @@ impl Default for RenderMaterial {
             material_type: MaterialType::Unlit,
             name: "default_unlit".to_string(),
             base_color: [1.0, 1.0, 1.0, 1.0],
+            metallic_factor: 0.0,
+            roughness_factor: 0.5,
+            emissive_color: [0.0, 0.0, 0.0],
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: None,
         }
@@ -271,6 +277,9 @@ impl RenderMaterial {
             material_type: descriptor.material_type,
             name: descriptor.name.clone(),
             base_color: descriptor.base_color,
+            metallic_factor: descriptor.metallic_factor,
+            roughness_factor: descriptor.roughness_factor,
+            emissive_color: descriptor.emissive_color,
             alpha_mode: descriptor.alpha_mode,
             albedo_texture: descriptor.albedo_texture.clone(),
         }
@@ -329,6 +338,47 @@ impl RenderMaterial {
         match self {
             Self::Builtin { base_color, .. } => *base_color,
             Self::Named(_) => [1.0, 1.0, 1.0, 1.0],
+        }
+    }
+
+    /// Returns material response factors resolved through an optional library.
+    pub fn factors_with_library(&self, library: Option<&SceneMaterialLibrary>) -> MaterialFactors {
+        if let Self::Named(name) = self {
+            if let Some(resolved) = library.and_then(|library| library.get(name)) {
+                return resolved.factors_with_library(None);
+            }
+        }
+
+        match self {
+            Self::Builtin {
+                metallic_factor,
+                roughness_factor,
+                emissive_color,
+                ..
+            } => MaterialFactors {
+                metallic_factor: *metallic_factor,
+                roughness_factor: *roughness_factor,
+                emissive_color: *emissive_color,
+            },
+            Self::Named(_) => MaterialFactors::default(),
+        }
+    }
+}
+
+/// Lightweight material response factors used by the automatic scene renderer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MaterialFactors {
+    pub metallic_factor: f32,
+    pub roughness_factor: f32,
+    pub emissive_color: [f32; 3],
+}
+
+impl Default for MaterialFactors {
+    fn default() -> Self {
+        Self {
+            metallic_factor: 0.0,
+            roughness_factor: 0.5,
+            emissive_color: [0.0, 0.0, 0.0],
         }
     }
 }

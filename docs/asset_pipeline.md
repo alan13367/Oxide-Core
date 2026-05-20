@@ -168,8 +168,10 @@ scene renderer. Entities can also store `MaterialFilter` to render directly from
 a descriptor handle; this handle-backed path takes precedence over a copied
 `RenderMesh` material when the descriptor asset is available. `base_color` is
 preserved on the resolved material and multiplied with each renderable's tint
-during scene rendering. See `examples/material_filter_example` for a compact
-code-first scene that renders from a descriptor handle.
+during scene rendering. `metallic_factor`, `roughness_factor`, and
+`emissive_color` are also preserved for the automatic lit shader. See
+`examples/material_filter_example` for a compact code-first scene that renders
+from a descriptor handle.
 
 ```rust
 let handle = request_material_descriptor_load(

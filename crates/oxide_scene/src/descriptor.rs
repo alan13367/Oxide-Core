@@ -924,6 +924,15 @@ pub struct SceneMaterialDescriptor {
     /// Base material color for top-level materials or per-entity tint for meshes.
     #[serde(default = "default_material_color")]
     pub color: [f32; 4],
+    /// Metallic response factor for lit materials.
+    #[serde(default)]
+    pub metallic_factor: f32,
+    /// Roughness response factor for lit materials.
+    #[serde(default = "default_roughness_factor")]
+    pub roughness_factor: f32,
+    /// Additive emissive color for lit and unlit materials.
+    #[serde(default)]
+    pub emissive_color: [f32; 3],
     /// Alpha compositing mode used by the automatic scene renderer.
     #[serde(default)]
     pub alpha_mode: SceneAlphaMode,
@@ -943,6 +952,9 @@ impl Default for SceneMaterialDescriptor {
             name: default_material_name(),
             shader: SceneBuiltinShader::Unlit,
             color: default_material_color(),
+            metallic_factor: 0.0,
+            roughness_factor: default_roughness_factor(),
+            emissive_color: [0.0, 0.0, 0.0],
             alpha_mode: SceneAlphaMode::Opaque,
             albedo_texture: None,
         }
@@ -959,6 +971,9 @@ impl From<SceneMaterialDescriptor> for RenderMaterial {
             material_type: value.shader.material_type(),
             name: value.name,
             base_color: [1.0, 1.0, 1.0, 1.0],
+            metallic_factor: value.metallic_factor,
+            roughness_factor: value.roughness_factor,
+            emissive_color: value.emissive_color,
             alpha_mode: value.alpha_mode.into(),
             albedo_texture: value.albedo_texture,
         }
@@ -1422,6 +1437,9 @@ fn scene_material_descriptor_from_render_material(
             shader,
             name,
             base_color,
+            metallic_factor,
+            roughness_factor,
+            emissive_color,
             alpha_mode,
             albedo_texture,
             ..
@@ -1441,6 +1459,9 @@ fn scene_material_descriptor_from_render_material(
                 name: name.clone(),
                 shader,
                 color: multiply_colors(*base_color, tint),
+                metallic_factor: *metallic_factor,
+                roughness_factor: *roughness_factor,
+                emissive_color: *emissive_color,
                 alpha_mode: (*alpha_mode).into(),
                 albedo_texture: albedo_texture.clone(),
             })
@@ -2143,6 +2164,10 @@ fn default_material_color() -> [f32; 4] {
     [0.85, 0.72, 0.48, 1.0]
 }
 
+fn default_roughness_factor() -> f32 {
+    0.5
+}
+
 fn default_sprite_size() -> [f32; 2] {
     [1.0, 1.0]
 }
@@ -2323,6 +2348,9 @@ mod tests {
                         material_type: oxide_renderer::descriptor::MaterialType::Basic,
                         name: "basic".to_string(),
                         base_color: [1.0; 4],
+                        metallic_factor: 0.0,
+                        roughness_factor: 0.5,
+                        emissive_color: [0.0, 0.0, 0.0],
                         alpha_mode: oxide_renderer::descriptor::AlphaMode::Opaque,
                         albedo_texture: None,
                     },
@@ -2354,6 +2382,9 @@ mod tests {
                         material_type: oxide_renderer::descriptor::MaterialType::Lit,
                         name: "crate".to_string(),
                         base_color: [0.8, 0.7, 0.6, 1.0],
+                        metallic_factor: 0.25,
+                        roughness_factor: 0.7,
+                        emissive_color: [0.02, 0.01, 0.0],
                         alpha_mode: oxide_renderer::descriptor::AlphaMode::Mask,
                         albedo_texture: Some("#crate_albedo".to_string()),
                     },
@@ -2370,6 +2401,9 @@ mod tests {
         assert_eq!(material.name, "crate");
         assert_eq!(material.shader, SceneBuiltinShader::Lit);
         assert_eq!(material.color, [0.4, 0.7, 0.6, 1.0]);
+        assert_eq!(material.metallic_factor, 0.25);
+        assert_eq!(material.roughness_factor, 0.7);
+        assert_eq!(material.emissive_color, [0.02, 0.01, 0.0]);
         assert_eq!(material.alpha_mode, SceneAlphaMode::Mask);
         assert_eq!(material.albedo_texture.as_deref(), Some("#crate_albedo"));
     }
@@ -3097,6 +3131,9 @@ mod tests {
                 name: "materials.crate".to_string(),
                 shader: SceneBuiltinShader::Lit,
                 color: [0.9, 0.7, 0.45, 1.0],
+                metallic_factor: 0.4,
+                roughness_factor: 0.65,
+                emissive_color: [0.02, 0.01, 0.0],
                 alpha_mode: SceneAlphaMode::Mask,
                 albedo_texture: Some("#crate_albedo".to_string()),
                 ..Default::default()
@@ -3125,10 +3162,16 @@ mod tests {
             library.get("materials.crate"),
             Some(RenderMaterial::Builtin {
                 name,
+                metallic_factor,
+                roughness_factor,
+                emissive_color,
                 alpha_mode,
                 albedo_texture: Some(texture),
                 ..
             }) if name == "materials.crate"
+                && *metallic_factor == 0.4
+                && *roughness_factor == 0.65
+                && *emissive_color == [0.02, 0.01, 0.0]
                 && *alpha_mode == oxide_renderer::descriptor::AlphaMode::Mask
                 && texture == "#crate_albedo"
         ));
@@ -3255,6 +3298,9 @@ mod tests {
                             "shader": "lit",
                             "alpha_mode": "mask",
                             "color": [0.9, 0.7, 0.45, 1.0],
+                            "metallic_factor": 0.3,
+                            "roughness_factor": 0.8,
+                            "emissive_color": [0.04, 0.02, 0.0],
                             "albedo_texture": "#crate_albedo"
                         }
                     ],
@@ -3291,6 +3337,9 @@ mod tests {
             Some("#crate_albedo")
         );
         assert_eq!(scene.materials[0].alpha_mode, SceneAlphaMode::Mask);
+        assert_eq!(scene.materials[0].metallic_factor, 0.3);
+        assert_eq!(scene.materials[0].roughness_factor, 0.8);
+        assert_eq!(scene.materials[0].emissive_color, [0.04, 0.02, 0.0]);
         let SceneEntityKind::Mesh { material, .. } = &scene.entities[1].kind else {
             panic!("expected mesh entity");
         };

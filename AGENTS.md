@@ -112,7 +112,7 @@ Engine users implement the `App` trait found in `oxide_engine::app`. The lifecyc
 ### Materials and Shaders
 - **Built-in Shaders**: Use `BuiltinShader` (`basic`, `lit`, `unlit`, `sky_gradient`, `sprite_ui`, `fallback`).
 - **Custom Shaders**: Load custom shaders through `ShaderSource::File` or `ShaderSource::WgslOwned`.
-- **Material Descriptors**: Materials can be defined using legacy JSON/RON/TOML descriptors, versioned `.oxmat` wrappers loaded via `load_material_descriptor`, or top-level `.oxscene` `materials`; descriptors support `alpha_mode` values `opaque`, `mask`, and `blend`, descriptors loaded through `DefaultPlugins` are registered into `SceneMaterialLibrary` by material name/base color/alpha mode/albedo texture, and `.oxscene` mesh materials can reference them with `"ref"`.
+- **Material Descriptors**: Materials can be defined using legacy JSON/RON/TOML descriptors, versioned `.oxmat` wrappers loaded via `load_material_descriptor`, or top-level `.oxscene` `materials`; descriptors support `alpha_mode` values `opaque`, `mask`, and `blend` plus `base_color`, `metallic_factor`, `roughness_factor`, `emissive_color`, and albedo texture refs; descriptors loaded through `DefaultPlugins` are registered into `SceneMaterialLibrary` by material name/base color/material factors/alpha mode/albedo texture, and `.oxscene` mesh materials can reference them with `"ref"`.
 
 ### Performance
 - Development profiles use `opt-level = 1` for faster iteration, while dependencies are compiled with `opt-level = 3`.

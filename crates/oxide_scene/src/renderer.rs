@@ -75,6 +75,7 @@ struct VertexInput {
     @location(6) model_3: vec4<f32>,
     @location(7) tint: vec4<f32>,
     @location(8) material: vec4<f32>,
+    @location(9) material_factors: vec4<f32>,
 };
 
 struct VertexOutput {
@@ -86,6 +87,9 @@ struct VertexOutput {
     @location(4) uv: vec2<f32>,
     @location(5) texture_weight: f32,
     @location(6) alpha_mode: f32,
+    @location(7) roughness_factor: f32,
+    @location(8) metallic_factor: f32,
+    @location(9) emissive_color: vec3<f32>,
 };
 
 @vertex
@@ -102,6 +106,9 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.uv = input.uv;
     output.texture_weight = input.material.y;
     output.alpha_mode = input.material.z;
+    output.roughness_factor = input.material.w;
+    output.metallic_factor = input.material_factors.x;
+    output.emissive_color = input.material_factors.yzw;
     return output;
 }
 
@@ -119,7 +126,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let normal = normalize(input.normal);
+    let view_dir = normalize(camera.position.xyz - input.world_position);
+    let roughness = clamp(input.roughness_factor, 0.04, 1.0);
+    let metallic = clamp(input.metallic_factor, 0.0, 1.0);
     var lighting = lights.ambient_color_intensity.rgb * lights.ambient_color_intensity.a;
+    var specular_lighting = vec3<f32>(0.0);
 
     for (var i: u32 = 0u; i < 4u; i = i + 1u) {
         if (i >= lights.directional_count) {
@@ -130,6 +141,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         let light_dir = normalize(-light.direction.xyz);
         let diffuse = max(dot(normal, light_dir), 0.0);
         lighting = lighting + light.color_intensity.rgb * light.color_intensity.a * diffuse;
+        let half_dir = normalize(light_dir + view_dir);
+        let specular_power = mix(64.0, 8.0, roughness);
+        let specular = pow(max(dot(normal, half_dir), 0.0), specular_power) * (1.0 - roughness);
+        specular_lighting = specular_lighting
+            + light.color_intensity.rgb * light.color_intensity.a * specular;
     }
 
     for (var i: u32 = 0u; i < lights.point_count; i = i + 1u) {
@@ -146,21 +162,35 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                 * diffuse
                 * attenuation
                 * attenuation;
+            let half_dir = normalize(light_dir + view_dir);
+            let specular_power = mix(64.0, 8.0, roughness);
+            let specular = pow(max(dot(normal, half_dir), 0.0), specular_power) * (1.0 - roughness);
+            specular_lighting = specular_lighting
+                + light.color_intensity.rgb
+                * light.color_intensity.a
+                * specular
+                * attenuation
+                * attenuation;
         }
     }
 
-    let color = surface_color.rgb * max(lighting, vec3<f32>(0.08));
+    let diffuse_color = surface_color.rgb * (1.0 - metallic * 0.65);
+    let specular_color = mix(vec3<f32>(0.04), surface_color.rgb, metallic);
+    let color = diffuse_color * max(lighting, vec3<f32>(0.08))
+        + specular_color * specular_lighting
+        + input.emissive_color;
     return vec4<f32>(color, surface_color.a);
 }
 "#;
 
-const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
     3 => Float32x4,
     4 => Float32x4,
     5 => Float32x4,
     6 => Float32x4,
     7 => Float32x4,
-    8 => Float32x4
+    8 => Float32x4,
+    9 => Float32x4
 ];
 
 const SPRITE_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
@@ -271,6 +301,7 @@ struct SceneInstanceRaw {
     model: [[f32; 4]; 4],
     tint: [f32; 4],
     material: [f32; 4],
+    material_factors: [f32; 4],
 }
 
 impl SceneInstanceRaw {
@@ -283,7 +314,13 @@ impl SceneInstanceRaw {
                 material.mode.shader_value(),
                 has_texture,
                 material.alpha_mode.shader_value(),
-                0.0,
+                f32::from_bits(material.roughness_factor),
+            ],
+            material_factors: [
+                f32::from_bits(material.metallic_factor),
+                f32::from_bits(material.emissive_color[0]),
+                f32::from_bits(material.emissive_color[1]),
+                f32::from_bits(material.emissive_color[2]),
             ],
         }
     }
@@ -293,6 +330,9 @@ impl SceneInstanceRaw {
 struct MaterialBatchKey {
     mode: MaterialMode,
     alpha_mode: AlphaMode,
+    metallic_factor: u32,
+    roughness_factor: u32,
+    emissive_color: [u32; 3],
     identity: String,
     albedo_texture: Option<String>,
 }
@@ -353,23 +393,40 @@ impl MaterialBatchKey {
                 material_type,
                 name,
                 base_color,
+                metallic_factor,
+                roughness_factor,
+                emissive_color,
                 alpha_mode,
                 albedo_texture,
             } => Self {
                 mode: material_mode(*shader, *material_type),
                 alpha_mode: *alpha_mode,
+                metallic_factor: material_factor_key(*metallic_factor),
+                roughness_factor: material_factor_key(*roughness_factor),
+                emissive_color: emissive_color.map(material_factor_key),
                 identity: format!(
-                    "builtin:{shader:?}:{material_type:?}:{name}:{base_color:?}:{alpha_mode:?}:{albedo_texture:?}"
+                    "builtin:{shader:?}:{material_type:?}:{name}:{base_color:?}:{metallic_factor:?}:{roughness_factor:?}:{emissive_color:?}:{alpha_mode:?}:{albedo_texture:?}"
                 ),
                 albedo_texture: albedo_texture.clone(),
             },
             RenderMaterial::Named(name) => Self {
                 mode: MaterialMode::Lit,
                 alpha_mode: AlphaMode::Opaque,
+                metallic_factor: material_factor_key(0.0),
+                roughness_factor: material_factor_key(0.5),
+                emissive_color: [0.0, 0.0, 0.0].map(material_factor_key),
                 identity: format!("named:{name}"),
                 albedo_texture: None,
             },
         }
+    }
+}
+
+fn material_factor_key(value: f32) -> u32 {
+    if value.is_nan() {
+        0.0f32.to_bits()
+    } else {
+        value.to_bits()
     }
 }
 
@@ -2222,6 +2279,9 @@ mod tests {
             material_type: MaterialType::Unlit,
             name: "ui".to_string(),
             base_color: [1.0, 1.0, 1.0, 1.0],
+            metallic_factor: 0.0,
+            roughness_factor: 0.5,
+            emissive_color: [0.0, 0.0, 0.0],
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: None,
         };
@@ -2239,6 +2299,9 @@ mod tests {
             material_type: MaterialType::Lit,
             name: "scene_lit".to_string(),
             base_color: [1.0, 1.0, 1.0, 1.0],
+            metallic_factor: 0.0,
+            roughness_factor: 0.5,
+            emissive_color: [0.0, 0.0, 0.0],
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: None,
         };
@@ -2264,6 +2327,9 @@ mod tests {
             material_type: MaterialType::Lit,
             name: "textured".to_string(),
             base_color: [1.0, 1.0, 1.0, 1.0],
+            metallic_factor: 0.0,
+            roughness_factor: 0.5,
+            emissive_color: [0.0, 0.0, 0.0],
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: Some("#image_0".to_string()),
         });
@@ -2272,6 +2338,9 @@ mod tests {
             material_type: MaterialType::Lit,
             name: "textured".to_string(),
             base_color: [1.0, 1.0, 1.0, 1.0],
+            metallic_factor: 0.0,
+            roughness_factor: 0.5,
+            emissive_color: [0.0, 0.0, 0.0],
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: Some("#image_1".to_string()),
         });
@@ -2292,6 +2361,9 @@ mod tests {
                 material_type: MaterialType::Unlit,
                 name: "matte".to_string(),
                 base_color: [0.5, 0.75, 1.0, 1.0],
+                metallic_factor: 0.0,
+                roughness_factor: 0.5,
+                emissive_color: [0.0, 0.0, 0.0],
                 alpha_mode: AlphaMode::Opaque,
                 albedo_texture: None,
             },
@@ -2308,7 +2380,7 @@ mod tests {
         assert_eq!(resolved.mode, MaterialMode::Unlit);
         assert_eq!(
             resolved.identity,
-            "builtin:Unlit:Unlit:matte:[0.5, 0.75, 1.0, 1.0]:Opaque:None"
+            "builtin:Unlit:Unlit:matte:[0.5, 0.75, 1.0, 1.0]:0.0:0.5:[0.0, 0.0, 0.0]:Opaque:None"
         );
     }
 
@@ -2319,6 +2391,9 @@ mod tests {
             material_type: MaterialType::Unlit,
             name: "leaf".to_string(),
             base_color: [1.0, 1.0, 1.0, 0.5],
+            metallic_factor: 0.0,
+            roughness_factor: 0.5,
+            emissive_color: [0.0, 0.0, 0.0],
             alpha_mode: AlphaMode::Mask,
             albedo_texture: None,
         };
@@ -2331,6 +2406,27 @@ mod tests {
         assert_eq!(instance.material[2], AlphaMode::Mask.shader_value());
         assert!(!AlphaMode::Mask.is_transparent_phase());
         assert!(AlphaMode::Blend.is_transparent_phase());
+    }
+
+    #[test]
+    fn material_batch_key_encodes_material_factors() {
+        let material = RenderMaterial::Builtin {
+            shader: BuiltinShader::Lit,
+            material_type: MaterialType::Lit,
+            name: "brushed_metal".to_string(),
+            base_color: [0.8, 0.8, 0.75, 1.0],
+            metallic_factor: 0.9,
+            roughness_factor: 0.25,
+            emissive_color: [0.1, 0.2, 0.3],
+            alpha_mode: AlphaMode::Opaque,
+            albedo_texture: None,
+        };
+
+        let key = MaterialBatchKey::from_material(&material);
+        let instance = SceneInstanceRaw::new(Mat4::IDENTITY, [1.0; 4], key);
+
+        assert_eq!(instance.material[3], 0.25);
+        assert_eq!(instance.material_factors, [0.9, 0.1, 0.2, 0.3]);
     }
 
     #[test]
@@ -2360,6 +2456,9 @@ mod tests {
                 material_type: MaterialType::Unlit,
                 name: "bronze".to_string(),
                 base_color: [0.5, 0.25, 0.75, 0.5],
+                metallic_factor: 0.0,
+                roughness_factor: 0.5,
+                emissive_color: [0.0, 0.0, 0.0],
                 alpha_mode: AlphaMode::Opaque,
                 albedo_texture: None,
             },
@@ -2390,6 +2489,9 @@ mod tests {
                 },
                 fallback_shader: Some("lit".to_string()),
                 base_color: [0.25, 0.5, 0.75, 1.0],
+                metallic_factor: 0.6,
+                roughness_factor: 0.35,
+                emissive_color: [0.01, 0.02, 0.03],
                 alpha_mode: AlphaMode::Blend,
                 albedo_texture: Some("#image_0".to_string()),
                 normal_texture: None,
@@ -2407,6 +2509,9 @@ mod tests {
                         material_type: MaterialType::Unlit,
                         name: "component_material".to_string(),
                         base_color: [1.0, 0.0, 0.0, 1.0],
+                        metallic_factor: 0.0,
+                        roughness_factor: 0.5,
+                        emissive_color: [0.0, 0.0, 0.0],
                         alpha_mode: AlphaMode::Opaque,
                         albedo_texture: None,
                     },
@@ -2422,6 +2527,14 @@ mod tests {
         );
         assert_eq!(material.albedo_texture_with_library(None), Some("#image_0"));
         assert_eq!(material.alpha_mode_with_library(None), AlphaMode::Blend);
+        assert_eq!(
+            material.factors_with_library(None),
+            crate::MaterialFactors {
+                metallic_factor: 0.6,
+                roughness_factor: 0.35,
+                emissive_color: [0.01, 0.02, 0.03],
+            }
+        );
         assert_eq!(
             MaterialBatchKey::from_material(&material).mode,
             MaterialMode::Lit

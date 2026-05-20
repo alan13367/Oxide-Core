@@ -180,6 +180,9 @@ fn extract_materials(document: &gltf::Document) -> Vec<(String, MaterialDescript
                 },
                 fallback_shader: Some("lit".to_string()),
                 base_color: pbr.base_color_factor(),
+                metallic_factor: pbr.metallic_factor(),
+                roughness_factor: pbr.roughness_factor(),
+                emissive_color: material.emissive_factor(),
                 alpha_mode: crate::descriptor::AlphaMode::Opaque,
                 albedo_texture,
                 normal_texture: None,
@@ -430,5 +433,32 @@ mod tests {
                 PathBuf::from("assets/models/textures/albedo.png"),
             ]
         );
+    }
+
+    #[test]
+    fn gltf_materials_preserve_pbr_factors() {
+        let raw = br#"{
+            "asset": { "version": "2.0" },
+            "materials": [
+                {
+                    "pbrMetallicRoughness": {
+                        "baseColorFactor": [0.8, 0.7, 0.6, 1.0],
+                        "metallicFactor": 0.35,
+                        "roughnessFactor": 0.85
+                    },
+                    "emissiveFactor": [0.1, 0.2, 0.3]
+                }
+            ]
+        }"#;
+        let gltf = gltf::Gltf::from_slice(raw).unwrap();
+
+        let materials = extract_materials(&gltf.document);
+
+        assert_eq!(materials.len(), 1);
+        let descriptor = &materials[0].1;
+        assert_eq!(descriptor.base_color, [0.8, 0.7, 0.6, 1.0]);
+        assert_eq!(descriptor.metallic_factor, 0.35);
+        assert_eq!(descriptor.roughness_factor, 0.85);
+        assert_eq!(descriptor.emissive_color, [0.1, 0.2, 0.3]);
     }
 }
