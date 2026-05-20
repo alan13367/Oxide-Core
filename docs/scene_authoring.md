@@ -102,6 +102,13 @@ existing color target so viewports can be composited.
   "format": "oxide.oxscene",
   "version": 1,
   "scene": {
+    "materials": [
+      {
+        "name": "crate_lit",
+        "shader": "lit",
+        "color": [0.9, 0.7, 0.45, 1.0]
+      }
+    ],
     "prefabs": [
       {
         "id": "crate_pair",
@@ -157,8 +164,9 @@ let root = try_spawn_scene_prefab(
 ```
 
 Native scene loads validate authored data before publishing the descriptor.
-Validation reports duplicate prefab IDs, missing prefab references, recursive
-prefab graphs, and empty sprite IDs with descriptor paths such as
+Validation reports duplicate material names, empty material names, duplicate
+prefab IDs, missing prefab references, recursive prefab graphs, and empty
+sprite IDs with descriptor paths such as
 `entities[0].children[1].id`. Use `SceneDescriptor::validate()` in editor tools
 and `try_spawn_scene_descriptor` / `try_spawn_scene_prefab` when code wants
 structured `SceneValidationError` diagnostics before mutating the world.
@@ -188,8 +196,26 @@ When `DefaultPlugins` loads a `.oxmat` descriptor through
 scenes a data-driven material path without forcing gameplay components to hold
 renderer pipelines.
 
-Native scene descriptors can reference the same library through the material
-`ref` field:
+Native scene descriptors can declare reusable material entries in the top-level
+`materials` array. Spawn registers those entries into `SceneMaterialLibrary`
+before entities and prefabs are expanded, so mesh material references in the
+same `.oxscene` can resolve without Rust setup:
+
+```json
+{
+  "materials": [
+    {
+      "name": "enemy_unlit",
+      "shader": "unlit",
+      "color": [1.0, 0.4, 0.35, 1.0]
+    }
+  ],
+  "entities": []
+}
+```
+
+Native scene descriptors can reference scene-declared, code-registered, or
+loaded `.oxmat` materials through the material `ref` field:
 
 ```json
 {

@@ -220,6 +220,7 @@ mod tests {
         };
 
         let scene = SceneDescriptor {
+            materials: Vec::new(),
             prefabs: Vec::new(),
             entities: vec![SceneEntityDescriptor {
                 name: Some("Asset Cube".to_string()),

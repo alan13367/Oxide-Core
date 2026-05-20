@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    MeshPrimitive, RenderLayers, RenderMaterial, RenderMesh, SpriteBillboard, SpriteDepthMode,
-    SpriteFacing,
+    MeshPrimitive, RenderLayers, RenderMaterial, RenderMesh, SceneMaterialLibrary, SpriteBillboard,
+    SpriteDepthMode, SpriteFacing,
 };
 
 pub const OXSCENE_FORMAT: &str = "oxide.oxscene";
@@ -60,6 +60,9 @@ pub struct Name(pub String);
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SceneDescriptor {
+    /// Reusable material intents registered before scene entities are spawned.
+    #[serde(default)]
+    pub materials: Vec<SceneMaterialDescriptor>,
     /// Reusable entity templates that can be instantiated by prefab entities.
     #[serde(default)]
     pub prefabs: Vec<ScenePrefabDescriptor>,
@@ -71,6 +74,7 @@ pub struct SceneDescriptor {
 impl SceneDescriptor {
     pub fn starter_scene() -> Self {
         Self {
+            materials: Vec::new(),
             prefabs: Vec::new(),
             entities: vec![
                 SceneEntityDescriptor {
@@ -139,8 +143,26 @@ impl SceneDescriptor {
     /// in authoring tools.
     pub fn validation_diagnostics(&self) -> Vec<SceneValidationDiagnostic> {
         let mut diagnostics = Vec::new();
+        let mut seen_materials = HashSet::new();
         let mut seen_prefabs = HashSet::new();
         let mut prefabs = HashMap::new();
+
+        for (index, material) in self.materials.iter().enumerate() {
+            let path = format!("materials[{index}]");
+            if material.name.trim().is_empty() {
+                diagnostics.push(SceneValidationDiagnostic::new(
+                    format!("{path}.name"),
+                    "material names must not be empty",
+                ));
+                continue;
+            }
+            if !seen_materials.insert(material.name.as_str()) {
+                diagnostics.push(SceneValidationDiagnostic::new(
+                    format!("{path}.name"),
+                    format!("duplicate material name '{}'", material.name),
+                ));
+            }
+        }
 
         for (index, prefab) in self.prefabs.iter().enumerate() {
             let path = format!("prefabs[{index}]");
@@ -654,6 +676,7 @@ pub fn spawn_scene_descriptor(world: &mut World, scene: &SceneDescriptor) -> Vec
 }
 
 fn spawn_scene_descriptor_unchecked(world: &mut World, scene: &SceneDescriptor) -> Vec<Entity> {
+    register_scene_materials(world, scene);
     let prefabs = scene.prefab_lookup();
     let mut prefab_stack = Vec::new();
     scene
@@ -661,6 +684,24 @@ fn spawn_scene_descriptor_unchecked(world: &mut World, scene: &SceneDescriptor) 
         .iter()
         .map(|entity| spawn_scene_entity(world, entity, &prefabs, None, &mut prefab_stack))
         .collect()
+}
+
+fn register_scene_materials(world: &mut World, scene: &SceneDescriptor) {
+    if scene.materials.is_empty() {
+        return;
+    }
+
+    if !world.contains_resource::<SceneMaterialLibrary>() {
+        world.insert_resource(SceneMaterialLibrary::default());
+    }
+
+    let library = world.resource_mut::<SceneMaterialLibrary>();
+    for material in &scene.materials {
+        library.register(
+            material.name.clone(),
+            RenderMaterial::from(material.clone()),
+        );
+    }
 }
 
 /// Spawns one prefab instance from a scene descriptor.
@@ -702,6 +743,7 @@ fn spawn_scene_prefab_unchecked(
     prefab_id: impl Into<String>,
     transform: SceneTransform,
 ) -> Option<Entity> {
+    register_scene_materials(world, scene);
     let prefab_id = prefab_id.into();
     scene.prefab(&prefab_id)?;
 
@@ -1109,6 +1151,7 @@ mod tests {
     #[test]
     fn sprite_scene_entities_spawn_billboards() {
         let scene = SceneDescriptor {
+            materials: Vec::new(),
             prefabs: Vec::new(),
             entities: vec![SceneEntityDescriptor {
                 name: Some("Sprite Actor".to_string()),
@@ -1140,6 +1183,7 @@ mod tests {
     #[test]
     fn hidden_scene_entities_spawn_visibility_component() {
         let scene = SceneDescriptor {
+            materials: Vec::new(),
             prefabs: Vec::new(),
             entities: vec![SceneEntityDescriptor {
                 name: Some("Hidden Mesh".to_string()),
@@ -1161,6 +1205,7 @@ mod tests {
     #[test]
     fn scene_entities_spawn_render_layer_masks() {
         let scene = SceneDescriptor {
+            materials: Vec::new(),
             prefabs: Vec::new(),
             entities: vec![SceneEntityDescriptor {
                 name: Some("Layered Mesh".to_string()),
@@ -1185,6 +1230,7 @@ mod tests {
     #[test]
     fn mesh_scene_entities_can_reference_named_materials() {
         let scene = SceneDescriptor {
+            materials: Vec::new(),
             prefabs: Vec::new(),
             entities: vec![SceneEntityDescriptor {
                 name: Some("Named Material Mesh".to_string()),
@@ -1211,8 +1257,51 @@ mod tests {
     }
 
     #[test]
+    fn scene_materials_register_into_world_library_before_spawning() {
+        let scene = SceneDescriptor {
+            materials: vec![SceneMaterialDescriptor {
+                name: "materials.crate".to_string(),
+                shader: SceneBuiltinShader::Lit,
+                color: [0.9, 0.7, 0.45, 1.0],
+                ..Default::default()
+            }],
+            prefabs: Vec::new(),
+            entities: vec![SceneEntityDescriptor {
+                name: Some("Scene Material Mesh".to_string()),
+                kind: SceneEntityKind::Mesh {
+                    primitive: SceneMeshPrimitive::Cube,
+                    material: SceneMaterialDescriptor {
+                        reference: Some("materials.crate".to_string()),
+                        color: [0.25, 0.5, 0.75, 1.0],
+                        ..Default::default()
+                    },
+                },
+                ..Default::default()
+            }],
+        };
+
+        let mut world = World::new();
+        let roots = spawn_scene_descriptor(&mut world, &scene);
+        assert_eq!(roots.len(), 1);
+
+        let library = world.get_resource::<SceneMaterialLibrary>().unwrap();
+        assert!(matches!(
+            library.get("materials.crate"),
+            Some(RenderMaterial::Builtin { name, .. }) if name == "materials.crate"
+        ));
+
+        let mesh = world.get::<RenderMesh>(roots[0]).unwrap();
+        assert!(matches!(
+            &mesh.material,
+            RenderMaterial::Named(name) if name == "materials.crate"
+        ));
+        assert_eq!(mesh.tint, [0.25, 0.5, 0.75, 1.0]);
+    }
+
+    #[test]
     fn camera_entities_spawn_render_view_metadata() {
         let scene = SceneDescriptor {
+            materials: Vec::new(),
             prefabs: Vec::new(),
             entities: vec![SceneEntityDescriptor {
                 name: Some("Debug Camera".to_string()),
@@ -1280,6 +1369,7 @@ mod tests {
     #[test]
     fn scene_validation_reports_prefab_authoring_errors() {
         let scene = SceneDescriptor {
+            materials: Vec::new(),
             prefabs: vec![
                 ScenePrefabDescriptor {
                     id: "loop".to_string(),
@@ -1338,6 +1428,39 @@ mod tests {
     }
 
     #[test]
+    fn scene_validation_reports_material_authoring_errors() {
+        let scene = SceneDescriptor {
+            materials: vec![
+                SceneMaterialDescriptor {
+                    name: "crate".to_string(),
+                    ..Default::default()
+                },
+                SceneMaterialDescriptor {
+                    name: "crate".to_string(),
+                    ..Default::default()
+                },
+                SceneMaterialDescriptor {
+                    name: "   ".to_string(),
+                    ..Default::default()
+                },
+            ],
+            prefabs: Vec::new(),
+            entities: Vec::new(),
+        };
+
+        let err = scene.validate().unwrap_err();
+        let diagnostics = err.diagnostics();
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "materials[1].name"
+                && diagnostic.message.contains("duplicate material name")
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "materials[2].name"
+                && diagnostic.message == "material names must not be empty"
+        }));
+    }
+
+    #[test]
     fn load_scene_descriptor_rejects_invalid_prefab_reference() {
         let path = temp_path("invalid_prefab_scene", "oxscene");
         fs::write(
@@ -1369,6 +1492,7 @@ mod tests {
     #[test]
     fn try_spawn_scene_descriptor_rejects_invalid_scene_without_spawning() {
         let scene = SceneDescriptor {
+            materials: Vec::new(),
             prefabs: Vec::new(),
             entities: vec![SceneEntityDescriptor {
                 kind: SceneEntityKind::Prefab {
@@ -1391,6 +1515,7 @@ mod tests {
 
     fn prefab_test_scene() -> SceneDescriptor {
         SceneDescriptor {
+            materials: Vec::new(),
             prefabs: vec![ScenePrefabDescriptor {
                 id: "crate_pair".to_string(),
                 entities: vec![SceneEntityDescriptor {

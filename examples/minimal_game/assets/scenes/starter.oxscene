@@ -2,6 +2,18 @@
   "format": "oxide.oxscene",
   "version": 1,
   "scene": {
+    "materials": [
+      {
+        "name": "crate_unlit",
+        "shader": "unlit",
+        "color": [0.74, 0.52, 0.31, 1.0]
+      },
+      {
+        "name": "default_unlit",
+        "shader": "unlit",
+        "color": [0.85, 0.72, 0.48, 1.0]
+      }
+    ],
     "prefabs": [
       {
         "id": "crate_pair",
@@ -11,8 +23,7 @@
             "type": "mesh",
             "primitive": "cube",
             "material": {
-              "name": "crate_unlit",
-              "shader": "unlit",
+              "ref": "crate_unlit",
               "color": [0.74, 0.52, 0.31, 1.0]
             },
             "children": [
@@ -25,8 +36,7 @@
                 "type": "mesh",
                 "primitive": "cube",
                 "material": {
-                  "name": "crate_unlit",
-                  "shader": "unlit",
+                  "ref": "crate_unlit",
                   "color": [0.82, 0.61, 0.38, 1.0]
                 }
               }
@@ -63,8 +73,7 @@
         "type": "mesh",
         "primitive": "cube",
         "material": {
-          "name": "default_unlit",
-          "shader": "unlit",
+          "ref": "default_unlit",
           "color": [0.85, 0.72, 0.48, 1.0]
         }
       },

@@ -50,7 +50,8 @@ the engine prelude for normal game code.
 - Use `SceneMaterialLibrary` with `RenderMaterial::Named` when many entities
   should share a reusable material intent. Loaded `.oxmat` descriptors are
   registered into the library by material name through `DefaultPlugins`, and
-  `.oxscene` mesh materials can use `"ref": "material_name"` to reference them.
+  `.oxscene` files can declare reusable `materials` or use mesh material
+  `"ref": "material_name"` entries to reference them.
 - Use `SpriteAssets` and `SpriteBillboard` for native custom sprites such as
   2D enemies, pickups, muzzle flashes, first-person weapons, and overlay props.
 - Use `"type": "sprite"` entities in `.oxscene` files when a scene should place
