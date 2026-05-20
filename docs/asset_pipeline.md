@@ -104,6 +104,9 @@ new data. Use `get_mut_mark_changed` for direct in-place edits that should
 invalidate dependent caches. `changes()` and `drain_changes()` report added,
 modified, and removed handles so systems can rebuild only affected GPU/editor
 caches without scanning the whole asset collection every frame.
+When more than one cache needs the same records, keep an
+`AssetChangeCursor<T>` per cache and call `read(&assets)`; this advances only
+that cursor and leaves the retained change log available for other systems.
 
 When a changed path maps to a known typed asset path, use
 `reload_path_async(path, loader)` to keep the existing handle and publish the

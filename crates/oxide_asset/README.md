@@ -12,7 +12,9 @@ and can be queried with `revision` or `changed_since`. Use
 `get_mut_mark_changed` for in-place edits that should invalidate renderer,
 editor, or importer caches. `changes` and `drain_changes` expose added,
 modified, and removed handles since the last clear/drain so systems can rebuild
-only affected caches.
+only affected caches. Prefer `AssetChangeCursor<T>` when multiple caches or
+systems need to observe the same change log independently without a single
+global drain owner.
 
 `AssetServer` tracks typed path identity, async load status, and optional
 dependency paths. Importers can record secondary files with

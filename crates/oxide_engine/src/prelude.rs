@@ -11,9 +11,10 @@ pub use crate::asset::{load_gltf_async, GltfSceneAssets};
 pub use crate::asset::{
     material_descriptor_asset_system, material_descriptor_dependencies,
     poll_material_descriptor_assets, register_material_asset, reload_changed_material_descriptors,
-    reload_material_descriptor_path, request_material_descriptor_load, AssetLoadStatus,
-    AssetServerResource, Handle, HandleAllocator, MaterialAssets, MaterialDescriptorAssets,
-    MaterialDescriptorHandle, MaterialHandle, MeshCache, MeshFilter, MeshHandle,
+    reload_material_descriptor_path, request_material_descriptor_load, AssetChange,
+    AssetChangeCursor, AssetChangeKind, AssetLoadStatus, AssetServerResource, Assets, Handle,
+    HandleAllocator, MaterialAssets, MaterialDescriptorAssets, MaterialDescriptorHandle,
+    MaterialHandle, MeshCache, MeshFilter, MeshHandle,
 };
 pub use crate::audio::{
     initialize_audio, Audio, AudioClip, AudioClipError, AudioError, AudioPlugin, AudioTone,
