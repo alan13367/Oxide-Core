@@ -39,6 +39,9 @@ use crate::window::Window;
 use oxide_renderer::Renderer;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Startup;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PreUpdate;
 
 /// Fixed-step gameplay stage driven by [`FixedTime`](crate::ecs::FixedTime).
@@ -56,6 +59,8 @@ pub struct Render;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AppStage {
+    /// Runs once after app/window initialization and startup plugin hooks.
+    Startup,
     /// Runs once per rendered frame before fixed and variable gameplay work.
     PreUpdate,
     /// Runs zero or more times per rendered frame using the `FixedTime` accumulator.
@@ -83,6 +88,7 @@ pub type StartupSystemFn = fn(&mut World, &Window);
 
 struct RunnerSystems {
     startup: Vec<StartupSystemFn>,
+    startup_schedule: Schedule,
     pre_update: Schedule,
     fixed_update: Schedule,
     update: Schedule,
@@ -96,6 +102,7 @@ impl Default for RunnerSystems {
     fn default() -> Self {
         Self {
             startup: Vec::new(),
+            startup_schedule: Schedule::new(),
             pre_update: Schedule::new(),
             fixed_update: Schedule::new(),
             update: Schedule::new(),
@@ -756,6 +763,7 @@ impl<T: App> AppBuilder<T> {
 
     fn stage_schedule_mut(&mut self, stage: AppStage) -> &mut Schedule {
         match stage {
+            AppStage::Startup => &mut self.systems.startup_schedule,
             AppStage::PreUpdate => &mut self.systems.pre_update,
             AppStage::FixedUpdate => &mut self.systems.fixed_update,
             AppStage::Update => &mut self.systems.update,
@@ -839,9 +847,13 @@ impl<T: App> AppRunner<T> {
         }
 
         if let (Some(app), Some(window)) = (self.app.as_mut(), self.window.as_ref()) {
+            if !app.world().contains_resource::<Window>() {
+                app.world_mut().insert_resource(window.clone());
+            }
             for startup in &self.systems.startup {
                 startup(app.world_mut(), window);
             }
+            RunnerSystems::run(&mut self.systems.startup_schedule, app.world_mut());
             self.startup_ran = true;
         }
     }
@@ -1137,4 +1149,78 @@ pub async fn create_renderer(window: &Window) -> Renderer {
     Renderer::new(window.winit_window().clone())
         .await
         .expect("Failed to create renderer")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ecs::ResMut;
+
+    #[derive(oxide_ecs::Resource, Default)]
+    struct StartupCounter(u32);
+
+    struct TestApp {
+        world: World,
+    }
+
+    impl App for TestApp {
+        fn configure(_world: &mut World) {}
+
+        fn init(_window: &Window, _renderer: Renderer) -> Self {
+            Self {
+                world: World::new(),
+            }
+        }
+
+        fn world(&self) -> &World {
+            &self.world
+        }
+
+        fn world_mut(&mut self) -> &mut World {
+            &mut self.world
+        }
+
+        fn update(&mut self) {}
+
+        fn on_event(&mut self, _event: EngineEvent) {}
+    }
+
+    fn increment_startup_counter(mut counter: ResMut<StartupCounter>) {
+        counter.0 += 1;
+    }
+
+    #[test]
+    fn app_stage_startup_accepts_normal_system_params() {
+        let mut builder = AppBuilder::<TestApp>::new();
+        builder.add_system_mut(AppStage::Startup, increment_startup_counter);
+
+        let mut world = World::new();
+        world.insert_resource(StartupCounter::default());
+
+        RunnerSystems::run(&mut builder.systems.startup_schedule, &mut world);
+
+        assert_eq!(world.resource::<StartupCounter>().0, 1);
+    }
+
+    #[test]
+    fn startup_stage_supports_system_ordering() {
+        fn first(mut counter: ResMut<StartupCounter>) {
+            counter.0 = counter.0 * 10 + 1;
+        }
+
+        fn second(mut counter: ResMut<StartupCounter>) {
+            counter.0 = counter.0 * 10 + 2;
+        }
+
+        let mut builder = AppBuilder::<TestApp>::new();
+        builder.add_labeled_system_mut(AppStage::Startup, "second", second);
+        builder.add_labeled_system_before_mut(AppStage::Startup, "first", "second", first);
+
+        let mut world = World::new();
+        world.insert_resource(StartupCounter::default());
+
+        RunnerSystems::run(&mut builder.systems.startup_schedule, &mut world);
+
+        assert_eq!(world.resource::<StartupCounter>().0, 12);
+    }
 }

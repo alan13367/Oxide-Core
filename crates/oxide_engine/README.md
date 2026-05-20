@@ -9,10 +9,11 @@ system, window/event loop integration, startup/render wiring, and prelude
 re-exports for focused runtime crates such as `oxide_scene`, `oxide_ui`,
 `oxide_camera`, `oxide_light`, `oxide_audio`, and `oxide_physics`.
 
-The runner exposes explicit gameplay stages plus a lightweight ordered render
-pass schedule. Plugins can register frame callbacks around stable anchors for
-scene rendering, game text, `App::queue`, and egui without taking over the
-entire app render hook.
+The runner exposes explicit gameplay stages, including a one-shot
+`AppStage::Startup` schedule for normal ECS-param setup systems, plus a
+lightweight ordered render pass schedule. Plugins can register frame callbacks
+around stable anchors for scene rendering, game text, `App::queue`, and egui
+without taking over the entire app render hook.
 
 `DefaultPlugins` also installs frame diagnostics. The shared `Diagnostics`
 resource records `DELTA_SECONDS`, `FRAME_TIME_MS`, and `FPS` for overlays,

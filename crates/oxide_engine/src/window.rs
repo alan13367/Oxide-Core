@@ -12,6 +12,8 @@ pub struct Window {
     inner: Arc<WinitWindow>,
 }
 
+impl oxide_ecs::resource::Resource for Window {}
+
 impl Window {
     pub fn new(event_loop: &ActiveEventLoop, title: &str, width: u32, height: u32) -> Self {
         let window = event_loop

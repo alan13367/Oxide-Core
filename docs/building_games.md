@@ -13,6 +13,8 @@ the engine prelude for normal game code.
 
 - Use `DefaultPlugins` for input, transforms, renderer resources, and asset
   setup.
+- Use `AppStage::Startup` for one-shot setup systems that should use normal
+  ECS params such as `Commands`, `ResMut<T>`, or `Res<Window>`.
 - Use `AppStage::FixedUpdate` and `FixedTime` for deterministic gameplay
   systems that should advance at a stable tick rate independent of rendering.
 - Use `ActionBindings<T>`, `ActionInput<T>`, and
@@ -113,6 +115,7 @@ app::<MyGame>()
     .add_plugins(DefaultPlugins)
     .add_plugins(SceneAuthoringPlugins)
     .add_plugin(AudioPlugin)
+    .add_system(AppStage::Startup, setup_level)
     .add_labeled_system_to_set(
         AppStage::PreUpdate,
         "game.input.actions",
@@ -122,6 +125,22 @@ app::<MyGame>()
     .add_system_after(AppStage::PreUpdate, "game.input", camera_controller_system)
     .add_system(AppStage::FixedUpdate, fixed_simulation_system)
     .run();
+```
+
+`AppStage::Startup` runs once after the app and window exist, after
+window-aware engine startup hooks, and before the first update frame. It uses
+normal system params:
+
+```rust
+fn setup_level(mut commands: Commands, window: Res<Window>) {
+    commands.spawn((
+        Name("Player".to_string()),
+        TransformComponent::default(),
+    ));
+
+    let size = window.size();
+    tracing::info!("window size: {}x{}", size.width, size.height);
+}
 ```
 
 `FixedUpdate` runs after `PreUpdate` and before normal `Update` work. Read

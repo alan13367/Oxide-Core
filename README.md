@@ -27,6 +27,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Ergonomic Systems**: Signature-driven systems via `IntoSystem` + params (`Res`, `ResMut`, `Query`, `Commands`) in both app stages and standalone ECS schedules
 - **ECS Change Revisions**: `World` tracks component/resource mutation ticks so renderer, asset, editor, and gameplay caches can invalidate only changed data
 - **System Ordering**: Label systems, group them into sets, and register before/after constraints inside app stages or standalone schedules
+- **Startup Schedule**: Register one-shot setup systems with normal ECS params through `AppStage::Startup`
 - **Action + Axis Input Mapping**: Bind game-defined actions and movement axes to keyboard/mouse triggers with `ActionBindings`, `AxisBindings`, and sync systems
 - **Fixed-Step Scheduling**: Use `AppStage::FixedUpdate` with `FixedTime` for deterministic gameplay ticks inside the normal app runner
 - **Runtime Diagnostics**: `DefaultPlugins` records frame time, FPS, and delta seconds into a lightweight `Diagnostics` resource used by tooling and the dev overlay
@@ -115,8 +116,25 @@ fn main() {
     app::<MyApp>()
         .add_plugins(DefaultPlugins)
         .add_plugins(SceneAuthoringPlugins)
+        .add_system(AppStage::Startup, setup_level)
         .add_system(AppStage::PreUpdate, camera_controller_system)
         .run();
+}
+```
+
+`AppStage::Startup` runs once after window/app initialization and engine
+startup hooks. It uses the same `IntoSystem` signatures as other stages, so
+setup code can request `Commands`, `Res`, `ResMut`, queries, events, and
+`Res<Window>`:
+
+```rust
+fn setup_level(
+    mut commands: Commands,
+    window: Res<Window>,
+    mut ui: ResMut<RuntimeUi>,
+) {
+    commands.spawn(Player::default());
+    ui.label("window", format!("{}x{}", window.size().width, window.size().height));
 }
 ```
 

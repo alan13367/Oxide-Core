@@ -8,7 +8,7 @@ Oxide Core is a high-performance 3D game engine built from scratch in Rust. It i
 - **Graphics**: `wgpu` (Metal backend prioritized)
 - **ECS**: `oxide_ecs` custom runtime for state management and logic
 - **Systems**: `IntoSystem` + `SystemParam` (`Res`, `ResMut`, `Query`, `Commands`) for ergonomic app-stage and standalone `Schedule` signatures, with optional labels, sets, and before/after ordering constraints
-- **Schedules**: `AppStage::PreUpdate`, `FixedUpdate`, `Update`, `PostUpdate`, `Extract`, and `Prepare` are available; `FixedUpdate` is driven by the `FixedTime` resource. Built-in ordering labels include `OXSCENE_SPAWN_SYSTEM`, `GLTF_SCENE_SPAWN_SYSTEM`, and `TRANSFORM_PROPAGATE_SYSTEM`.
+- **Schedules**: `AppStage::Startup`, `PreUpdate`, `FixedUpdate`, `Update`, `PostUpdate`, `Extract`, and `Prepare` are available; `Startup` runs once with normal ECS params after window/app initialization, and `FixedUpdate` is driven by the `FixedTime` resource. Built-in ordering labels include `OXSCENE_SPAWN_SYSTEM`, `GLTF_SCENE_SPAWN_SYSTEM`, and `TRANSFORM_PROPAGATE_SYSTEM`.
 - **Render Pass Ordering**: Plugins can register lightweight frame callbacks with `add_render_pass`, `add_render_pass_before`, `add_render_pass_after`, and render pass sets. Built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`, `RENDER_PASS_APP_QUEUE`, and `RENDER_PASS_EGUI`.
 - **Input Mapping**: `oxide_input` supports raw keyboard/mouse resources plus semantic `ActionBindings<T>`/`ActionInput<T>` synced by `sync_action_input_system::<T>`
 - **Diagnostics**: `FrameDiagnosticsPlugin` records `DELTA_SECONDS`, `FRAME_TIME_MS`, and `FPS` into the `Diagnostics` resource. `DefaultPlugins` installs it, and scene authoring UI uses it for the debug overlay.
@@ -71,7 +71,7 @@ The workspace is divided into several specialized crates:
 Engine users implement the `App` trait found in `oxide_engine::app`. The lifecycle follows these stages:
 1. `configure`: Initialize ECS resources and schedules.
 2. `init`: Create application state, load assets, and set up the initial scene.
-3. Startup plugin systems run once (for `DefaultPlugins`, this includes default input/window resource wiring).
+3. Startup plugin hooks run once (for `DefaultPlugins`, this includes default input/window resource wiring), then `AppStage::Startup` systems run once with normal `IntoSystem` params.
 4. `update`: Process input and update ECS world state (called every frame). Hot-reloading checks can be performed here using `AssetWatcher`.
 5. `extract` / `prepare` / `queue`: Render pipeline stages executed each frame.
 6. `on_event`: Respond to windowing or system events.
@@ -82,6 +82,7 @@ Engine users implement the `App` trait found in `oxide_engine::app`. The lifecyc
 - **Reserved Command Spawns**: `Commands::spawn` returns `EntityCommands` with a stable entity ID for follow-up queued edits, hierarchy links, events, or resources before component insertion is applied.
 - **Hierarchy Commands**: Use `HierarchyCommandsExt` for deferred `attach_child`, `detach_child`, and subtree-dirty operations from normal ECS systems.
 - **Standalone Schedules**: `oxide_ecs::Schedule` accepts the same `IntoSystem` signatures, run conditions, labels, sets, and before/after ordering constraints as app stages, then applies deferred commands after the schedule run.
+- **Startup Systems**: Prefer `AppStage::Startup` for game/plugin setup that can use ECS params. Keep `add_startup_system_mut(fn(&mut World, &Window))` for low-level window-aware engine initialization.
 - **Fixed-Step Systems**: Use `AppStage::FixedUpdate` for deterministic gameplay ticks. `DefaultPlugins` inserts `FixedTime`; read `FixedTime::timestep_secs()` instead of frame `Time::delta_secs()` inside fixed systems.
 - **Render Passes**: Use `add_render_pass` for plugin-owned overlays or debug drawing that should run between built-in game text and `App::queue`. Use `add_render_pass_before` / `add_render_pass_after` for explicit ordering around built-in anchors, and keep long-lived GPU resources in non-send resources prepared before queueing.
 - **Runtime Diagnostics**: Use `Diagnostics::record` for lightweight scalar metrics that need to appear in tooling, overlays, or logs. Prefer this resource for frame/runtime counters before adding a new profiling dependency.
