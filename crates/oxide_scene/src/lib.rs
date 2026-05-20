@@ -12,7 +12,7 @@ pub use gizmo::*;
 pub use mesh_renderer::*;
 pub use oxide_transform::{
     attach_child, detach_child, mark_subtree_dirty, transform_propagate_system, Children,
-    GlobalTransform, Parent, TransformComponent,
+    GlobalTransform, HierarchyCommandsExt, Parent, TransformComponent,
 };
 pub use renderer::*;
 pub use sprite::*;

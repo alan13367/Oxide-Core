@@ -6,13 +6,14 @@ asset documents for scenes and materials.
 ## Current Shape
 
 - `oxide_asset` owns generic handles, typed storage, async loading, load
-  status, and typed path identity.
+  status, typed path identity, and dependency path metadata for hot reload and
+  importer invalidation.
 - `oxide_renderer` owns GPU resources and optional glTF/image importer helpers.
 - `oxide_renderer` owns versioned `.oxmat` material documents.
 - `oxide_scene` owns scene descriptors, renderable scene components, and
   versioned `.oxscene` documents.
-- `oxide_engine` re-exports scene/asset APIs and wires importer systems into
-  the app lifecycle.
+- `oxide_engine` re-exports scene/material/asset APIs and wires importer
+  systems into the app lifecycle.
 
 ## Direction
 
@@ -39,8 +40,72 @@ document and spawn it once ready. Spawned root entities are available through
 `take_spawned_oxscene_roots(world, handle)`. The system is installed by
 `DefaultPlugins`, so it does not require glTF importer features.
 
+Use `reload_oxscene_path(world, path)` to reload a known scene path into its
+existing handle, or `reload_changed_oxscenes(world, changed_paths)` to reload
+scene assets whose source path or dependency paths match file watcher output.
+Reloading updates `SceneDescriptorAssets` and preserves the handle; it does not
+spawn duplicate roots. Queue the returned handle with `queue_oxscene_spawn` only
+when the app intentionally wants a fresh instance of the reloaded descriptor.
+
 `examples/minimal_game` demonstrates this path with
 `assets/scenes/starter.oxscene`.
 
+## Runtime Material Descriptor Loading
+
+Use `request_material_descriptor_load(server, path)` to asynchronously load a
+`.oxmat`, JSON, RON, or TOML material descriptor into
+`MaterialDescriptorAssets`. `DefaultPlugins` installs
+`material_descriptor_asset_system`, which publishes ready descriptors and
+records dependencies for file shaders and texture paths.
+
+```rust
+let handle = request_material_descriptor_load(
+    &mut world.resource_mut::<AssetServerResource>().server,
+    "assets/materials/stone.oxmat",
+);
+```
+
+Use `reload_material_descriptor_path(server, path)` to refresh a known
+descriptor path in place, or `reload_changed_material_descriptors(server,
+changed_paths)` when a watcher reports changed descriptor, shader, or texture
+paths. Dependency paths in descriptors are resolved relative to the descriptor
+file, which keeps authored material folders portable.
+
 The direct importer features stay enabled by default for examples that still use
 external tooling formats.
+
+## Dependency Tracking
+
+`AssetServer` can record secondary source paths for any typed asset handle:
+
+```rust
+server.set_asset_dependencies(
+    &scene_handle,
+    [
+        "assets/materials/stone.oxmat",
+        "assets/textures/stone.png",
+    ],
+);
+
+let affected = server.handles_for_changed_path::<SceneDescriptor>(
+    "assets/materials/stone.oxmat",
+);
+```
+
+This is intentionally path-based and format-agnostic. Scene, material, mesh,
+and importer systems can add dependency edges without pulling a graph crate into
+the runtime, and hot-reload code can query affected typed handles when a source
+file changes.
+
+`Assets<T>` also tracks per-handle revisions. A loaded handle starts at revision
+`1`, replacements increment the revision, and `changed_since(handle, revision)`
+lets renderer/editor caches cheaply decide whether a stable handle now points at
+new data. Use `get_mut_mark_changed` for direct in-place edits that should
+invalidate dependent caches. `changes()` and `drain_changes()` report added,
+modified, and removed handles so systems can rebuild only affected GPU/editor
+caches without scanning the whole asset collection every frame.
+
+When a changed path maps to a known typed asset path, use
+`reload_path_async(path, loader)` to keep the existing handle and publish the
+replacement value through `poll_ready` or `poll_loaded`. This preserves handles
+already stored in entities, components, UI models, or scene resources.

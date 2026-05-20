@@ -13,14 +13,27 @@ the engine prelude for normal game code.
 
 - Use `DefaultPlugins` for input, transforms, renderer resources, and asset
   setup.
+- Use `AppStage::FixedUpdate` and `FixedTime` for deterministic gameplay
+  systems that should advance at a stable tick rate independent of rendering.
+- Use `ActionBindings<T>`, `ActionInput<T>`, and
+  `sync_action_input_system::<T>` for semantic keyboard/mouse controls such as
+  jump, fire, interact, or pause.
+- Use `AxisBindings<T>`, `AxisInput<T>`, and `sync_axis_input_system::<T>` for
+  semantic movement axes such as move X/Y, look X/Y, or throttle.
 - Use `SceneAuthoringPlugins` when you want the built-in scene renderer,
   camera-locked game UI, native UI text rendering, custom font registration,
   scene editor resource, runtime UI model, and debug overlay.
-- Use `SceneDescriptor` for small data-driven scenes and prefabs.
+- Use `SceneDescriptor` for small data-driven scenes, child hierarchies,
+  registered sprite billboards, and reusable prefabs that can be instantiated
+  from `.oxscene` data or Rust.
+- Use `reload_oxscene_path` or `reload_changed_oxscenes` when development tools
+  should refresh native scene descriptors while preserving handles.
 - Use `RenderMesh` to describe render intent without storing GPU buffers in
   gameplay components.
 - Use `SpriteAssets` and `SpriteBillboard` for native custom sprites such as
   2D enemies, pickups, muzzle flashes, first-person weapons, and overlay props.
+- Use `"type": "sprite"` entities in `.oxscene` files when a scene should place
+  registered sprites without hard-coding every billboard in Rust.
 - Use `SpriteImage::from_png_bytes` when project sprites are authored as PNGs
   and registered into the engine at startup.
 - Use `Terrain`, `TerrainDescriptor`, and `SceneWorldDescriptor` for
@@ -28,12 +41,26 @@ the engine prelude for normal game code.
 - Use `SceneRendererPlugin` directly if you only want automatic rendering.
   The app runner prepares and queues it automatically when a `SceneRenderer`
   resource exists.
-- Use `Events<T>` for gameplay messages and `Timer` for component/resource
-  timers.
+- Use ordered render passes when a plugin needs to draw an overlay,
+  post-process effect, capture pass, or debug visualization around the built-in
+  scene/text/app/egui queue points without owning `App::queue`.
+- Use `Events<T>` plus `EventWriter<T>`, `EventReader<T>`, `EventCursor<T>`,
+  or `EventDrain<T>` for gameplay messages, and `Timer` for component/resource timers.
+- Use `World::change_tick()` with component/resource revision helpers when
+  renderer, editor, AI, or save-game caches need cheap invalidation.
+- Use `ComponentChanges<T>` when one system should own an added/changed cursor
+  for a component type without a separate revision resource.
+- Use `ResourceCursor<T>` when a system should react to a resource only after
+  that resource changes.
+- Use `RemovedComponents<T>` when a cache should remove entries for despawned
+  entities or components removed from still-alive entities.
 - Use `AudioPlugin` for sound playback. It inserts an `Audio` resource from
   `oxide_audio`, which can play generated tones or `AudioClip` WAV assets.
 - Use `RuntimeUiPlugin` for HUD/menu data and `DevOverlayPlugin` for debug
   overlay state.
+- Use `Diagnostics` for lightweight runtime scalar metrics. `DefaultPlugins`
+  records `DELTA_SECONDS`, `FRAME_TIME_MS`, and `FPS`; games and tools can
+  record additional labels without adding a profiling dependency.
 - Use `oxide_physics` with the `engine-plugin` feature for rigid bodies,
   colliders, queries, and collision events.
 
@@ -45,21 +72,284 @@ descriptor-authored terrain/world geometry, jumping, hitscan shooting, zombie
 AI, start/pause/game-over screens, health/ammo HUD widgets, native text labels,
 menu cursor release/capture, audio feedback, and wave spawning.
 
+## Render Pass Extension Points
+
+Oxide keeps rendering explicit, but the app runner exposes stable render pass
+anchors for plugin-owned frame callbacks:
+
+- `RENDER_PASS_SCENE`
+- `RENDER_PASS_GAME_TEXT`
+- `RENDER_PASS_APP_QUEUE`
+- `RENDER_PASS_EGUI`
+
+Register a pass with `add_render_pass`, `add_render_pass_before`, or
+`add_render_pass_after`. The callback receives the world and active
+`RenderFrame`; create long-lived GPU resources during startup or
+`AppStage::Prepare`, then encode only the frame work here.
+
+```rust
+fn queue_debug_overlay(world: &mut World, frame: &mut RenderFrame) {
+    // Read prepared non-send GPU resources and encode draw commands.
+}
+
+app::<MyGame>()
+    .add_plugins(DefaultPlugins)
+    .add_plugins(SceneAuthoringPlugins)
+    .add_render_pass_after("game.debug_overlay", RENDER_PASS_APP_QUEUE, queue_debug_overlay)
+    .run();
+```
+
+Render pass sets mirror system sets for larger plugins:
+
+```rust
+app::<MyGame>()
+    .add_render_pass_to_set("game.capture.depth", "game.capture", queue_depth_capture)
+    .configure_render_pass_set_before("game.capture", RENDER_PASS_EGUI)
+    .run();
+```
+
 ```rust
 app::<MyGame>()
     .add_plugins(DefaultPlugins)
     .add_plugins(SceneAuthoringPlugins)
     .add_plugin(AudioPlugin)
-    .add_system(AppStage::PreUpdate, camera_controller_system)
+    .add_labeled_system_to_set(
+        AppStage::PreUpdate,
+        "game.input.actions",
+        "game.input",
+        sync_action_input_system::<GameAction>,
+    )
+    .add_system_after(AppStage::PreUpdate, "game.input", camera_controller_system)
+    .add_system(AppStage::FixedUpdate, fixed_simulation_system)
+    .run();
+```
+
+`FixedUpdate` runs after `PreUpdate` and before normal `Update` work. Read
+`FixedTime::timestep_secs()` inside fixed systems when integrating simulation
+state.
+
+Use `add_labeled_system`, `add_system_to_set`, `add_system_before`, and
+`add_system_after` when plugins or gameplay systems need stable ordering inside
+a stage. Before/after targets can reference either a system label or a set
+name. Built-in labels include `OXSCENE_SPAWN_SYSTEM`, `GLTF_SCENE_SPAWN_SYSTEM`,
+and `TRANSFORM_PROPAGATE_SYSTEM`.
+
+Use `State<T>` for coarse game modes and `.run_if(...)` for mode-specific
+systems. `in_state(...)` gates normal steady-state work, while
+`state_entered(...)` and `state_exited(...)` fire once per system for each
+transition revision:
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GameMode {
+    Menu,
+    Playing,
+}
+
+world.insert_resource(State::new(GameMode::Menu));
+
+app::<MyGame>()
+    .add_system(AppStage::Update, menu_system.run_if(in_state(GameMode::Menu)))
+    .add_system(AppStage::Update, spawn_level.run_if(state_entered(GameMode::Playing)))
+    .add_system(AppStage::Update, stop_music.run_if(state_exited(GameMode::Menu)))
     .run();
 ```
 
 ```rust
-if let Some(audio) = world
-    .contains_resource::<Audio>()
-    .then(|| world.resource::<Audio>())
-{
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum GameAction {
+    Fire,
+}
+
+world.insert_resource(ActionInput::<GameAction>::default());
+let mut bindings = ActionBindings::default();
+bindings
+    .bind_key(GameAction::Fire, KeyCode::ControlLeft)
+    .bind_mouse(GameAction::Fire, MouseButton::Left);
+world.insert_resource(bindings);
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum GameAxis {
+    MoveX,
+}
+
+world.insert_resource(AxisInput::<GameAxis>::default());
+let mut axes = AxisBindings::default();
+axes.bind_key_pair(GameAxis::MoveX, KeyCode::KeyA, KeyCode::KeyD);
+world.insert_resource(axes);
+```
+
+Scene descriptors can keep reusable object templates next to the level data:
+
+```rust
+let instance = spawn_scene_prefab(
+    &mut world,
+    &scene_descriptor,
+    "crate_pair",
+    SceneTransform::from_position([2.0, 0.0, -1.5]),
+);
+```
+
+Prefab instances are normal entities with `TransformComponent`,
+`GlobalTransform`, and `Children`, so gameplay systems and the editor can move
+or inspect them like any other hierarchy root.
+
+Frame metrics are available through the shared diagnostics resource:
+
+```rust
+fn update_debug_numbers(diagnostics: Res<Diagnostics>, mut ui: ResMut<RuntimeUi>) {
+    if let Some(fps) = diagnostics.latest(FPS) {
+        ui.label("fps", format!("FPS: {:.0}", fps));
+    }
+}
+
+fn record_spawn_pressure(mut diagnostics: ResMut<Diagnostics>, mut query: Query<&Enemy>) {
+    diagnostics.record("game.enemy_count", query.iter().count() as f64);
+}
+```
+
+`SceneAuthoringPlugins` also uses these values for the egui debug overlay.
+
+Editor and import tooling should call `SceneDescriptor::validate()` before
+publishing authored data. Native `.oxscene` loads also validate automatically,
+and `try_spawn_scene_descriptor` / `try_spawn_scene_prefab` return structured
+diagnostics for missing prefab IDs, duplicate IDs, recursive prefab graphs, and
+empty sprite IDs without partially spawning invalid content.
+
+During development, native scene descriptors can be reloaded in place:
+
+```rust
+if let Some(watcher) = world.get_non_send_resource_mut::<AssetWatcher>() {
+    let changed = watcher.poll_changed_files().to_vec();
+    reload_changed_oxscenes(&mut world, changed);
+}
+```
+
+The reload updates `SceneDescriptorAssets`; it does not duplicate the already
+spawned world. Queue the returned handle explicitly if the game wants to create
+a new instance from the refreshed descriptor.
+
+```rust
+if let Some(audio) = world.get_resource::<Audio>() {
     audio.play_tone(AudioTone::sine(660.0, 0.08, 0.18));
+}
+```
+
+Inside systems, optional plugin resources can be declared directly:
+
+```rust
+fn optional_audio_feedback(audio: Option<Res<Audio>>) {
+    if let Some(audio) = audio {
+        audio.play_tone(AudioTone::sine(440.0, 0.05, 0.12));
+    }
+}
+```
+
+Use `Local<T>` for tiny persistent state owned by one system, such as debounce
+flags, debug counters, or cached previous values:
+
+```rust
+fn count_frames(mut frames: Local<u64>, mut ui: ResMut<RuntimeUi>) {
+    *frames += 1;
+    ui.label("frames", format!("Frames: {}", *frames));
+}
+```
+
+Use ECS revisions when a cache should only refresh changed world data:
+
+```rust
+let last_sync = world.change_tick();
+let player = world.spawn(TransformComponent::default()).id();
+
+let mut query = world.query::<(Entity, &TransformComponent)>();
+for (entity, transform) in query.iter_added_since(&world, last_sync) {
+    // create cached transform-dependent data
+}
+
+let mut query = world.query::<(Entity, &TransformComponent)>();
+for (entity, transform) in query.iter_changed_since(&world, last_sync) {
+    // update cached transform-dependent data
+}
+```
+
+```rust
+fn sync_render_settings(mut settings: ResourceCursor<RenderSettings>) {
+    if let Some(settings) = settings.read_if_changed() {
+        // update settings-dependent cached data
+    }
+}
+```
+
+```rust
+fn sync_transform_cache(mut transforms: ComponentChanges<TransformComponent>) {
+    for (entity, transform) in transforms.added() {
+        // create cached transform-dependent data
+    }
+    for (entity, transform) in transforms.read_changed() {
+        // update cached transform-dependent data
+    }
+}
+```
+
+```rust
+fn cleanup_render_cache(
+    mut removed: RemovedComponents<RenderMesh>,
+    mut cache: ResMut<MeshCache>,
+) {
+    for record in removed.read() {
+        cache.remove(record.entity);
+    }
+}
+```
+
+After all systems that consume removals have advanced past a revision, use
+`World::prune_removed_components_through::<T>(revision)` or
+`World::prune_all_removed_components_through(revision)` to bound retained
+cleanup history in long-running tools.
+
+```rust
+fn collect_pulses(mut pulses: EventDrain<GameEvent>, mut state: ResMut<GameState>) {
+    for event in pulses.drain() {
+        match event {
+            GameEvent::Pulse => state.pulses += 1,
+        }
+    }
+}
+```
+
+Use `EventCursor<T>` when multiple systems need non-consuming incremental reads
+from the same buffer:
+
+```rust
+fn observe_pulses(mut pulses: EventCursor<GameEvent>, mut state: ResMut<GameState>) {
+    for event in pulses.read() {
+        match event {
+            GameEvent::Pulse => state.observed_pulses += 1,
+        }
+    }
+}
+```
+
+Deferred commands can reserve entity IDs immediately while keeping component
+insertion deferred until the current stage completes:
+
+```rust
+fn spawn_pickup(mut commands: Commands, mut events: EventWriter<GameEvent>) {
+    let pickup = commands
+        .spawn(Pickup)
+        .insert(TransformComponent::from_position(Vec3::new(0.0, 1.0, -4.0)))
+        .id();
+    events.send(GameEvent::PickupSpawned(pickup));
+}
+```
+
+Import `HierarchyCommandsExt` from the engine prelude to queue hierarchy edits
+through the same command buffer:
+
+```rust
+fn parent_pickup(mut commands: Commands, player: Res<PlayerEntity>) {
+    let pickup = commands.spawn(Pickup).id();
+    commands.attach_child(player.0, pickup);
 }
 ```
 

@@ -5,17 +5,19 @@ mod gltf_hierarchy;
 mod oxscene;
 
 use crate::app::{App, AppBuilder, AppStage, Plugin, PluginGroup};
+use crate::diagnostics::{Diagnostics, FPS, FRAME_TIME_MS};
 use crate::ecs::{RendererResource, WindowResource, World};
 use crate::render::RenderFrame;
 use crate::ui::{
-    authoring_ui_visible, DevOverlayPlugin, EguiPlugin, GameUiPlugin, RuntimeUiPlugin,
+    authoring_ui_visible, DevOverlay, DevOverlayPlugin, DevOverlaySnapshot, EguiPlugin,
+    GameUiPlugin, RuntimeUi, RuntimeUiPlugin,
 };
 use crate::window::Window;
 
 pub use oxide_editor::{
-    apply_gizmo_drag, pick_render_mesh, show_scene_authoring_egui, show_scene_editor_egui,
-    viewport_pick_ray, with_scene_editor, GizmoAxis, SceneEditor, SceneEditorTool,
-    SceneEntitySummary, ScenePickHit, ScenePickRay,
+    apply_gizmo_drag, pick_render_mesh, show_scene_editor_egui, viewport_pick_ray,
+    with_scene_editor, GizmoAxis, SceneEditor, SceneEditorTool, SceneEntitySummary, ScenePickHit,
+    ScenePickRay,
 };
 pub use oxide_scene::*;
 
@@ -135,6 +137,29 @@ pub fn scene_editor_viewport_system(world: &mut World) {
     };
 
     oxide_editor::scene_editor_viewport_system(world, viewport_size);
+}
+
+pub fn show_scene_authoring_egui(world: &mut World, ctx: &egui::Context) {
+    show_scene_editor_egui(world, ctx);
+
+    if let Some(mut runtime_ui) = world.remove_resource::<RuntimeUi>() {
+        runtime_ui.show_egui(ctx);
+        world.insert_resource(runtime_ui);
+    }
+
+    if world.contains_resource::<DevOverlay>() {
+        let overlay = world.resource::<DevOverlay>().clone();
+        let mut snapshot = DevOverlaySnapshot::from_world(world);
+        if let Some(diagnostics) = world.get_resource::<Diagnostics>() {
+            if let Some(frame_ms) = diagnostics.latest(FRAME_TIME_MS) {
+                snapshot.frame_ms = frame_ms as f32;
+            }
+            if let Some(fps) = diagnostics.latest(FPS) {
+                snapshot.fps = fps as f32;
+            }
+        }
+        overlay.show_egui(ctx, snapshot);
+    }
 }
 
 /// Convenience plugin group for code-first game authoring.

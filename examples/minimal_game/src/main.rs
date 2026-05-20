@@ -8,6 +8,33 @@ enum GameEvent {
     Pulse,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum GameAction {
+    SpawnCube,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum GameAxis {
+    MoveX,
+}
+
+#[derive(Default)]
+struct PendingSceneRoots {
+    entities: Vec<Entity>,
+}
+
+impl Resource for PendingSceneRoots {}
+
+#[derive(Default)]
+struct FixedTickCounter(u64);
+
+impl Resource for FixedTickCounter {}
+
+#[derive(Default)]
+struct PulseCounter(u64);
+
+impl Resource for PulseCounter {}
+
 struct MinimalGame {
     world: World,
     pulse_timer: Timer,
@@ -21,6 +48,19 @@ impl App for MinimalGame {
         world.init_resource::<KeyboardInput>();
         world.init_resource::<MouseInput>();
         world.init_resource::<Events<GameEvent>>();
+        world.init_resource::<PendingSceneRoots>();
+        world.insert_resource(FixedTickCounter::default());
+        world.insert_resource(PulseCounter::default());
+        world.insert_resource(ActionInput::<GameAction>::default());
+        world.insert_resource(AxisInput::<GameAxis>::default());
+
+        let mut action_bindings = ActionBindings::default();
+        action_bindings.bind_key(GameAction::SpawnCube, KeyCode::Space);
+        world.insert_resource(action_bindings);
+
+        let mut axis_bindings = AxisBindings::default();
+        axis_bindings.bind_key_pair(GameAxis::MoveX, KeyCode::KeyA, KeyCode::KeyD);
+        world.insert_resource(axis_bindings);
     }
 
     fn init(window: &Window, renderer: Renderer) -> Self {
@@ -32,6 +72,9 @@ impl App for MinimalGame {
             window.size().width,
             window.size().height,
         ));
+        if let Ok(marker) = SpriteImage::solid(16, 16, [80, 190, 255, 255]) {
+            register_sprite(&mut world, "debug.marker", marker);
+        }
 
         let scene_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("assets/scenes/starter.oxscene");
@@ -57,7 +100,9 @@ impl App for MinimalGame {
         if !self.scene_loaded {
             if let Some(roots) = take_spawned_oxscene_roots(&mut self.world, self.scene_handle) {
                 self.world
-                    .insert_resource(SceneSpawnResult { entities: roots });
+                    .resource_mut::<PendingSceneRoots>()
+                    .entities
+                    .extend(roots);
                 self.scene_loaded = true;
             }
         }
@@ -69,8 +114,15 @@ impl App for MinimalGame {
                 .send(GameEvent::Pulse);
         }
 
-        let spawn_requested = self.world.contains_resource::<RuntimeUi>()
-            && self.world.resource::<RuntimeUi>().clicked("spawn");
+        let spawn_requested = self
+            .world
+            .resource::<ActionInput<GameAction>>()
+            .just_pressed(&GameAction::SpawnCube)
+            || self
+                .world
+                .get_resource::<RuntimeUi>()
+                .map(|ui| ui.clicked("spawn"))
+                .unwrap_or(false);
         if spawn_requested {
             let _ = with_scene_editor(&mut self.world, |editor, world| editor.spawn_cube(world));
         }
@@ -81,9 +133,14 @@ impl App for MinimalGame {
         };
         let pending_events = self.world.resource::<Events<GameEvent>>().len();
         let entity_count = self.world.entity_count();
+        let fixed_ticks = self.world.resource::<FixedTickCounter>().0;
+        let pulse_count = self.world.resource::<PulseCounter>().0;
+        let move_x = self
+            .world
+            .resource::<AxisInput<GameAxis>>()
+            .value(&GameAxis::MoveX);
 
-        if self.world.contains_resource::<RuntimeUi>() {
-            let ui = self.world.resource_mut::<RuntimeUi>();
+        if let Some(ui) = self.world.get_resource_mut::<RuntimeUi>() {
             ui.clear();
             ui.label("title", "Oxide Minimal Game");
             ui.label(
@@ -97,6 +154,10 @@ impl App for MinimalGame {
             ui.label("entities", format!("Entities: {entity_count}"));
             ui.label("meshes", format!("Render meshes: {mesh_count}"));
             ui.label("events", format!("Queued events: {pending_events}"));
+            ui.label("fixed", format!("Fixed ticks: {fixed_ticks}"));
+            ui.label("pulses", format!("Pulses handled: {pulse_count}"));
+            ui.label("axis", format!("Move axis: {move_x:.1}"));
+            ui.label("controls", "A/D axis, Space or button: spawn cube");
             ui.separator();
             ui.button("spawn", "Spawn Cube");
         }
@@ -105,12 +166,53 @@ impl App for MinimalGame {
     fn on_event(&mut self, _event: EngineEvent) {}
 }
 
+fn fixed_tick_system(mut ticks: ResMut<FixedTickCounter>) {
+    ticks.0 += 1;
+}
+
+fn handle_pulse_events(mut events: EventDrain<GameEvent>, mut pulses: ResMut<PulseCounter>) {
+    for event in events.drain() {
+        match event {
+            GameEvent::Pulse => pulses.0 += 1,
+        }
+    }
+}
+
+fn publish_scene_spawn_result(mut pending: ResMut<PendingSceneRoots>, mut commands: Commands) {
+    if pending.entities.is_empty() {
+        return;
+    }
+
+    commands.insert_resource(SceneSpawnResult {
+        entities: std::mem::take(&mut pending.entities),
+    });
+}
+
 fn main() {
     tracing_subscriber::fmt::init();
     app::<MinimalGame>()
         .add_plugins(DefaultPlugins)
         .add_plugins(SceneAuthoringPlugins)
-        .add_system(AppStage::PreUpdate, camera_controller_system)
+        .add_labeled_system_to_set(
+            AppStage::PreUpdate,
+            "minimal.input.actions",
+            "minimal.input",
+            sync_action_input_system::<GameAction>,
+        )
+        .add_labeled_system_to_set(
+            AppStage::PreUpdate,
+            "minimal.input.axes",
+            "minimal.input",
+            sync_axis_input_system::<GameAxis>,
+        )
+        .add_system_after(
+            AppStage::PreUpdate,
+            "minimal.input",
+            camera_controller_system,
+        )
+        .add_system(AppStage::Update, publish_scene_spawn_result)
+        .add_system(AppStage::FixedUpdate, fixed_tick_system)
+        .add_system(AppStage::Update, handle_pulse_events)
         .add_plugin(PhysicsPlugin)
         .run();
 }

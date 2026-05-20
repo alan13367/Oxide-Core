@@ -23,15 +23,9 @@ impl<T: App> Plugin<T> for EguiPlugin {
     }
 }
 
-#[derive(Clone, Copy, Debug, Resource)]
+#[derive(Clone, Copy, Debug, Default, Resource)]
 pub struct AuthoringUi {
     pub visible: bool,
-}
-
-impl Default for AuthoringUi {
-    fn default() -> Self {
-        Self { visible: false }
-    }
 }
 
 impl AuthoringUi {
@@ -56,8 +50,8 @@ pub fn initialize_authoring_ui(world: &mut World, _window: &Window) {
 
 pub fn authoring_ui_visible(world: &World) -> bool {
     world
-        .contains_resource::<AuthoringUi>()
-        .then(|| world.resource::<AuthoringUi>().visible)
+        .get_resource::<AuthoringUi>()
+        .map(|authoring_ui| authoring_ui.visible)
         .unwrap_or(false)
 }
 

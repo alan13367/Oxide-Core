@@ -11,8 +11,11 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Audio**: `oxide_audio` playback, software mixing, generated tones, and WAV clip loading via an engine `AudioPlugin`
 - **Focused Runtime Crates**: camera, lighting, scene, UI, editor, audio, physics, asset, input, transform, renderer, and ECS code live outside the façade crate behind Oxide-owned APIs
 - **Materials + Shaders**: built-in shader pack plus custom WGSL (inline/file) with fallback support
-- **Native Asset Documents**: versioned `.oxscene` and `.oxmat` JSON wrappers with legacy descriptor loading support
+- **Native Asset Documents**: versioned `.oxscene` and `.oxmat` JSON wrappers with legacy descriptor loading support, nested scene entities, registered sprite billboards, reusable scene prefabs, and descriptor validation diagnostics
+- **Asset Dependency Tracking**: `AssetServer` records secondary source paths, can query typed handles affected by a changed file, can reload known paths in place, and `Assets<T>` exposes per-handle revisions plus change records for cache invalidation
+- **Native Scene Reloading**: `.oxscene` handles can be refreshed from direct file changes or dependency changes without duplicating spawned roots
 - **Automatic Scene Renderer**: optional plugin that renders `RenderMesh` scene entities without app-owned pipelines
+- **Ordered Render Passes**: plugins can register lightweight frame callbacks around stable built-in anchors for scene, text, app queue, and egui rendering
 - **Native Sprites**: engine-owned RGBA/PNG sprite assets plus billboard and UI sprite components for actors, props, weapons, and overlays
 - **Terrain + World Authoring**: heightfield terrain and configurable world descriptors for code-first maps
 - **Game UI + Text**: camera-locked panels, buttons, bars, counters, reticles, native styled text widgets, and custom TrueType/OpenType font registration
@@ -21,9 +24,15 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Hot-Reloading**: Automatically reload shader assets during development
 - **Robust Validation**: Static checks to ensure custom shaders comply with engine bindings
 - **Plugin Architecture**: Group engine setup with `Plugin`/`DefaultPlugins` to reduce app boilerplate
-- **Ergonomic Systems**: Signature-driven systems via `IntoSystem` + params (`Res`, `ResMut`, `Query`, `Commands`)
+- **Ergonomic Systems**: Signature-driven systems via `IntoSystem` + params (`Res`, `ResMut`, `Query`, `Commands`) in both app stages and standalone ECS schedules
+- **ECS Change Revisions**: `World` tracks component/resource mutation ticks so renderer, asset, editor, and gameplay caches can invalidate only changed data
+- **System Ordering**: Label systems, group them into sets, and register before/after constraints inside app stages or standalone schedules
+- **Action + Axis Input Mapping**: Bind game-defined actions and movement axes to keyboard/mouse triggers with `ActionBindings`, `AxisBindings`, and sync systems
+- **Fixed-Step Scheduling**: Use `AppStage::FixedUpdate` with `FixedTime` for deterministic gameplay ticks inside the normal app runner
+- **Runtime Diagnostics**: `DefaultPlugins` records frame time, FPS, and delta seconds into a lightweight `Diagnostics` resource used by tooling and the dev overlay
 - **Deferred Commands**: Stage-scoped command queue for safe world mutation during iteration
 - **State Gating**: Conditionally run systems with `.run_if(in_state(...))`
+- **State Transition Hooks**: Use `state_entered(...)` and `state_exited(...)` for once-per-system mode setup/teardown
 - **Dependency Policy**: Oxide owns its ECS, physics, scene hierarchy, and engine runtime; third-party engine/ECS/physics/gameplay frameworks are intentionally avoided
 
 ## Requirements
@@ -111,7 +120,27 @@ fn main() {
 }
 ```
 
-Use `App::prepare` and `App::queue` only when a project needs a custom render pass or overlay on top of the automatic scene renderer.
+Use `App::prepare` and `App::queue` only when a project needs app-owned render
+work. Plugins can use ordered render passes instead of taking over
+`App::queue`:
+
+```rust
+fn queue_damage_flash(world: &mut World, frame: &mut RenderFrame) {
+    // Encode an overlay pass using resources prepared during AppStage::Prepare.
+}
+
+app::<MyApp>()
+    .add_plugins(DefaultPlugins)
+    .add_plugins(SceneAuthoringPlugins)
+    .add_render_pass_after("game.damage_flash", RENDER_PASS_APP_QUEUE, queue_damage_flash)
+    .run();
+```
+
+Render pass labels can target `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
+`RENDER_PASS_APP_QUEUE`, and `RENDER_PASS_EGUI`. Use
+`add_render_pass_before`, `add_render_pass_after`, render pass sets, and
+`RenderPassSchedule::ordering_diagnostics` for plugin-owned overlays,
+post-processing, capture passes, or debug drawing without copying the runner.
 
 ### 2. Register Native Sprites And Worlds
 
@@ -171,10 +200,117 @@ fn player_movement(
         transform.transform.position.x += time.delta_secs();
     }
 
-    // Deferred until the end of the stage
-    commands.spawn(Player::default());
+    // Deferred until the end of the stage. The entity ID is available now for
+    // follow-up commands, hierarchy links, resources, or events.
+    let player = commands
+        .spawn(Player::default())
+        .insert(TransformComponent::default())
+        .id();
+    commands.attach_child(parent_entity, player);
+    commands.insert_resource(LastSpawnedAt(time.delta_secs()));
 }
 ```
+
+Events can be declared directly in systems. Use `EventWriter<T>` to queue,
+`EventReader<T>` to inspect the whole buffer, `EventCursor<T>` to read only
+events that system has not seen yet, and `EventDrain<T>` when a system owns
+consuming the queued messages:
+
+```rust
+fn fire(mut writer: EventWriter<GameEvent>) {
+    writer.send(GameEvent::Pulse);
+}
+
+fn handle(mut events: EventDrain<GameEvent>) {
+    for event in events.drain() {
+        // consume event
+    }
+}
+
+fn observe_new(mut events: EventCursor<GameEvent>) {
+    for event in events.read() {
+        // non-consuming incremental read
+    }
+}
+```
+
+Optional resources are supported both in app code and system parameters. Use
+`World::get_resource` / `get_resource_mut` outside systems, or
+`Option<Res<T>>` / `Option<ResMut<T>>` in system signatures when a plugin-owned
+resource may not be installed:
+
+```rust
+fn update_overlay(ui: Option<Res<RuntimeUi>>, mut ticks: Option<ResMut<SimulationTicks>>) {
+    if let (Some(ui), Some(mut ticks)) = (ui, ticks) {
+        if ui.clicked("step") {
+            ticks.0 += 1;
+        }
+    }
+}
+```
+
+Use `Local<T>` for small per-system state that should persist across runs but
+should not become a global world resource:
+
+```rust
+fn frame_counter(mut counter: Local<u64>, mut ui: ResMut<RuntimeUi>) {
+    *counter += 1;
+    ui.label("frames", format!("Frames: {}", *counter));
+}
+```
+
+Store `World::change_tick()` when building a cache and compare it later with
+`component_changed_since::<T>` or `resource_changed_since::<T>`. Mutable
+component/resource access records a new revision automatically. Systems can use
+`Query<(Entity, &T)>::iter_added_since(tick)` to initialize caches for newly
+inserted components, `iter_changed_since(tick)` to refresh changed components,
+`RemovedComponents<T>` to clean up removed component cache entries, and
+`ResourceCursor<T>` to observe resource changes once per system instance:
+
+```rust
+let last_sync = world.change_tick();
+let entity = world.spawn(TransformComponent::default()).id();
+
+let mut query = world.query::<(Entity, &TransformComponent)>();
+for (entity, transform) in query.iter_added_since(&world, last_sync) {
+    // create renderer/editor cache entries for this entity and transform
+}
+
+let mut query = world.query::<(Entity, &TransformComponent)>();
+for (entity, transform) in query.iter_changed_since(&world, last_sync) {
+    // refresh a renderer/editor cache for this entity and transform
+}
+```
+
+```rust
+fn sync_settings(mut settings: ResourceCursor<RenderSettings>) {
+    if let Some(settings) = settings.read_if_changed() {
+        // rebuild settings-dependent caches
+    }
+}
+```
+
+```rust
+fn sync_transforms(mut transforms: ComponentChanges<TransformComponent>) {
+    for (entity, transform) in transforms.added() {
+        // create cache entries
+    }
+    for (entity, transform) in transforms.read_changed() {
+        // refresh cache entries and advance this system's cursor
+    }
+}
+```
+
+```rust
+fn cleanup_mesh_cache(mut removed: RemovedComponents<RenderMesh>, mut cache: ResMut<MeshCache>) {
+    for record in removed.read() {
+        cache.remove(record.entity);
+    }
+}
+```
+
+After every consumer has advanced, long-running tools can prune retained removal
+history with `World::prune_removed_components_through::<T>(revision)`.
 
 ### 4. State-based Execution
 
@@ -186,11 +322,115 @@ enum AppState {
 }
 
 app::<MyApp>()
+    .add_system(AppStage::FixedUpdate, fixed_tick_system)
     .add_system(AppStage::Update, player_movement.run_if(in_state(AppState::Playing)))
+    .add_system(AppStage::Update, open_menu.run_if(state_entered(AppState::Menu)))
+    .add_system(AppStage::Update, close_menu.run_if(state_exited(AppState::Menu)))
     .run();
 ```
 
-### 5. Async glTF Scene Spawn Pipeline
+`State<T>` records the previous value and a transition revision whenever
+`set(...)` or `apply_transition()` changes state. Use `state_entered(...)` and
+`state_exited(...)` for once-per-system transition hooks such as menu setup,
+level teardown, or audio stingers without adding a separate global event.
+
+### 5. System Ordering
+
+Systems run in insertion order unless a stage or standalone `Schedule` has
+explicit labels, sets, and ordering constraints. Labels and sets are local to
+one schedule or app stage, so plugins can expose stable targets without
+coupling unrelated stages.
+
+```rust
+app::<MyApp>()
+    .add_labeled_system_to_set(AppStage::PreUpdate, "game.input.actions", "game.input", sync_input)
+    .add_system_after(AppStage::PreUpdate, "game.input", camera_controller_system)
+    .add_system_before(AppStage::PostUpdate, TRANSFORM_PROPAGATE_SYSTEM, gameplay_follow_system)
+    .run();
+```
+
+Before/after targets can reference either a system label or a set name.
+`Schedule::ordering_diagnostics()` reports missing targets, duplicate labels,
+and cycles. Schedules still run with a stable fallback order, which keeps
+development builds usable while surfacing authoring mistakes to tooling.
+
+### 6. Fixed-Step Systems
+
+`DefaultPlugins` installs `FixedTime`, which drives `AppStage::FixedUpdate`
+after `PreUpdate` and before normal `Update` systems. Fixed systems may run
+zero or more times per rendered frame.
+
+```rust
+#[derive(Resource, Default)]
+struct SimulationTicks(u64);
+
+fn fixed_tick(mut ticks: ResMut<SimulationTicks>, fixed: Res<FixedTime>) {
+    ticks.0 += 1;
+    let dt = fixed.timestep_secs();
+}
+
+app::<MyApp>()
+    .add_system(AppStage::FixedUpdate, fixed_tick)
+    .run();
+```
+
+### 7. Runtime Diagnostics
+
+`DefaultPlugins` installs `FrameDiagnosticsPlugin`, which records frame timing
+into `Diagnostics` during `AppStage::PreUpdate`. These values are intentionally
+simple scalar streams so gameplay code, editor UI, logging, and tests can share
+the same source without a heavy profiling dependency.
+
+```rust
+fn debug_metrics(diagnostics: Res<Diagnostics>) {
+    let fps = diagnostics.latest(FPS).unwrap_or_default();
+    let frame_ms = diagnostics.average(FRAME_TIME_MS).unwrap_or_default();
+}
+```
+
+Built-in labels include `DELTA_SECONDS`, `FRAME_TIME_MS`, and `FPS`. Custom
+tools can call `diagnostics.record("game.visible_enemies", enemies as f64)` to
+append their own rolling samples. `SceneAuthoringPlugins` feeds these frame
+metrics into the egui dev overlay.
+
+### 8. Action Input Mapping
+
+Bind semantic game actions and axes once, then read input state from systems or
+app logic without hard-coding raw keys everywhere:
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum GameAction {
+    Jump,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum GameAxis {
+    MoveX,
+}
+
+world.insert_resource(ActionInput::<GameAction>::default());
+world.insert_resource(AxisInput::<GameAxis>::default());
+let mut bindings = ActionBindings::default();
+bindings.bind_key(GameAction::Jump, KeyCode::Space);
+world.insert_resource(bindings);
+
+let mut axes = AxisBindings::default();
+axes.bind_key_pair(GameAxis::MoveX, KeyCode::KeyA, KeyCode::KeyD);
+world.insert_resource(axes);
+
+app::<MyApp>()
+    .add_system(AppStage::PreUpdate, sync_action_input_system::<GameAction>)
+    .add_system(AppStage::PreUpdate, sync_axis_input_system::<GameAxis>)
+    .run();
+```
+
+`ActionInput::pressed`, `just_pressed`, and `just_released` provide
+button-style state for gameplay code. `AxisInput::value` provides clamped
+`-1.0..=1.0` values for movement-style controls. `minimal_game` demonstrates
+using Space as an action-bound spawn command and A/D as an axis-bound input.
+
+### 9. Async glTF Scene Spawn Pipeline
 
 `DefaultPlugins` registers asset resources and a glTF resolve/spawn system. Request a load, then consume spawned roots once ready:
 
@@ -207,7 +447,7 @@ if let Some(roots) = take_spawned_scene_roots(&mut self.world, scene_handle) {
 }
 ```
 
-### 6. Physics Plugin Integration
+### 10. Physics Plugin Integration
 
 Physics is provided by `oxide_physics` and intentionally exported through `oxide_physics::prelude`:
 
@@ -235,6 +475,7 @@ Current physics runtime highlights include:
 - Load custom shaders through `ShaderSource::File` or `ShaderSource::WgslOwned`
 - Build pipelines through `MaterialPipeline` with optional fallback behavior
 - Load descriptor-driven materials from files via `load_material_descriptor(...)` (Supports legacy JSON/RON/TOML plus versioned `.oxmat`)
+- Load material descriptors asynchronously with `request_material_descriptor_load(...)`; `DefaultPlugins` publishes ready descriptors into `MaterialDescriptorAssets` and tracks shader/texture dependencies for in-place reloads
 
 ### Hot-Reloading
 

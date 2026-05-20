@@ -2,6 +2,7 @@
 
 use glam::{Mat4, Quat, Vec3};
 use oxide_ecs::entity::Entity;
+use oxide_ecs::system::Commands;
 use oxide_ecs::world::World;
 use oxide_ecs::{query, Component};
 use oxide_math::transform::Transform;
@@ -185,6 +186,42 @@ pub fn detach_child(world: &mut World, parent: Entity, child: Entity) {
     mark_subtree_dirty(world, child);
 }
 
+/// Deferred hierarchy command helpers for systems.
+pub trait HierarchyCommandsExt {
+    /// Queues a parent-child relationship update for the end of the current stage.
+    fn attach_child(&mut self, parent: Entity, child: Entity);
+    /// Queues removal of a parent-child relationship for the end of the current stage.
+    fn detach_child(&mut self, parent: Entity, child: Entity);
+    /// Queues dirty marking for a transform subtree.
+    fn mark_subtree_dirty(&mut self, root: Entity);
+}
+
+impl HierarchyCommandsExt for Commands {
+    fn attach_child(&mut self, parent: Entity, child: Entity) {
+        self.run(move |world| {
+            if world.contains(parent) && world.contains(child) {
+                attach_child(world, parent, child);
+            }
+        });
+    }
+
+    fn detach_child(&mut self, parent: Entity, child: Entity) {
+        self.run(move |world| {
+            if world.contains(parent) && world.contains(child) {
+                detach_child(world, parent, child);
+            }
+        });
+    }
+
+    fn mark_subtree_dirty(&mut self, root: Entity) {
+        self.run(move |world| {
+            if world.contains(root) {
+                mark_subtree_dirty(world, root);
+            }
+        });
+    }
+}
+
 pub fn mark_subtree_dirty(world: &mut World, root: Entity) {
     if let Some(local) = world.get_mut::<TransformComponent>(root) {
         local.mark_dirty();
@@ -265,6 +302,7 @@ fn propagate_from_root(
 mod tests {
     use super::*;
     use glam::Vec3;
+    use oxide_ecs::prelude::{CommandQueue, IntoSystem, Res};
 
     #[test]
     fn transform_propagation_works_for_parent_child() {
@@ -330,5 +368,77 @@ mod tests {
                 .expect("transform component should exist")
                 .is_dirty
         );
+    }
+
+    struct HierarchyTargets {
+        parent: Entity,
+        child: Entity,
+    }
+
+    impl oxide_ecs::resource::Resource for HierarchyTargets {}
+
+    fn attach_with_commands(targets: Res<HierarchyTargets>, mut commands: Commands) {
+        commands.attach_child(targets.parent, targets.child);
+    }
+
+    fn detach_with_commands(targets: Res<HierarchyTargets>, mut commands: Commands) {
+        commands.detach_child(targets.parent, targets.child);
+    }
+
+    fn dirty_with_commands(targets: Res<HierarchyTargets>, mut commands: Commands) {
+        commands.mark_subtree_dirty(targets.parent);
+    }
+
+    #[test]
+    fn hierarchy_commands_are_deferred_until_apply() {
+        let mut world = World::new();
+        let parent = world.spawn(TransformComponent::default()).id();
+        let child = world.spawn(TransformComponent::default()).id();
+        world.insert_resource(HierarchyTargets { parent, child });
+
+        let mut queue = CommandQueue::new();
+        attach_with_commands
+            .into_system()
+            .run(&mut world, &mut queue);
+        assert!(world.get::<Parent>(child).is_none());
+
+        queue.apply(&mut world);
+        assert_eq!(world.get::<Parent>(child).unwrap().0, parent);
+        assert!(world
+            .get::<Children>(parent)
+            .unwrap()
+            .iter()
+            .any(|entity| entity == child));
+
+        let mut queue = CommandQueue::new();
+        detach_with_commands
+            .into_system()
+            .run(&mut world, &mut queue);
+        assert!(world.get::<Parent>(child).is_some());
+        queue.apply(&mut world);
+        assert!(world.get::<Parent>(child).is_none());
+        assert!(world.get::<Children>(parent).unwrap().is_empty());
+    }
+
+    #[test]
+    fn hierarchy_commands_can_mark_subtree_dirty() {
+        let mut world = World::new();
+        let parent = world.spawn(TransformComponent::default()).id();
+        let child = world.spawn(TransformComponent::default()).id();
+        attach_child(&mut world, parent, child);
+        transform_propagate_system(&mut world);
+        assert!(!world.get::<TransformComponent>(parent).unwrap().is_dirty);
+        assert!(!world.get::<TransformComponent>(child).unwrap().is_dirty);
+        world.insert_resource(HierarchyTargets { parent, child });
+
+        let mut queue = CommandQueue::new();
+        dirty_with_commands
+            .into_system()
+            .run(&mut world, &mut queue);
+        assert!(!world.get::<TransformComponent>(parent).unwrap().is_dirty);
+
+        queue.apply(&mut world);
+        assert!(world.get::<TransformComponent>(parent).unwrap().is_dirty);
+        assert!(world.get::<TransformComponent>(child).unwrap().is_dirty);
     }
 }

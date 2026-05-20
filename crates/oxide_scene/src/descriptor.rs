@@ -1,18 +1,22 @@
 //! Data-driven scene descriptors for small games and examples.
 
+use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::path::Path;
 
-use glam::{Quat, Vec3};
+use glam::{Quat, Vec2, Vec3};
 use oxide_camera::{CameraComponent, CameraController};
 use oxide_ecs::prelude::{Entity, World};
 use oxide_ecs::{Component, Resource};
 use oxide_light::{AmbientLight, DirectionalLight, PointLight};
 use oxide_math::transform::Transform;
-use oxide_transform::{GlobalTransform, TransformComponent};
+use oxide_transform::{attach_child, GlobalTransform, TransformComponent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{MeshPrimitive, RenderMaterial, RenderMesh};
+use crate::{
+    MeshPrimitive, RenderMaterial, RenderMesh, SpriteBillboard, SpriteDepthMode, SpriteFacing,
+};
 
 pub const OXSCENE_FORMAT: &str = "oxide.oxscene";
 pub const OXSCENE_VERSION: u32 = 1;
@@ -42,6 +46,10 @@ impl OxSceneDocument {
             });
         }
 
+        self.scene
+            .validate()
+            .map_err(|source| SceneDescriptorError::Validation { path, source })?;
+
         Ok(self.scene)
     }
 }
@@ -51,6 +59,10 @@ pub struct Name(pub String);
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SceneDescriptor {
+    /// Reusable entity templates that can be instantiated by prefab entities.
+    #[serde(default)]
+    pub prefabs: Vec<ScenePrefabDescriptor>,
+    /// Root entities spawned into the world.
     #[serde(default)]
     pub entities: Vec<SceneEntityDescriptor>,
 }
@@ -58,6 +70,7 @@ pub struct SceneDescriptor {
 impl SceneDescriptor {
     pub fn starter_scene() -> Self {
         Self {
+            prefabs: Vec::new(),
             entities: vec![
                 SceneEntityDescriptor {
                     name: Some("Camera".to_string()),
@@ -66,6 +79,7 @@ impl SceneDescriptor {
                         target: [0.0, 0.0, 0.0],
                         controller: true,
                     },
+                    children: Vec::new(),
                 },
                 SceneEntityDescriptor {
                     name: Some("Key Light".to_string()),
@@ -95,6 +109,99 @@ impl SceneDescriptor {
             ],
         }
     }
+
+    /// Returns the prefab definition with the provided stable ID.
+    pub fn prefab(&self, id: &str) -> Option<&ScenePrefabDescriptor> {
+        self.prefabs.iter().find(|prefab| prefab.id == id)
+    }
+
+    /// Validates prefab references, prefab IDs, and authored entity payloads.
+    ///
+    /// Use this before saving or spawning editor-authored descriptors when the
+    /// caller wants structured diagnostics instead of best-effort spawning.
+    pub fn validate(&self) -> Result<(), SceneValidationError> {
+        let diagnostics = self.validation_diagnostics();
+        if diagnostics.is_empty() {
+            Ok(())
+        } else {
+            Err(SceneValidationError { diagnostics })
+        }
+    }
+
+    /// Returns all validation diagnostics without short-circuiting on the first
+    /// problem. Diagnostics include stable descriptor paths that can be surfaced
+    /// in authoring tools.
+    pub fn validation_diagnostics(&self) -> Vec<SceneValidationDiagnostic> {
+        let mut diagnostics = Vec::new();
+        let mut seen_prefabs = HashSet::new();
+        let mut prefabs = HashMap::new();
+
+        for (index, prefab) in self.prefabs.iter().enumerate() {
+            let path = format!("prefabs[{index}]");
+            if prefab.id.trim().is_empty() {
+                diagnostics.push(SceneValidationDiagnostic::new(
+                    format!("{path}.id"),
+                    "prefab IDs must not be empty",
+                ));
+                continue;
+            }
+            if !seen_prefabs.insert(prefab.id.as_str()) {
+                diagnostics.push(SceneValidationDiagnostic::new(
+                    format!("{path}.id"),
+                    format!("duplicate prefab ID '{}'", prefab.id),
+                ));
+                continue;
+            }
+            prefabs.insert(prefab.id.as_str(), prefab);
+        }
+
+        let mut prefab_stack = Vec::new();
+        for (index, entity) in self.entities.iter().enumerate() {
+            validate_scene_entity(
+                entity,
+                format!("entities[{index}]"),
+                &prefabs,
+                &mut prefab_stack,
+                &mut diagnostics,
+            );
+        }
+        for prefab in self
+            .prefabs
+            .iter()
+            .filter(|prefab| !prefab.id.trim().is_empty())
+        {
+            prefab_stack.push(prefab.id.clone());
+            for (index, entity) in prefab.entities.iter().enumerate() {
+                validate_scene_entity(
+                    entity,
+                    format!("prefabs['{}'].entities[{index}]", prefab.id),
+                    &prefabs,
+                    &mut prefab_stack,
+                    &mut diagnostics,
+                );
+            }
+            let _ = prefab_stack.pop();
+        }
+
+        diagnostics
+    }
+
+    fn prefab_lookup(&self) -> HashMap<&str, &ScenePrefabDescriptor> {
+        self.prefabs
+            .iter()
+            .map(|prefab| (prefab.id.as_str(), prefab))
+            .collect()
+    }
+}
+
+/// A reusable set of scene entities that can be instantiated by ID.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ScenePrefabDescriptor {
+    /// Stable prefab identifier used by `SceneEntityKind::Prefab`.
+    pub id: String,
+    /// Root entities that make up this prefab.
+    #[serde(default)]
+    pub entities: Vec<SceneEntityDescriptor>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -105,6 +212,9 @@ pub struct SceneEntityDescriptor {
     pub transform: SceneTransform,
     #[serde(flatten)]
     pub kind: SceneEntityKind,
+    /// Child entities attached under this entity with local transforms.
+    #[serde(default)]
+    pub children: Vec<SceneEntityDescriptor>,
 }
 
 impl Default for SceneEntityDescriptor {
@@ -113,6 +223,7 @@ impl Default for SceneEntityDescriptor {
             name: None,
             transform: SceneTransform::default(),
             kind: SceneEntityKind::Empty,
+            children: Vec::new(),
         }
     }
 }
@@ -154,6 +265,14 @@ pub enum SceneEntityKind {
         primitive: SceneMeshPrimitive,
         #[serde(default)]
         material: SceneMaterialDescriptor,
+    },
+    Sprite {
+        #[serde(flatten)]
+        sprite: SceneSpriteDescriptor,
+    },
+    Prefab {
+        /// Prefab ID from `SceneDescriptor::prefabs`.
+        id: String,
     },
 }
 
@@ -221,6 +340,65 @@ impl From<SceneMeshPrimitive> for MeshPrimitive {
     }
 }
 
+/// Serializable sprite billboard descriptor for `.oxscene` entities.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SceneSpriteDescriptor {
+    pub sprite: String,
+    #[serde(default = "default_sprite_size")]
+    pub size: [f32; 2],
+    #[serde(default = "default_sprite_tint")]
+    pub tint: [f32; 4],
+    #[serde(default)]
+    pub facing: SceneSpriteFacing,
+    #[serde(default)]
+    pub depth: SceneSpriteDepthMode,
+}
+
+impl From<SceneSpriteDescriptor> for SpriteBillboard {
+    fn from(value: SceneSpriteDescriptor) -> Self {
+        SpriteBillboard::new(value.sprite, Vec2::new(value.size[0], value.size[1]))
+            .with_tint(value.tint)
+            .with_facing(value.facing.into())
+            .with_depth(value.depth.into())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneSpriteFacing {
+    #[default]
+    YBillboard,
+    Camera,
+    Fixed,
+}
+
+impl From<SceneSpriteFacing> for SpriteFacing {
+    fn from(value: SceneSpriteFacing) -> Self {
+        match value {
+            SceneSpriteFacing::YBillboard => SpriteFacing::YBillboard,
+            SceneSpriteFacing::Camera => SpriteFacing::Camera,
+            SceneSpriteFacing::Fixed => SpriteFacing::Fixed,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneSpriteDepthMode {
+    #[default]
+    World,
+    Overlay,
+}
+
+impl From<SceneSpriteDepthMode> for SpriteDepthMode {
+    fn from(value: SceneSpriteDepthMode) -> Self {
+        match value {
+            SceneSpriteDepthMode::World => SpriteDepthMode::World,
+            SceneSpriteDepthMode::Overlay => SpriteDepthMode::Overlay,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SceneMaterialDescriptor {
     #[serde(default = "default_material_name")]
@@ -282,6 +460,55 @@ pub struct SceneSpawnResult {
     pub entities: Vec<Entity>,
 }
 
+/// One authored-scene validation issue with a descriptor path and message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SceneValidationDiagnostic {
+    pub path: String,
+    pub message: String,
+}
+
+impl SceneValidationDiagnostic {
+    pub fn new(path: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            message: message.into(),
+        }
+    }
+}
+
+/// Collection of validation diagnostics for a scene descriptor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SceneValidationError {
+    diagnostics: Vec<SceneValidationDiagnostic>,
+}
+
+impl SceneValidationError {
+    /// Returns the diagnostics that explain why validation failed.
+    pub fn diagnostics(&self) -> &[SceneValidationDiagnostic] {
+        &self.diagnostics
+    }
+}
+
+impl fmt::Display for SceneValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.diagnostics.is_empty() {
+            return write!(f, "scene descriptor validation failed");
+        }
+
+        write!(
+            f,
+            "scene descriptor validation failed with {} issue(s)",
+            self.diagnostics.len()
+        )?;
+        for diagnostic in &self.diagnostics {
+            write!(f, "; {}: {}", diagnostic.path, diagnostic.message)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for SceneValidationError {}
+
 #[derive(thiserror::Error, Debug)]
 pub enum SceneDescriptorError {
     #[error("Failed to read scene descriptor '{path}': {source}")]
@@ -301,6 +528,11 @@ pub enum SceneDescriptorError {
         path: String,
         format: String,
         version: u32,
+    },
+    #[error("Invalid scene descriptor '{path}': {source}")]
+    Validation {
+        path: String,
+        source: SceneValidationError,
     },
 }
 
@@ -357,20 +589,114 @@ fn scene_descriptor_from_value(
         })?;
         document.validate(path)
     } else {
-        serde_json::from_value::<SceneDescriptor>(value)
-            .map_err(|source| SceneDescriptorError::Parse { path, source })
+        let scene = serde_json::from_value::<SceneDescriptor>(value).map_err(|source| {
+            SceneDescriptorError::Parse {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        scene
+            .validate()
+            .map_err(|source| SceneDescriptorError::Validation { path, source })?;
+        Ok(scene)
     }
 }
 
+/// Validates and spawns every root entity from a descriptor.
+pub fn try_spawn_scene_descriptor(
+    world: &mut World,
+    scene: &SceneDescriptor,
+) -> Result<Vec<Entity>, SceneValidationError> {
+    scene.validate()?;
+    Ok(spawn_scene_descriptor_unchecked(world, scene))
+}
+
 pub fn spawn_scene_descriptor(world: &mut World, scene: &SceneDescriptor) -> Vec<Entity> {
+    match try_spawn_scene_descriptor(world, scene) {
+        Ok(roots) => roots,
+        Err(err) => {
+            let _ = err;
+            Vec::new()
+        }
+    }
+}
+
+fn spawn_scene_descriptor_unchecked(world: &mut World, scene: &SceneDescriptor) -> Vec<Entity> {
+    let prefabs = scene.prefab_lookup();
+    let mut prefab_stack = Vec::new();
     scene
         .entities
         .iter()
-        .map(|entity| spawn_scene_entity(world, entity))
+        .map(|entity| spawn_scene_entity(world, entity, &prefabs, None, &mut prefab_stack))
         .collect()
 }
 
-fn spawn_scene_entity(world: &mut World, descriptor: &SceneEntityDescriptor) -> Entity {
+/// Spawns one prefab instance from a scene descriptor.
+///
+/// The returned entity is the instance root. Prefab contents become children of
+/// that root, so moving the instance root moves the whole prefab hierarchy.
+pub fn try_spawn_scene_prefab(
+    world: &mut World,
+    scene: &SceneDescriptor,
+    prefab_id: impl Into<String>,
+    transform: SceneTransform,
+) -> Result<Option<Entity>, SceneValidationError> {
+    scene.validate()?;
+    Ok(spawn_scene_prefab_unchecked(
+        world, scene, prefab_id, transform,
+    ))
+}
+
+/// Spawns one prefab instance from a scene descriptor, returning `None` when the
+/// requested prefab ID does not exist.
+pub fn spawn_scene_prefab(
+    world: &mut World,
+    scene: &SceneDescriptor,
+    prefab_id: impl Into<String>,
+    transform: SceneTransform,
+) -> Option<Entity> {
+    match try_spawn_scene_prefab(world, scene, prefab_id, transform) {
+        Ok(entity) => entity,
+        Err(err) => {
+            let _ = err;
+            None
+        }
+    }
+}
+
+fn spawn_scene_prefab_unchecked(
+    world: &mut World,
+    scene: &SceneDescriptor,
+    prefab_id: impl Into<String>,
+    transform: SceneTransform,
+) -> Option<Entity> {
+    let prefab_id = prefab_id.into();
+    scene.prefab(&prefab_id)?;
+
+    let prefabs = scene.prefab_lookup();
+    let mut prefab_stack = Vec::new();
+    let descriptor = SceneEntityDescriptor {
+        name: Some(prefab_id.clone()),
+        transform,
+        kind: SceneEntityKind::Prefab { id: prefab_id },
+        children: Vec::new(),
+    };
+    Some(spawn_scene_entity(
+        world,
+        &descriptor,
+        &prefabs,
+        None,
+        &mut prefab_stack,
+    ))
+}
+
+fn spawn_scene_entity(
+    world: &mut World,
+    descriptor: &SceneEntityDescriptor,
+    prefabs: &HashMap<&str, &ScenePrefabDescriptor>,
+    parent: Option<Entity>,
+    prefab_stack: &mut Vec<String>,
+) -> Entity {
     let transform = Transform::from(descriptor.transform);
     let mut entity_mut = world.spawn((
         TransformComponent::new(transform),
@@ -382,6 +708,9 @@ fn spawn_scene_entity(world: &mut World, descriptor: &SceneEntityDescriptor) -> 
     }
 
     let entity = entity_mut.id();
+    if let Some(parent) = parent {
+        attach_child(world, parent, entity);
+    }
 
     match &descriptor.kind {
         SceneEntityKind::Empty => {}
@@ -431,9 +760,92 @@ fn spawn_scene_entity(world: &mut World, descriptor: &SceneEntityDescriptor) -> 
                     .with_tint(material.color),
             );
         }
+        SceneEntityKind::Sprite { sprite } => {
+            world
+                .entity_mut(entity)
+                .insert(SpriteBillboard::from(sprite.clone()));
+        }
+        SceneEntityKind::Prefab { id } => {
+            if !prefab_stack.iter().any(|active| active == id) {
+                if let Some(prefab) = prefabs.get(id.as_str()) {
+                    prefab_stack.push(id.clone());
+                    for child in &prefab.entities {
+                        spawn_scene_entity(world, child, prefabs, Some(entity), prefab_stack);
+                    }
+                    let _ = prefab_stack.pop();
+                }
+            }
+        }
+    }
+
+    for child in &descriptor.children {
+        spawn_scene_entity(world, child, prefabs, Some(entity), prefab_stack);
     }
 
     entity
+}
+
+fn validate_scene_entity(
+    descriptor: &SceneEntityDescriptor,
+    path: String,
+    prefabs: &HashMap<&str, &ScenePrefabDescriptor>,
+    prefab_stack: &mut Vec<String>,
+    diagnostics: &mut Vec<SceneValidationDiagnostic>,
+) {
+    match &descriptor.kind {
+        SceneEntityKind::Prefab { id } => {
+            if id.trim().is_empty() {
+                diagnostics.push(SceneValidationDiagnostic::new(
+                    format!("{path}.id"),
+                    "prefab references must not be empty",
+                ));
+            } else if !prefabs.contains_key(id.as_str()) {
+                diagnostics.push(SceneValidationDiagnostic::new(
+                    format!("{path}.id"),
+                    format!("unknown prefab ID '{id}'"),
+                ));
+            } else if prefab_stack.iter().any(|active| active == id) {
+                let mut chain = prefab_stack.join(" -> ");
+                if !chain.is_empty() {
+                    chain.push_str(" -> ");
+                }
+                chain.push_str(id);
+                diagnostics.push(SceneValidationDiagnostic::new(
+                    format!("{path}.id"),
+                    format!("recursive prefab reference '{chain}'"),
+                ));
+            } else if let Some(prefab) = prefabs.get(id.as_str()) {
+                prefab_stack.push(id.clone());
+                for (index, entity) in prefab.entities.iter().enumerate() {
+                    validate_scene_entity(
+                        entity,
+                        format!("{path}.prefab('{id}').entities[{index}]"),
+                        prefabs,
+                        prefab_stack,
+                        diagnostics,
+                    );
+                }
+                let _ = prefab_stack.pop();
+            }
+        }
+        SceneEntityKind::Sprite { sprite } if sprite.sprite.trim().is_empty() => {
+            diagnostics.push(SceneValidationDiagnostic::new(
+                format!("{path}.sprite"),
+                "sprite IDs must not be empty",
+            ));
+        }
+        _ => {}
+    }
+
+    for (index, child) in descriptor.children.iter().enumerate() {
+        validate_scene_entity(
+            child,
+            format!("{path}.children[{index}]"),
+            prefabs,
+            prefab_stack,
+            diagnostics,
+        );
+    }
 }
 
 fn vec3(value: [f32; 3]) -> Vec3 {
@@ -474,6 +886,14 @@ fn default_material_name() -> String {
 
 fn default_material_color() -> [f32; 4] {
     [0.85, 0.72, 0.48, 1.0]
+}
+
+fn default_sprite_size() -> [f32; 2] {
+    [1.0, 1.0]
+}
+
+fn default_sprite_tint() -> [f32; 4] {
+    [1.0, 1.0, 1.0, 1.0]
 }
 
 #[cfg(test)]
@@ -579,6 +999,265 @@ mod tests {
         let loaded = load_scene_descriptor(&path).unwrap();
         assert_eq!(loaded.entities.len(), scene.entities.len());
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn prefab_entities_spawn_as_hierarchies() {
+        let scene = prefab_test_scene();
+        let mut world = World::new();
+
+        let roots = spawn_scene_descriptor(&mut world, &scene);
+        assert_eq!(roots.len(), 1);
+
+        let instance_children = world.get::<oxide_transform::Children>(roots[0]).unwrap();
+        assert_eq!(instance_children.len(), 2);
+
+        let prefab_root = instance_children.iter().next().unwrap();
+        let parent = world.get::<oxide_transform::Parent>(prefab_root).unwrap();
+        assert_eq!(parent.0, roots[0]);
+
+        let prefab_children = world.get::<oxide_transform::Children>(prefab_root).unwrap();
+        assert_eq!(prefab_children.len(), 1);
+
+        let mut meshes = world.query::<&RenderMesh>();
+        assert_eq!(meshes.iter(&world).count(), 2);
+    }
+
+    #[test]
+    fn spawn_scene_prefab_returns_instance_root() {
+        let scene = prefab_test_scene();
+        let mut world = World::new();
+
+        let root = spawn_scene_prefab(
+            &mut world,
+            &scene,
+            "crate_pair",
+            SceneTransform::from_position([4.0, 0.0, -2.0]),
+        )
+        .unwrap();
+
+        assert_eq!(world.get::<Name>(root).unwrap().0, "crate_pair");
+        assert!(world.get::<oxide_transform::Children>(root).is_some());
+        assert!(spawn_scene_prefab(
+            &mut world,
+            &scene,
+            "missing_prefab",
+            SceneTransform::default()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn sprite_scene_entities_spawn_billboards() {
+        let scene = SceneDescriptor {
+            prefabs: Vec::new(),
+            entities: vec![SceneEntityDescriptor {
+                name: Some("Sprite Actor".to_string()),
+                kind: SceneEntityKind::Sprite {
+                    sprite: SceneSpriteDescriptor {
+                        sprite: "actor.hero".to_string(),
+                        size: [1.5, 2.0],
+                        tint: [0.5, 0.75, 1.0, 1.0],
+                        facing: SceneSpriteFacing::Fixed,
+                        depth: SceneSpriteDepthMode::Overlay,
+                    },
+                },
+                ..Default::default()
+            }],
+        };
+
+        let mut world = World::new();
+        let roots = spawn_scene_descriptor(&mut world, &scene);
+        assert_eq!(roots.len(), 1);
+
+        let sprite = world.get::<SpriteBillboard>(roots[0]).unwrap();
+        assert_eq!(sprite.sprite.as_str(), "actor.hero");
+        assert_eq!(sprite.size, Vec2::new(1.5, 2.0));
+        assert_eq!(sprite.tint, [0.5, 0.75, 1.0, 1.0]);
+        assert_eq!(sprite.facing, SpriteFacing::Fixed);
+        assert_eq!(sprite.depth, SpriteDepthMode::Overlay);
+    }
+
+    #[test]
+    fn load_scene_descriptor_accepts_sprite_entity_defaults() {
+        let path = temp_path("sprite_scene", "oxscene");
+        fs::write(
+            &path,
+            r#"{
+                "format": "oxide.oxscene",
+                "version": 1,
+                "scene": {
+                    "entities": [
+                        {
+                            "name": "Sprite Actor",
+                            "type": "sprite",
+                            "sprite": "actor.hero"
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let scene = load_scene_descriptor(&path).unwrap();
+        let SceneEntityKind::Sprite { sprite } = &scene.entities[0].kind else {
+            panic!("expected sprite entity");
+        };
+        assert_eq!(sprite.sprite, "actor.hero");
+        assert_eq!(sprite.size, [1.0, 1.0]);
+        assert_eq!(sprite.tint, [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(sprite.facing, SceneSpriteFacing::YBillboard);
+        assert_eq!(sprite.depth, SceneSpriteDepthMode::World);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn scene_validation_reports_prefab_authoring_errors() {
+        let scene = SceneDescriptor {
+            prefabs: vec![
+                ScenePrefabDescriptor {
+                    id: "loop".to_string(),
+                    entities: vec![SceneEntityDescriptor {
+                        kind: SceneEntityKind::Prefab {
+                            id: "loop".to_string(),
+                        },
+                        ..Default::default()
+                    }],
+                },
+                ScenePrefabDescriptor {
+                    id: "loop".to_string(),
+                    entities: Vec::new(),
+                },
+            ],
+            entities: vec![
+                SceneEntityDescriptor {
+                    kind: SceneEntityKind::Prefab {
+                        id: "missing".to_string(),
+                    },
+                    ..Default::default()
+                },
+                SceneEntityDescriptor {
+                    kind: SceneEntityKind::Sprite {
+                        sprite: SceneSpriteDescriptor {
+                            sprite: String::new(),
+                            size: [1.0, 1.0],
+                            tint: [1.0, 1.0, 1.0, 1.0],
+                            facing: SceneSpriteFacing::YBillboard,
+                            depth: SceneSpriteDepthMode::World,
+                        },
+                    },
+                    ..Default::default()
+                },
+            ],
+        };
+
+        let err = scene.validate().unwrap_err();
+        let messages: Vec<_> = err
+            .diagnostics()
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("duplicate prefab ID")));
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("recursive prefab reference")));
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("unknown prefab ID")));
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("sprite IDs must not be empty")));
+    }
+
+    #[test]
+    fn load_scene_descriptor_rejects_invalid_prefab_reference() {
+        let path = temp_path("invalid_prefab_scene", "oxscene");
+        fs::write(
+            &path,
+            r#"{
+                "format": "oxide.oxscene",
+                "version": 1,
+                "scene": {
+                    "entities": [
+                        {
+                            "type": "prefab",
+                            "id": "missing"
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let err = load_scene_descriptor(&path).unwrap_err();
+        let SceneDescriptorError::Validation { source, .. } = err else {
+            panic!("expected validation error");
+        };
+        assert_eq!(source.diagnostics().len(), 1);
+        assert_eq!(source.diagnostics()[0].path, "entities[0].id");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn try_spawn_scene_descriptor_rejects_invalid_scene_without_spawning() {
+        let scene = SceneDescriptor {
+            prefabs: Vec::new(),
+            entities: vec![SceneEntityDescriptor {
+                kind: SceneEntityKind::Prefab {
+                    id: "missing".to_string(),
+                },
+                ..Default::default()
+            }],
+        };
+        let mut world = World::new();
+
+        let err = try_spawn_scene_descriptor(&mut world, &scene).unwrap_err();
+        assert_eq!(err.diagnostics()[0].message, "unknown prefab ID 'missing'");
+        assert!(world
+            .query::<&TransformComponent>()
+            .iter(&world)
+            .next()
+            .is_none());
+        assert!(spawn_scene_descriptor(&mut world, &scene).is_empty());
+    }
+
+    fn prefab_test_scene() -> SceneDescriptor {
+        SceneDescriptor {
+            prefabs: vec![ScenePrefabDescriptor {
+                id: "crate_pair".to_string(),
+                entities: vec![SceneEntityDescriptor {
+                    name: Some("Crate Base".to_string()),
+                    kind: SceneEntityKind::Mesh {
+                        primitive: SceneMeshPrimitive::Cube,
+                        material: SceneMaterialDescriptor::default(),
+                    },
+                    children: vec![SceneEntityDescriptor {
+                        name: Some("Crate Top".to_string()),
+                        transform: SceneTransform::from_position([0.0, 1.2, 0.0]),
+                        kind: SceneEntityKind::Mesh {
+                            primitive: SceneMeshPrimitive::Cube,
+                            material: SceneMaterialDescriptor::default(),
+                        },
+                        children: Vec::new(),
+                    }],
+                    ..Default::default()
+                }],
+            }],
+            entities: vec![SceneEntityDescriptor {
+                name: Some("Crate Pair Instance".to_string()),
+                transform: SceneTransform::from_position([2.0, 0.0, -3.0]),
+                kind: SceneEntityKind::Prefab {
+                    id: "crate_pair".to_string(),
+                },
+                children: vec![SceneEntityDescriptor {
+                    name: Some("Instance Marker".to_string()),
+                    kind: SceneEntityKind::Empty,
+                    ..Default::default()
+                }],
+            }],
+        }
     }
 
     fn temp_path(name: &str, extension: &str) -> std::path::PathBuf {

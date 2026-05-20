@@ -14,11 +14,16 @@ use winit::{
 
 #[cfg(feature = "gltf-import")]
 use crate::asset::GltfSceneAssets;
-use crate::asset::{AssetServerResource, MaterialAssets};
-use crate::ecs::{CommandQueue, IntoSystem, RendererResource, System, Time, WindowResource, World};
+use crate::asset::{
+    material_descriptor_asset_system, AssetServerResource, MaterialAssets, MaterialDescriptorAssets,
+};
+use crate::diagnostics::FrameDiagnosticsPlugin;
+use crate::ecs::{FixedTime, IntoSystem, RendererResource, Schedule, Time, WindowResource, World};
 use crate::event::{window_event_to_engine, EngineEvent};
 use crate::input::{KeyboardInput, MouseInput};
-use crate::render::RenderFrame;
+use crate::render::{
+    RenderFrame, RenderPassAnchor, RenderPassFn, RenderPassSchedule, RenderPassStep,
+};
 #[cfg(feature = "gltf-import")]
 use crate::scene::{gltf_scene_spawn_system, PendingGltfSceneSpawns, SpawnedGltfScenes};
 use crate::scene::{
@@ -36,6 +41,10 @@ use oxide_renderer::Renderer;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PreUpdate;
 
+/// Fixed-step gameplay stage driven by [`FixedTime`](crate::ecs::FixedTime).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FixedUpdate;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Update;
 
@@ -47,32 +56,60 @@ pub struct Render;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AppStage {
+    /// Runs once per rendered frame before fixed and variable gameplay work.
     PreUpdate,
+    /// Runs zero or more times per rendered frame using the `FixedTime` accumulator.
+    FixedUpdate,
+    /// Runs once per rendered frame for variable-rate gameplay work.
     Update,
+    /// Runs once per rendered frame after update systems.
     PostUpdate,
+    /// Runs before render preparation to extract app data for rendering.
     Extract,
+    /// Runs before queueing render work.
     Prepare,
 }
 
+/// Stable label for the built-in transform propagation system.
+pub const TRANSFORM_PROPAGATE_SYSTEM: &str = "oxide.transform.propagate";
+/// Stable label for the built-in material descriptor asset polling system.
+pub const MATERIAL_DESCRIPTOR_ASSET_SYSTEM: &str = "oxide.asset.material_descriptors";
+/// Stable label for the built-in native `.oxscene` spawn system.
+pub const OXSCENE_SPAWN_SYSTEM: &str = "oxide.scene.oxscene_spawn";
+/// Stable label for the built-in glTF hierarchy spawn system.
+pub const GLTF_SCENE_SPAWN_SYSTEM: &str = "oxide.scene.gltf_spawn";
+
 pub type StartupSystemFn = fn(&mut World, &Window);
 
-#[derive(Default)]
 struct RunnerSystems {
     startup: Vec<StartupSystemFn>,
-    pre_update: Vec<System>,
-    update: Vec<System>,
-    post_update: Vec<System>,
-    extract: Vec<System>,
-    prepare: Vec<System>,
+    pre_update: Schedule,
+    fixed_update: Schedule,
+    update: Schedule,
+    post_update: Schedule,
+    extract: Schedule,
+    prepare: Schedule,
+    render_passes: RenderPassSchedule,
+}
+
+impl Default for RunnerSystems {
+    fn default() -> Self {
+        Self {
+            startup: Vec::new(),
+            pre_update: Schedule::new(),
+            fixed_update: Schedule::new(),
+            update: Schedule::new(),
+            post_update: Schedule::new(),
+            extract: Schedule::new(),
+            prepare: Schedule::new(),
+            render_passes: RenderPassSchedule::new(),
+        }
+    }
 }
 
 impl RunnerSystems {
-    fn run(stage_systems: &mut [System], world: &mut World) {
-        let mut commands = CommandQueue::new();
-        for system in stage_systems {
-            system.run(world, &mut commands);
-        }
-        commands.apply(world);
+    fn run(stage_systems: &mut Schedule, world: &mut World) {
+        stage_systems.run(world);
     }
 }
 
@@ -115,6 +152,9 @@ fn initialize_input_resources(world: &mut World, _window: &Window) {
     if !world.contains_resource::<Time>() {
         world.init_resource::<Time>();
     }
+    if !world.contains_resource::<FixedTime>() {
+        world.init_resource::<FixedTime>();
+    }
     if !world.contains_resource::<KeyboardInput>() {
         world.init_resource::<KeyboardInput>();
     }
@@ -127,7 +167,11 @@ pub struct TransformPlugin;
 
 impl<T: App> Plugin<T> for TransformPlugin {
     fn build(&self, app: &mut AppBuilder<T>) {
-        app.add_system_mut(AppStage::PostUpdate, transform_propagate_system);
+        app.add_labeled_system_mut(
+            AppStage::PostUpdate,
+            TRANSFORM_PROPAGATE_SYSTEM,
+            transform_propagate_system,
+        );
     }
 }
 
@@ -137,9 +181,22 @@ impl<T: App> Plugin<T> for RenderPlugin {
     fn build(&self, app: &mut AppBuilder<T>) {
         app.add_startup_system_mut(initialize_window_resource);
         app.add_startup_system_mut(initialize_asset_resources);
-        app.add_system_mut(AppStage::PreUpdate, oxscene_spawn_system);
+        app.add_labeled_system_mut(
+            AppStage::PreUpdate,
+            MATERIAL_DESCRIPTOR_ASSET_SYSTEM,
+            material_descriptor_asset_system,
+        );
+        app.add_labeled_system_mut(
+            AppStage::PreUpdate,
+            OXSCENE_SPAWN_SYSTEM,
+            oxscene_spawn_system,
+        );
         #[cfg(feature = "gltf-import")]
-        app.add_system_mut(AppStage::PreUpdate, gltf_scene_spawn_system);
+        app.add_labeled_system_mut(
+            AppStage::PreUpdate,
+            GLTF_SCENE_SPAWN_SYSTEM,
+            gltf_scene_spawn_system,
+        );
     }
 }
 
@@ -156,6 +213,9 @@ fn initialize_asset_resources(world: &mut World, _window: &Window) {
     }
     if !world.contains_resource::<MaterialAssets>() {
         world.insert_resource(MaterialAssets::default());
+    }
+    if !world.contains_resource::<MaterialDescriptorAssets>() {
+        world.insert_resource(MaterialDescriptorAssets::default());
     }
     if !world.contains_resource::<SceneDescriptorAssets>() {
         world.insert_resource(SceneDescriptorAssets::default());
@@ -255,6 +315,7 @@ impl<T: App> PluginGroup<T> for DefaultPlugins {
         app.add_plugin_mut(InputPlugin);
         app.add_plugin_mut(TransformPlugin);
         app.add_plugin_mut(RenderPlugin);
+        app.add_plugin_mut(FrameDiagnosticsPlugin);
     }
 }
 
@@ -289,14 +350,397 @@ impl<T: App> AppBuilder<T> {
     where
         S: IntoSystem<Marker>,
     {
-        let system = system.into_system();
-        match stage {
-            AppStage::PreUpdate => self.systems.pre_update.push(system),
-            AppStage::Update => self.systems.update.push(system),
-            AppStage::PostUpdate => self.systems.post_update.push(system),
-            AppStage::Extract => self.systems.extract.push(system),
-            AppStage::Prepare => self.systems.prepare.push(system),
-        }
+        self.stage_schedule_mut(stage).add_system(system);
+        self
+    }
+
+    /// Adds a system to a named set in the same stage.
+    pub fn add_system_to_set<S, Marker>(
+        mut self,
+        stage: AppStage,
+        set: impl Into<String>,
+        system: S,
+    ) -> Self
+    where
+        S: IntoSystem<Marker>,
+    {
+        self.add_system_to_set_mut(stage, set, system);
+        self
+    }
+
+    /// Mutable form of [`Self::add_system_to_set`].
+    pub fn add_system_to_set_mut<S, Marker>(
+        &mut self,
+        stage: AppStage,
+        set: impl Into<String>,
+        system: S,
+    ) -> &mut Self
+    where
+        S: IntoSystem<Marker>,
+    {
+        self.stage_schedule_mut(stage)
+            .add_system_to_set(set, system);
+        self
+    }
+
+    /// Adds a labeled system that other systems in the same stage can order
+    /// themselves before or after.
+    pub fn add_labeled_system<S, Marker>(
+        mut self,
+        stage: AppStage,
+        label: impl Into<String>,
+        system: S,
+    ) -> Self
+    where
+        S: IntoSystem<Marker>,
+    {
+        self.add_labeled_system_mut(stage, label, system);
+        self
+    }
+
+    /// Adds a labeled system to a named set in the same stage.
+    pub fn add_labeled_system_to_set<S, Marker>(
+        mut self,
+        stage: AppStage,
+        label: impl Into<String>,
+        set: impl Into<String>,
+        system: S,
+    ) -> Self
+    where
+        S: IntoSystem<Marker>,
+    {
+        self.add_labeled_system_to_set_mut(stage, label, set, system);
+        self
+    }
+
+    /// Mutable form of [`Self::add_labeled_system_to_set`].
+    pub fn add_labeled_system_to_set_mut<S, Marker>(
+        &mut self,
+        stage: AppStage,
+        label: impl Into<String>,
+        set: impl Into<String>,
+        system: S,
+    ) -> &mut Self
+    where
+        S: IntoSystem<Marker>,
+    {
+        self.stage_schedule_mut(stage)
+            .add_labeled_system_to_set(label, set, system);
+        self
+    }
+
+    /// Mutable form of [`Self::add_labeled_system`].
+    pub fn add_labeled_system_mut<S, Marker>(
+        &mut self,
+        stage: AppStage,
+        label: impl Into<String>,
+        system: S,
+    ) -> &mut Self
+    where
+        S: IntoSystem<Marker>,
+    {
+        self.stage_schedule_mut(stage)
+            .add_labeled_system(label, system);
+        self
+    }
+
+    /// Adds a labeled system that runs before `before_label` in the same stage.
+    pub fn add_labeled_system_before<S, Marker>(
+        mut self,
+        stage: AppStage,
+        label: impl Into<String>,
+        before_label: impl Into<String>,
+        system: S,
+    ) -> Self
+    where
+        S: IntoSystem<Marker>,
+    {
+        self.add_labeled_system_before_mut(stage, label, before_label, system);
+        self
+    }
+
+    /// Mutable form of [`Self::add_labeled_system_before`].
+    pub fn add_labeled_system_before_mut<S, Marker>(
+        &mut self,
+        stage: AppStage,
+        label: impl Into<String>,
+        before_label: impl Into<String>,
+        system: S,
+    ) -> &mut Self
+    where
+        S: IntoSystem<Marker>,
+    {
+        self.stage_schedule_mut(stage)
+            .add_labeled_system_before(label, before_label, system);
+        self
+    }
+
+    /// Adds a system that runs before `before_label` in the same stage.
+    pub fn add_system_before<S, Marker>(
+        mut self,
+        stage: AppStage,
+        before_label: impl Into<String>,
+        system: S,
+    ) -> Self
+    where
+        S: IntoSystem<Marker>,
+    {
+        self.add_system_before_mut(stage, before_label, system);
+        self
+    }
+
+    /// Mutable form of [`Self::add_system_before`].
+    pub fn add_system_before_mut<S, Marker>(
+        &mut self,
+        stage: AppStage,
+        before_label: impl Into<String>,
+        system: S,
+    ) -> &mut Self
+    where
+        S: IntoSystem<Marker>,
+    {
+        self.stage_schedule_mut(stage)
+            .add_system_before(before_label, system);
+        self
+    }
+
+    /// Adds a labeled system that runs after `after_label` in the same stage.
+    pub fn add_labeled_system_after<S, Marker>(
+        mut self,
+        stage: AppStage,
+        label: impl Into<String>,
+        after_label: impl Into<String>,
+        system: S,
+    ) -> Self
+    where
+        S: IntoSystem<Marker>,
+    {
+        self.add_labeled_system_after_mut(stage, label, after_label, system);
+        self
+    }
+
+    /// Mutable form of [`Self::add_labeled_system_after`].
+    pub fn add_labeled_system_after_mut<S, Marker>(
+        &mut self,
+        stage: AppStage,
+        label: impl Into<String>,
+        after_label: impl Into<String>,
+        system: S,
+    ) -> &mut Self
+    where
+        S: IntoSystem<Marker>,
+    {
+        self.stage_schedule_mut(stage)
+            .add_labeled_system_after(label, after_label, system);
+        self
+    }
+
+    /// Adds a system that runs after `after_label` in the same stage.
+    pub fn add_system_after<S, Marker>(
+        mut self,
+        stage: AppStage,
+        after_label: impl Into<String>,
+        system: S,
+    ) -> Self
+    where
+        S: IntoSystem<Marker>,
+    {
+        self.add_system_after_mut(stage, after_label, system);
+        self
+    }
+
+    /// Mutable form of [`Self::add_system_after`].
+    pub fn add_system_after_mut<S, Marker>(
+        &mut self,
+        stage: AppStage,
+        after_label: impl Into<String>,
+        system: S,
+    ) -> &mut Self
+    where
+        S: IntoSystem<Marker>,
+    {
+        self.stage_schedule_mut(stage)
+            .add_system_after(after_label, system);
+        self
+    }
+
+    /// Orders every system in `set` before `before_label` in the same stage.
+    pub fn configure_set_before(
+        mut self,
+        stage: AppStage,
+        set: impl Into<String>,
+        before_label: impl Into<String>,
+    ) -> Self {
+        self.configure_set_before_mut(stage, set, before_label);
+        self
+    }
+
+    /// Mutable form of [`Self::configure_set_before`].
+    pub fn configure_set_before_mut(
+        &mut self,
+        stage: AppStage,
+        set: impl Into<String>,
+        before_label: impl Into<String>,
+    ) -> &mut Self {
+        self.stage_schedule_mut(stage)
+            .configure_set_before(set, before_label);
+        self
+    }
+
+    /// Orders every system in `set` after `after_label` in the same stage.
+    pub fn configure_set_after(
+        mut self,
+        stage: AppStage,
+        set: impl Into<String>,
+        after_label: impl Into<String>,
+    ) -> Self {
+        self.configure_set_after_mut(stage, set, after_label);
+        self
+    }
+
+    /// Mutable form of [`Self::configure_set_after`].
+    pub fn configure_set_after_mut(
+        &mut self,
+        stage: AppStage,
+        set: impl Into<String>,
+        after_label: impl Into<String>,
+    ) -> &mut Self {
+        self.stage_schedule_mut(stage)
+            .configure_set_after(set, after_label);
+        self
+    }
+
+    /// Adds a render pass to the default custom-pass position.
+    ///
+    /// Custom render passes run after `AppStage::Prepare` and receive the
+    /// active frame encoder/view. By default they execute after built-in scene
+    /// and text passes and before [`App::queue`].
+    pub fn add_render_pass(mut self, label: impl Into<String>, pass: RenderPassFn) -> Self {
+        self.add_render_pass_mut(label, pass);
+        self
+    }
+
+    /// Mutable form of [`Self::add_render_pass`].
+    pub fn add_render_pass_mut(
+        &mut self,
+        label: impl Into<String>,
+        pass: RenderPassFn,
+    ) -> &mut Self {
+        self.systems.render_passes.add_pass(label, pass);
+        self
+    }
+
+    /// Adds a render pass to a named render ordering set.
+    pub fn add_render_pass_to_set(
+        mut self,
+        label: impl Into<String>,
+        set: impl Into<String>,
+        pass: RenderPassFn,
+    ) -> Self {
+        self.add_render_pass_to_set_mut(label, set, pass);
+        self
+    }
+
+    /// Mutable form of [`Self::add_render_pass_to_set`].
+    pub fn add_render_pass_to_set_mut(
+        &mut self,
+        label: impl Into<String>,
+        set: impl Into<String>,
+        pass: RenderPassFn,
+    ) -> &mut Self {
+        self.systems.render_passes.add_pass_to_set(label, set, pass);
+        self
+    }
+
+    /// Adds a render pass that runs before `before_label`.
+    pub fn add_render_pass_before(
+        mut self,
+        label: impl Into<String>,
+        before_label: impl Into<String>,
+        pass: RenderPassFn,
+    ) -> Self {
+        self.add_render_pass_before_mut(label, before_label, pass);
+        self
+    }
+
+    /// Mutable form of [`Self::add_render_pass_before`].
+    pub fn add_render_pass_before_mut(
+        &mut self,
+        label: impl Into<String>,
+        before_label: impl Into<String>,
+        pass: RenderPassFn,
+    ) -> &mut Self {
+        self.systems
+            .render_passes
+            .add_pass_before(label, before_label, pass);
+        self
+    }
+
+    /// Adds a render pass that runs after `after_label`.
+    pub fn add_render_pass_after(
+        mut self,
+        label: impl Into<String>,
+        after_label: impl Into<String>,
+        pass: RenderPassFn,
+    ) -> Self {
+        self.add_render_pass_after_mut(label, after_label, pass);
+        self
+    }
+
+    /// Mutable form of [`Self::add_render_pass_after`].
+    pub fn add_render_pass_after_mut(
+        &mut self,
+        label: impl Into<String>,
+        after_label: impl Into<String>,
+        pass: RenderPassFn,
+    ) -> &mut Self {
+        self.systems
+            .render_passes
+            .add_pass_after(label, after_label, pass);
+        self
+    }
+
+    /// Orders every render pass in `set` before `before_label`.
+    pub fn configure_render_pass_set_before(
+        mut self,
+        set: impl Into<String>,
+        before_label: impl Into<String>,
+    ) -> Self {
+        self.configure_render_pass_set_before_mut(set, before_label);
+        self
+    }
+
+    /// Mutable form of [`Self::configure_render_pass_set_before`].
+    pub fn configure_render_pass_set_before_mut(
+        &mut self,
+        set: impl Into<String>,
+        before_label: impl Into<String>,
+    ) -> &mut Self {
+        self.systems
+            .render_passes
+            .configure_set_before(set, before_label);
+        self
+    }
+
+    /// Orders every render pass in `set` after `after_label`.
+    pub fn configure_render_pass_set_after(
+        mut self,
+        set: impl Into<String>,
+        after_label: impl Into<String>,
+    ) -> Self {
+        self.configure_render_pass_set_after_mut(set, after_label);
+        self
+    }
+
+    /// Mutable form of [`Self::configure_render_pass_set_after`].
+    pub fn configure_render_pass_set_after_mut(
+        &mut self,
+        set: impl Into<String>,
+        after_label: impl Into<String>,
+    ) -> &mut Self {
+        self.systems
+            .render_passes
+            .configure_set_after(set, after_label);
         self
     }
 
@@ -308,6 +752,17 @@ impl<T: App> AppBuilder<T> {
     pub fn add_startup_system_mut(&mut self, system: StartupSystemFn) -> &mut Self {
         self.systems.startup.push(system);
         self
+    }
+
+    fn stage_schedule_mut(&mut self, stage: AppStage) -> &mut Schedule {
+        match stage {
+            AppStage::PreUpdate => &mut self.systems.pre_update,
+            AppStage::FixedUpdate => &mut self.systems.fixed_update,
+            AppStage::Update => &mut self.systems.update,
+            AppStage::PostUpdate => &mut self.systems.post_update,
+            AppStage::Extract => &mut self.systems.extract,
+            AppStage::Prepare => &mut self.systems.prepare,
+        }
     }
 
     pub fn add_plugin<P>(mut self, plugin: P) -> Self
@@ -467,12 +922,17 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
                         let time = app.world_mut().resource_mut::<Time>();
                         time.update();
                     }
-                    {
-                        let keyboard = app.world_mut().resource_mut::<KeyboardInput>();
-                        keyboard.update();
-                    }
 
                     RunnerSystems::run(&mut self.systems.pre_update, app.world_mut());
+                    let fixed_steps = if app.world().contains_resource::<FixedTime>() {
+                        let delta = app.world().resource::<Time>().delta;
+                        app.world_mut().resource_mut::<FixedTime>().advance(delta)
+                    } else {
+                        0
+                    };
+                    for _ in 0..fixed_steps {
+                        RunnerSystems::run(&mut self.systems.fixed_update, app.world_mut());
+                    }
                     app.update();
                     RunnerSystems::run(&mut self.systems.update, app.world_mut());
                     RunnerSystems::run(&mut self.systems.post_update, app.world_mut());
@@ -520,15 +980,38 @@ impl<T: App> ApplicationHandler for AppRunner<T> {
 
                     if let Some((surface_texture, device, queue)) = frame_parts {
                         let mut frame = RenderFrame::new(&device, surface_texture);
-                        queue_scene_renderer(app.world_mut(), &mut frame);
-                        queue_game_text_renderer(app.world_mut(), &mut frame);
-                        app.queue(&mut frame);
-                        if let Some(window) = self.window.as_ref() {
-                            queue_engine_egui(app.world_mut(), window, &mut frame);
+                        for step in self.systems.render_passes.ordered_steps() {
+                            match step {
+                                RenderPassStep::Anchor(RenderPassAnchor::Scene) => {
+                                    queue_scene_renderer(app.world_mut(), &mut frame);
+                                }
+                                RenderPassStep::Anchor(RenderPassAnchor::GameText) => {
+                                    queue_game_text_renderer(app.world_mut(), &mut frame);
+                                }
+                                RenderPassStep::Anchor(RenderPassAnchor::AppQueue) => {
+                                    app.queue(&mut frame);
+                                }
+                                RenderPassStep::Anchor(RenderPassAnchor::Egui) => {
+                                    if let Some(window) = self.window.as_ref() {
+                                        queue_engine_egui(app.world_mut(), window, &mut frame);
+                                    }
+                                }
+                                RenderPassStep::Pass(index) => {
+                                    self.systems.render_passes.run_pass_at(
+                                        index,
+                                        app.world_mut(),
+                                        &mut frame,
+                                    );
+                                }
+                            }
                         }
                         frame.present(&queue);
                     }
 
+                    {
+                        let keyboard = app.world_mut().resource_mut::<KeyboardInput>();
+                        keyboard.update();
+                    }
                     {
                         let mouse = app.world_mut().resource_mut::<MouseInput>();
                         mouse.update();

@@ -308,10 +308,11 @@ impl SceneEditor {
 
         let summaries = self.entities(world);
 
-        egui::SidePanel::left("oxide_scene_hierarchy")
+        egui::Window::new("Scene")
+            .id(egui::Id::new("oxide_scene_hierarchy"))
+            .default_width(260.0)
             .resizable(true)
             .show(ctx, |ui| {
-                ui.heading("Scene");
                 ui.horizontal(|ui| {
                     if ui.button("Cube").clicked() {
                         self.spawn_cube(world);

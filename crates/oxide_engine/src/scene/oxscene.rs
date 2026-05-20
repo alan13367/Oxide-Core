@@ -53,6 +53,66 @@ pub fn request_oxscene_spawn(
     handle
 }
 
+/// Starts an in-place reload for a known native scene path.
+///
+/// The existing scene handle is preserved. The replacement descriptor is
+/// published by [`oxscene_spawn_system`] into [`SceneDescriptorAssets`] once the
+/// async load completes. Reloading does not automatically spawn duplicate scene
+/// roots; queue the returned handle explicitly if the app wants to instantiate
+/// the reloaded descriptor again.
+pub fn reload_oxscene_path(
+    world: &mut World,
+    path: impl Into<PathBuf>,
+) -> Option<Handle<SceneDescriptor>> {
+    ensure_oxscene_resources(world);
+    let server = world.resource_mut::<AssetServerResource>();
+    server.server.reload_path_async(path.into(), |path| {
+        load_scene_descriptor(&path).map_err(|err| AssetServerError::Message(err.to_string()))
+    })
+}
+
+/// Reloads loaded native scene assets affected by changed source paths.
+///
+/// A path can match either the scene's own source path or a dependency path
+/// registered on the handle through `AssetServer`.
+pub fn reload_changed_oxscenes<I, P>(
+    world: &mut World,
+    changed_paths: I,
+) -> Vec<Handle<SceneDescriptor>>
+where
+    I: IntoIterator<Item = P>,
+    P: Into<PathBuf>,
+{
+    ensure_oxscene_resources(world);
+    let mut reload_paths = Vec::new();
+    {
+        let server = world.resource::<AssetServerResource>();
+        for changed_path in changed_paths {
+            for handle in server
+                .server
+                .handles_for_changed_path::<SceneDescriptor>(changed_path.into())
+            {
+                if let Some(path) = server.server.asset_path(&handle) {
+                    let path = path.to_path_buf();
+                    if !reload_paths.contains(&path) {
+                        reload_paths.push(path);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut reloaded = Vec::new();
+    for path in reload_paths {
+        if let Some(handle) = reload_oxscene_path(world, path) {
+            if !reloaded.contains(&handle) {
+                reloaded.push(handle);
+            }
+        }
+    }
+    reloaded
+}
+
 pub fn take_spawned_oxscene_roots(
     world: &mut World,
     handle: Handle<SceneDescriptor>,
@@ -82,24 +142,13 @@ pub fn oxscene_spawn_system(world: &mut World) {
     };
 
     if !completed.is_empty() {
-        let mut ready_handles = Vec::new();
-        {
-            let scene_assets = world.resource_mut::<SceneDescriptorAssets>();
-            for result in completed {
-                match result {
-                    Ok((handle, scene)) => {
-                        scene_assets.assets.insert(handle, scene);
-                        ready_handles.push(handle);
-                    }
-                    Err(err) => tracing::warn!("Failed to load Oxide scene: {err}"),
+        let scene_assets = world.resource_mut::<SceneDescriptorAssets>();
+        for result in completed {
+            match result {
+                Ok((handle, scene)) => {
+                    scene_assets.assets.insert(handle, scene);
                 }
-            }
-        }
-
-        if !ready_handles.is_empty() {
-            let pending = world.resource_mut::<PendingOxSceneSpawns>();
-            for handle in ready_handles {
-                pending.queue(handle);
+                Err(err) => tracing::warn!("Failed to load Oxide scene: {err}"),
             }
         }
     }
@@ -155,6 +204,9 @@ pub fn ensure_oxscene_resources(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
     use oxide_scene::{SceneEntityDescriptor, SceneEntityKind};
 
     #[test]
@@ -168,6 +220,7 @@ mod tests {
         };
 
         let scene = SceneDescriptor {
+            prefabs: Vec::new(),
             entities: vec![SceneEntityDescriptor {
                 name: Some("Asset Cube".to_string()),
                 kind: SceneEntityKind::Mesh {
@@ -189,5 +242,111 @@ mod tests {
             take_spawned_oxscene_roots(&mut world, handle).expect("scene should have spawned");
         assert_eq!(roots.len(), 1);
         assert!(world.contains(roots[0]));
+    }
+
+    #[test]
+    fn reload_oxscene_path_updates_asset_without_respawning_roots() {
+        let path = temp_path("reload_scene", "oxscene");
+        write_scene(&path, "Original Cube");
+
+        let mut world = World::new();
+        let handle = request_oxscene_spawn(&mut world, &path);
+        run_until_scene_asset_named(&mut world, handle, "Original Cube");
+        let roots =
+            take_spawned_oxscene_roots(&mut world, handle).expect("initial scene should spawn");
+        assert_eq!(roots.len(), 1);
+
+        write_scene(&path, "Reloaded Cube");
+        let reloaded = reload_oxscene_path(&mut world, &path).expect("known path should reload");
+        assert_eq!(reloaded, handle);
+
+        run_until_scene_asset_named(&mut world, handle, "Reloaded Cube");
+        assert!(take_spawned_oxscene_roots(&mut world, handle).is_none());
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn reload_changed_oxscenes_matches_dependency_paths() {
+        let scene_path = temp_path("dependency_scene", "oxscene");
+        let dependency_path = temp_path("scene_material", "oxmat");
+        write_scene(&scene_path, "Dependency Cube");
+        fs::write(&dependency_path, "{}").unwrap();
+
+        let mut world = World::new();
+        let handle = request_oxscene_spawn(&mut world, &scene_path);
+        run_until_scene_asset_named(&mut world, handle, "Dependency Cube");
+        let _ = take_spawned_oxscene_roots(&mut world, handle);
+
+        {
+            let server = world.resource_mut::<AssetServerResource>();
+            assert!(server
+                .server
+                .add_asset_dependency(&handle, dependency_path.clone()));
+        }
+
+        write_scene(&scene_path, "Dependency Reloaded Cube");
+        let reloaded = reload_changed_oxscenes(&mut world, [dependency_path.clone()]);
+        assert_eq!(reloaded, vec![handle]);
+
+        run_until_scene_asset_named(&mut world, handle, "Dependency Reloaded Cube");
+        assert!(take_spawned_oxscene_roots(&mut world, handle).is_none());
+
+        let _ = fs::remove_file(scene_path);
+        let _ = fs::remove_file(dependency_path);
+    }
+
+    fn run_until_scene_asset_named(
+        world: &mut World,
+        handle: Handle<SceneDescriptor>,
+        expected_name: &str,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            oxscene_spawn_system(world);
+            let is_loaded = world
+                .resource::<SceneDescriptorAssets>()
+                .assets
+                .get(&handle)
+                .and_then(|scene| scene.entities.first())
+                .and_then(|entity| entity.name.as_deref())
+                == Some(expected_name);
+            if is_loaded {
+                return;
+            }
+            std::thread::yield_now();
+        }
+
+        panic!("scene asset was not loaded with expected name '{expected_name}'");
+    }
+
+    fn write_scene(path: &std::path::Path, name: &str) {
+        fs::write(
+            path,
+            format!(
+                r#"{{
+                    "format": "oxide.oxscene",
+                    "version": 1,
+                    "scene": {{
+                        "entities": [
+                            {{
+                                "name": "{name}",
+                                "type": "mesh",
+                                "primitive": "cube"
+                            }}
+                        ]
+                    }}
+                }}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    fn temp_path(name: &str, extension: &str) -> std::path::PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{name}_{stamp}.{extension}"))
     }
 }

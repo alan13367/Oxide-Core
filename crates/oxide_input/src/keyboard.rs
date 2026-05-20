@@ -19,11 +19,9 @@ pub struct KeyboardInput {
 }
 
 impl KeyboardInput {
+    /// Clears per-frame transition state.
     pub fn update(&mut self) {
-        let to_press: Vec<_> = self.just_pressed.drain().collect();
-        for key in to_press {
-            self.keys.insert(key);
-        }
+        self.just_pressed.clear();
         self.just_released.clear();
     }
 
@@ -32,9 +30,9 @@ impl KeyboardInput {
     pub fn process_event(&mut self, key: PhysicalKey, pressed: bool) {
         if let PhysicalKey::Code(code) = key {
             if pressed && !self.keys.contains(&code) {
+                self.keys.insert(code);
                 self.just_pressed.insert(code);
-            } else if !pressed && self.keys.contains(&code) {
-                self.keys.remove(&code);
+            } else if !pressed && self.keys.remove(&code) {
                 self.just_released.insert(code);
             }
         }
@@ -62,5 +60,35 @@ impl KeyboardInput {
         } else {
             ButtonState::Released
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_transitions_are_visible_until_update_clears_them() {
+        let mut keyboard = KeyboardInput::default();
+
+        keyboard.process_event(PhysicalKey::Code(KeyCode::Space), true);
+        assert!(keyboard.pressed(KeyCode::Space));
+        assert!(keyboard.just_pressed(KeyCode::Space));
+        assert_eq!(
+            keyboard.button_state(KeyCode::Space),
+            ButtonState::JustPressed
+        );
+
+        keyboard.update();
+        assert!(keyboard.pressed(KeyCode::Space));
+        assert!(!keyboard.just_pressed(KeyCode::Space));
+        assert_eq!(keyboard.button_state(KeyCode::Space), ButtonState::Pressed);
+
+        keyboard.process_event(PhysicalKey::Code(KeyCode::Space), false);
+        assert!(!keyboard.pressed(KeyCode::Space));
+        assert!(keyboard.just_released(KeyCode::Space));
+
+        keyboard.update();
+        assert_eq!(keyboard.button_state(KeyCode::Space), ButtonState::Released);
     }
 }

@@ -7,6 +7,7 @@ pub mod app;
 pub mod asset;
 pub mod audio;
 pub mod camera;
+pub mod diagnostics;
 pub mod ecs;
 pub mod event;
 pub mod input;

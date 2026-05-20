@@ -32,6 +32,7 @@ struct AssetMetadata {
     type_id: TypeId,
     path: Option<PathBuf>,
     status: AssetLoadStatus,
+    dependencies: Vec<PathBuf>,
 }
 
 pub struct AssetServer {
@@ -88,6 +89,7 @@ impl AssetServer {
                 type_id: TypeId::of::<T>(),
                 path: None,
                 status: AssetLoadStatus::Loading,
+                dependencies: Vec::new(),
             },
         );
 
@@ -135,11 +137,50 @@ impl AssetServer {
                 type_id,
                 path: Some(path.clone()),
                 status: AssetLoadStatus::Loading,
+                dependencies: Vec::new(),
             },
         );
         self.paths.insert((type_id, path), id);
 
         handle
+    }
+
+    /// Reloads an already-known typed path into its existing handle.
+    ///
+    /// This is intended for hot-reload systems: stored handles remain stable
+    /// while [`poll_ready`](Self::poll_ready) or [`poll_loaded`](Self::poll_loaded)
+    /// later publishes the replacement asset value. Returns `None` when the
+    /// path is not currently known for `T`.
+    pub fn reload_path_async<T, F>(
+        &mut self,
+        path: impl Into<PathBuf>,
+        loader: F,
+    ) -> Option<Handle<T>>
+    where
+        T: Send + 'static,
+        F: FnOnce(PathBuf) -> Result<T, AssetServerError> + Send + 'static,
+    {
+        let path = normalize_asset_path(path.into());
+        let type_id = TypeId::of::<T>();
+        let id = self.paths.get(&(type_id, path.clone())).copied()?;
+
+        let metadata = self.metadata.get_mut(&id)?;
+        if metadata.type_id != type_id {
+            return None;
+        }
+
+        let loader_path = path.clone();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = loader(loader_path).map(|asset| Box::new(asset) as Box<dyn Any + Send>);
+            let _ = sender.send(result);
+        });
+
+        self.pending.insert(id, PendingAsset { type_id, receiver });
+        metadata.status = AssetLoadStatus::Loading;
+        metadata.path = Some(path);
+
+        Some(Handle::new(id))
     }
 
     pub fn handle_for_path<T: 'static>(&self, path: impl Into<PathBuf>) -> Option<Handle<T>> {
@@ -160,6 +201,82 @@ impl AssetServer {
         (metadata.type_id == TypeId::of::<T>())
             .then_some(metadata.path.as_deref())
             .flatten()
+    }
+
+    /// Replaces the path dependencies recorded for a typed asset.
+    ///
+    /// Dependencies are normalized paths used by hot-reload and importer
+    /// systems to find assets affected by changes to secondary source files
+    /// such as material includes, texture files, or imported subdocuments.
+    pub fn set_asset_dependencies<T: 'static, I, P>(
+        &mut self,
+        handle: &Handle<T>,
+        dependencies: I,
+    ) -> bool
+    where
+        I: IntoIterator<Item = P>,
+        P: Into<PathBuf>,
+    {
+        let Some(metadata) = self.metadata.get_mut(&handle.id()) else {
+            return false;
+        };
+        if metadata.type_id != TypeId::of::<T>() {
+            return false;
+        }
+
+        metadata.dependencies = dependencies
+            .into_iter()
+            .map(|path| normalize_asset_path(path.into()))
+            .collect();
+        metadata.dependencies.sort();
+        metadata.dependencies.dedup();
+        true
+    }
+
+    /// Adds one path dependency to a typed asset.
+    pub fn add_asset_dependency<T: 'static>(
+        &mut self,
+        handle: &Handle<T>,
+        dependency: impl Into<PathBuf>,
+    ) -> bool {
+        let Some(metadata) = self.metadata.get_mut(&handle.id()) else {
+            return false;
+        };
+        if metadata.type_id != TypeId::of::<T>() {
+            return false;
+        }
+
+        let dependency = normalize_asset_path(dependency.into());
+        if !metadata.dependencies.contains(&dependency) {
+            metadata.dependencies.push(dependency);
+            metadata.dependencies.sort();
+        }
+        true
+    }
+
+    /// Returns path dependencies recorded for a typed asset.
+    pub fn asset_dependencies<T: 'static>(&self, handle: &Handle<T>) -> Option<&[PathBuf]> {
+        let metadata = self.metadata.get(&handle.id())?;
+        (metadata.type_id == TypeId::of::<T>()).then_some(metadata.dependencies.as_slice())
+    }
+
+    /// Returns typed asset handles whose source path or dependency paths match a changed path.
+    pub fn handles_for_changed_path<T: 'static>(&self, path: impl Into<PathBuf>) -> Vec<Handle<T>> {
+        let path = normalize_asset_path(path.into());
+        self.metadata
+            .iter()
+            .filter_map(|(id, metadata)| {
+                if metadata.type_id != TypeId::of::<T>() {
+                    return None;
+                }
+                let path_matches = metadata.path.as_ref() == Some(&path)
+                    || metadata
+                        .dependencies
+                        .iter()
+                        .any(|dependency| dependency == &path);
+                path_matches.then(|| Handle::new(*id))
+            })
+            .collect()
     }
 
     /// Polls for completed async assets and returns ready `(Handle<T>, T)` pairs.
@@ -252,11 +369,13 @@ fn normalize_asset_path(path: PathBuf) -> PathBuf {
 mod tests {
     use super::*;
     use crate::Assets;
+    use std::time::{Duration, Instant};
 
     fn poll_until_ready<T: Send + 'static>(
         server: &mut AssetServer,
     ) -> Vec<Result<(Handle<T>, T), AssetServerError>> {
-        for _ in 0..100 {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
             let ready = server.poll_ready::<T>();
             if !ready.is_empty() {
                 return ready;
@@ -264,6 +383,21 @@ mod tests {
             std::thread::yield_now();
         }
         server.poll_ready::<T>()
+    }
+
+    fn poll_until_loaded<T: Send + 'static>(
+        server: &mut AssetServer,
+        assets: &mut Assets<T>,
+    ) -> Vec<Result<Handle<T>, AssetServerError>> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            let loaded = server.poll_loaded(assets);
+            if !loaded.is_empty() {
+                return loaded;
+            }
+            std::thread::yield_now();
+        }
+        server.poll_loaded(assets)
     }
 
     #[test]
@@ -347,17 +481,133 @@ mod tests {
         let handle =
             server.load_path_async("assets/number.asset", |_| Ok::<_, AssetServerError>(42u32));
 
-        for _ in 0..100 {
-            let loaded = server.poll_loaded(&mut assets);
-            if !loaded.is_empty() {
-                assert_eq!(loaded.into_iter().next().unwrap().unwrap(), handle);
-                assert_eq!(assets.get(&handle), Some(&42));
-                assert_eq!(server.asset_status(&handle), Some(AssetLoadStatus::Loaded));
-                return;
-            }
-            std::thread::yield_now();
-        }
+        let loaded = poll_until_loaded(&mut server, &mut assets);
+        assert_eq!(loaded.len(), 1, "asset did not finish loading");
+        assert_eq!(loaded.into_iter().next().unwrap().unwrap(), handle);
+        assert_eq!(assets.get(&handle), Some(&42));
+        assert_eq!(server.asset_status(&handle), Some(AssetLoadStatus::Loaded));
+    }
 
-        panic!("asset did not finish loading");
+    #[test]
+    fn reload_path_reuses_handle_and_replaces_loaded_asset() {
+        let mut server = AssetServer::new();
+        let mut assets = Assets::<u32>::new();
+        let handle =
+            server.load_path_async("assets/reload.asset", |_| Ok::<_, AssetServerError>(1u32));
+
+        let loaded = poll_until_loaded(&mut server, &mut assets);
+        assert_eq!(loaded.len(), 1, "asset did not finish loading");
+        assert_eq!(assets.get(&handle), Some(&1));
+        assert_eq!(server.asset_status(&handle), Some(AssetLoadStatus::Loaded));
+
+        let reloaded = server
+            .reload_path_async("assets/reload.asset", |_| Ok::<_, AssetServerError>(2u32))
+            .unwrap();
+        assert_eq!(reloaded, handle);
+        assert_eq!(server.asset_status(&handle), Some(AssetLoadStatus::Loading));
+
+        let loaded = poll_until_loaded(&mut server, &mut assets);
+        assert_eq!(loaded.len(), 1, "asset did not finish reloading");
+        assert_eq!(loaded.into_iter().next().unwrap().unwrap(), handle);
+        assert_eq!(assets.get(&handle), Some(&2));
+        assert_eq!(server.asset_status(&handle), Some(AssetLoadStatus::Loaded));
+    }
+
+    #[test]
+    fn reload_path_requires_known_typed_path_and_preserves_dependencies() {
+        let mut server = AssetServer::new();
+        let handle = server.load_path_async("assets/reload_scene.oxscene", |_| {
+            Ok::<_, AssetServerError>(1u32)
+        });
+        assert!(server.add_asset_dependency(&handle, "assets/material.oxmat"));
+
+        assert_eq!(
+            server.reload_path_async::<String, _>("assets/reload_scene.oxscene", |_| {
+                Ok::<_, AssetServerError>("wrong type".to_string())
+            }),
+            None
+        );
+        assert_eq!(
+            server.reload_path_async::<u32, _>("assets/unknown.oxscene", |_| {
+                Ok::<_, AssetServerError>(2u32)
+            }),
+            None
+        );
+
+        assert_eq!(
+            server
+                .reload_path_async(
+                    "assets/reload_scene.oxscene",
+                    |_| Ok::<_, AssetServerError>(3u32)
+                )
+                .unwrap(),
+            handle
+        );
+        assert_eq!(
+            server.asset_dependencies(&handle).unwrap(),
+            &[PathBuf::from("assets/material.oxmat")]
+        );
+    }
+
+    #[test]
+    fn dependency_paths_are_deduplicated_and_queryable() {
+        let mut server = AssetServer::new();
+        let handle =
+            server.load_path_async("assets/scene.oxscene", |_| Ok::<_, AssetServerError>(1u32));
+
+        assert!(server.set_asset_dependencies(
+            &handle,
+            [
+                "assets/materials/stone.oxmat",
+                "assets/materials/stone.oxmat",
+                "assets/textures/stone.png",
+            ],
+        ));
+
+        let dependencies = server.asset_dependencies(&handle).unwrap();
+        assert_eq!(dependencies.len(), 2);
+        assert!(dependencies.contains(&PathBuf::from("assets/materials/stone.oxmat")));
+        assert!(dependencies.contains(&PathBuf::from("assets/textures/stone.png")));
+    }
+
+    #[test]
+    fn changed_path_query_matches_source_and_dependencies_by_type() {
+        let mut server = AssetServer::new();
+        let scene =
+            server.load_path_async("assets/scene.oxscene", |_| Ok::<_, AssetServerError>(1u32));
+        let text = server.load_path_async("assets/scene.oxscene", |_| {
+            Ok::<_, AssetServerError>("scene".to_string())
+        });
+
+        assert!(server.add_asset_dependency(&scene, "assets/materials/stone.oxmat"));
+        assert!(server.add_asset_dependency(&text, "assets/materials/stone.oxmat"));
+
+        assert_eq!(
+            server.handles_for_changed_path::<u32>("assets/scene.oxscene"),
+            vec![scene]
+        );
+        assert_eq!(
+            server.handles_for_changed_path::<u32>("assets/materials/stone.oxmat"),
+            vec![scene]
+        );
+        assert_eq!(
+            server.handles_for_changed_path::<String>("assets/materials/stone.oxmat"),
+            vec![text]
+        );
+    }
+
+    #[test]
+    fn dependency_updates_reject_wrong_handle_type() {
+        let mut server = AssetServer::new();
+        let handle =
+            server.load_path_async("assets/number.asset", |_| Ok::<_, AssetServerError>(42u32));
+        let wrong_type = Handle::<String>::new(handle.id());
+
+        assert!(!server.add_asset_dependency(&wrong_type, "assets/ignored.txt"));
+        assert!(server.asset_dependencies(&wrong_type).is_none());
+        assert_eq!(
+            server.asset_dependencies(&handle).unwrap(),
+            &[] as &[PathBuf]
+        );
     }
 }

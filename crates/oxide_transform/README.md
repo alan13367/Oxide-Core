@@ -5,3 +5,16 @@
 [![Docs](https://docs.rs/oxide-core-transform/badge.svg)](https://docs.rs/oxide-core-transform/latest/oxide_transform/)
 
 Transform and hierarchy primitives for the Oxide Core game engine.
+
+`attach_child`, `detach_child`, and `mark_subtree_dirty` mutate hierarchy data
+directly when a system owns `&mut World`. Systems that use deferred ECS commands
+can import `HierarchyCommandsExt` and queue those same hierarchy edits:
+
+```rust
+use oxide_transform::HierarchyCommandsExt;
+
+fn parent_pickup(mut commands: Commands, player: Res<PlayerEntity>) {
+    let pickup = commands.spawn(Pickup).id();
+    commands.attach_child(player.0, pickup);
+}
+```

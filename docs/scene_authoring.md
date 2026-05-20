@@ -20,7 +20,8 @@ runner detects it and automatically:
 - batches cube and sphere primitives into instance buffers,
 - turns `Terrain` components into heightfield meshes,
 - batches `SpriteBillboard` entities into world or overlay sprite passes,
-- queues the scene pass before `App::queue`,
+- queues the scene pass at the `RENDER_PASS_SCENE` anchor before
+  `App::queue`,
 - resizes the depth texture when the window resizes.
 
 For the common case, a game only needs:
@@ -41,10 +42,26 @@ app::<MyGame>()
     .run();
 ```
 
+Plugins that need custom drawing can target stable render pass anchors instead
+of replacing the automatic scene renderer:
+
+```rust
+app::<MyGame>()
+    .add_plugins(DefaultPlugins)
+    .add_plugins(SceneAuthoringPlugins)
+    .add_render_pass_before("game.capture", RENDER_PASS_EGUI, queue_capture_overlay)
+    .run();
+```
+
+The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
+`RENDER_PASS_APP_QUEUE`, and `RENDER_PASS_EGUI`.
+
 ## Scene Components
 
 - `SceneDescriptor` is the data format for small native scenes and prefabs.
 - `RenderMesh` describes a primitive, material intent, and tint.
+- `SceneSpriteDescriptor` describes sprite billboard entities inside `.oxscene`
+  files by referencing a registered `SpriteId`.
 - `SpriteAssets` stores engine-native RGBA/PNG sprite images by `SpriteId`.
 - `SpriteBillboard` attaches a registered sprite to an entity as a world
   billboard, fixed-orientation sprite, or overlay weapon/HUD sprite.
@@ -55,6 +72,68 @@ app::<MyGame>()
   renderer.
 - `Name`, `Parent`, `Children`, `TransformComponent`, and `GlobalTransform`
   provide scene identity and hierarchy.
+
+## Prefabs And Children
+
+`.oxscene` files can define reusable prefabs in `SceneDescriptor::prefabs` and
+instantiate them with `"type": "prefab"`. Prefab instances spawn as empty root
+entities; the prefab contents are attached as children so translating, rotating,
+or scaling the instance root moves the whole reusable object.
+
+```json
+{
+  "format": "oxide.oxscene",
+  "version": 1,
+  "scene": {
+    "prefabs": [
+      {
+        "id": "crate_pair",
+        "entities": [
+          {
+            "name": "Crate Base",
+            "type": "mesh",
+            "primitive": "cube",
+            "children": [
+              {
+                "name": "Crate Top",
+                "transform": { "position": [0.0, 1.15, 0.0] },
+                "type": "mesh",
+                "primitive": "cube"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "entities": [
+      {
+        "name": "Crate Pair",
+        "transform": { "position": [2.0, 0.0, -1.5] },
+        "type": "prefab",
+        "id": "crate_pair"
+      }
+    ]
+  }
+}
+```
+
+Code can also instantiate a prefab from an already loaded descriptor:
+
+```rust
+let root = try_spawn_scene_prefab(
+    world,
+    &scene,
+    "crate_pair",
+    SceneTransform::from_position([4.0, 0.0, -3.0]),
+)?;
+```
+
+Native scene loads validate authored data before publishing the descriptor.
+Validation reports duplicate prefab IDs, missing prefab references, recursive
+prefab graphs, and empty sprite IDs with descriptor paths such as
+`entities[0].children[1].id`. Use `SceneDescriptor::validate()` in editor tools
+and `try_spawn_scene_descriptor` / `try_spawn_scene_prefab` when code wants
+structured `SceneValidationError` diagnostics before mutating the world.
 
 ## Native Sprites
 
@@ -77,6 +156,21 @@ world.spawn((
         .with_facing(SpriteFacing::YBillboard)
         .with_depth(SpriteDepthMode::World),
 ));
+```
+
+The same registered sprite can be referenced from a native scene descriptor:
+
+```json
+{
+  "name": "Enemy",
+  "transform": { "position": [0.0, 0.9, -6.0] },
+  "type": "sprite",
+  "sprite": "enemy.basic",
+  "size": [1.2, 1.8],
+  "facing": "y_billboard",
+  "depth": "world",
+  "tint": [1.0, 1.0, 1.0, 1.0]
+}
 ```
 
 With the `image-import` feature enabled, games can load PNG/JPEG bytes directly
@@ -211,7 +305,11 @@ show_scene_authoring_egui(world, egui_ctx);
 ```
 
 This draws the hierarchy, inspector, runtime UI, and debug overlay models. The
-`examples/zombie_shooter` crate shows how to build a larger gameplay prototype
+debug overlay reads `FRAME_TIME_MS` and `FPS` from the shared `Diagnostics`
+resource when `DefaultPlugins` are installed, and tools can add their own
+streams with `Diagnostics::record`.
+
+The `examples/zombie_shooter` crate shows how to build a larger gameplay prototype
 on this same path. The remaining UI/editor work is pointer-based widgets,
 viewport picking, transform gizmos, richer font shaping/localization, and an
 Oxide-owned egui-wgpu pass so apps do not need local UI rendering glue.
