@@ -181,12 +181,16 @@ existing color target so viewports can be composited.
 Code can also instantiate a prefab from an already loaded descriptor:
 
 ```rust
-let root = try_spawn_scene_prefab(
+let spawned = try_spawn_scene_prefab_instance(
     world,
     &scene,
     "crate_pair",
     SceneTransform::from_position([4.0, 0.0, -3.0]),
 )?;
+let Some(spawned) = spawned else {
+    return Ok(());
+};
+let root = spawned.root().unwrap();
 ```
 
 Native scene loads validate authored data before publishing the descriptor.
@@ -199,9 +203,13 @@ Systems can query `Tags` directly or use `first_entity_with_tag(&mut world,
 "spawn_point")` / `entities_with_tag(&mut world, "enemy")` instead of parsing
 names.
 Spawned entities also receive `SceneInstanceId` and `SceneEntityPath`
-components. Named path segments use authored names, while unnamed siblings use
-`#index`. When one scene can be spawned more than once, get the instance from a
-root with `scene_instance_id(&world, root)`, then call
+components. APIs such as `try_spawn_scene_prefab_instance` and
+`spawn_scene_descriptor_instance` return a `SpawnedSceneInstance` with the
+assigned instance ID and roots, so gameplay and editor code can keep the handle
+for scoped lookups or later unloads. Named path segments use authored names,
+while unnamed siblings use `#index`. When one scene can be spawned more than
+once, use the returned instance ID or recover it from a root with
+`scene_instance_id(&world, root)`, then call
 `entity_by_scene_path_in_instance(&mut world, instance, "Crate Pair/Crate Base")`
 or `entities_under_scene_path_in_instance(&mut world, instance, "Encounter A")`
 after a scene loads.

@@ -297,17 +297,20 @@ world.insert_resource(axes);
 Scene descriptors can keep reusable object templates next to the level data:
 
 ```rust
-let instance = spawn_scene_prefab(
+let instance = spawn_scene_prefab_instance(
     &mut world,
     &scene_descriptor,
     "crate_pair",
     SceneTransform::from_position([2.0, 0.0, -1.5]),
-);
+).unwrap();
 ```
 
-Prefab instances are normal entities with `TransformComponent`,
-`GlobalTransform`, and `Children`, so gameplay systems and the editor can move
-or inspect them like any other hierarchy root.
+`SpawnedSceneInstance` includes the instance ID plus root entities. Prefab
+roots are normal entities with `TransformComponent`, `GlobalTransform`, and
+`Children`, so gameplay systems and the editor can move or inspect them like any
+other hierarchy root. Use `instance.root()` for single-root prefab workflows and
+`instance.id` with scoped scene queries or `despawn_scene_instance` when managing
+the spawned copy later.
 
 `.oxscene` prefab entities can provide `overrides` for named prefab children
 when an instance needs a different child transform, visibility, render layer, or

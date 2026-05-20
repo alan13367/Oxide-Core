@@ -831,6 +831,22 @@ pub struct SceneSpawnResult {
     pub entities: Vec<Entity>,
 }
 
+/// Entities created by one scene or prefab spawn operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpawnedSceneInstance {
+    /// Stable ID shared by every entity spawned for this instance.
+    pub id: SceneInstanceId,
+    /// Root entities created by the spawn operation.
+    pub roots: Vec<Entity>,
+}
+
+impl SpawnedSceneInstance {
+    /// Returns the first spawned root, if the spawn operation created one.
+    pub fn root(&self) -> Option<Entity> {
+        self.roots.first().copied()
+    }
+}
+
 /// One authored-scene validation issue with a descriptor path and message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SceneValidationDiagnostic {
@@ -978,6 +994,14 @@ pub fn try_spawn_scene_descriptor(
     world: &mut World,
     scene: &SceneDescriptor,
 ) -> Result<Vec<Entity>, SceneValidationError> {
+    try_spawn_scene_descriptor_instance(world, scene).map(|instance| instance.roots)
+}
+
+/// Validates and spawns a descriptor, returning its scene instance ID and roots.
+pub fn try_spawn_scene_descriptor_instance(
+    world: &mut World,
+    scene: &SceneDescriptor,
+) -> Result<SpawnedSceneInstance, SceneValidationError> {
     scene.validate()?;
     Ok(spawn_scene_descriptor_unchecked(world, scene))
 }
@@ -992,7 +1016,24 @@ pub fn spawn_scene_descriptor(world: &mut World, scene: &SceneDescriptor) -> Vec
     }
 }
 
-fn spawn_scene_descriptor_unchecked(world: &mut World, scene: &SceneDescriptor) -> Vec<Entity> {
+/// Spawns a descriptor, returning its scene instance ID and roots.
+pub fn spawn_scene_descriptor_instance(
+    world: &mut World,
+    scene: &SceneDescriptor,
+) -> Option<SpawnedSceneInstance> {
+    match try_spawn_scene_descriptor_instance(world, scene) {
+        Ok(instance) => Some(instance),
+        Err(err) => {
+            let _ = err;
+            None
+        }
+    }
+}
+
+fn spawn_scene_descriptor_unchecked(
+    world: &mut World,
+    scene: &SceneDescriptor,
+) -> SpawnedSceneInstance {
     register_scene_materials(world, scene);
     let instance_id = allocate_scene_instance_id(world);
     let prefabs = scene.prefab_lookup();
@@ -1002,12 +1043,17 @@ fn spawn_scene_descriptor_unchecked(world: &mut World, scene: &SceneDescriptor) 
         prefabs: &prefabs,
         prefab_stack: &mut prefab_stack,
     };
-    scene
+    let roots = scene
         .entities
         .iter()
         .enumerate()
         .map(|(index, entity)| spawn_scene_entity(world, entity, index, "", None, &mut context))
-        .collect()
+        .collect();
+
+    SpawnedSceneInstance {
+        id: instance_id,
+        roots,
+    }
 }
 
 fn allocate_scene_instance_id(world: &mut World) -> SceneInstanceId {
@@ -1048,6 +1094,17 @@ pub fn try_spawn_scene_prefab(
     prefab_id: impl Into<String>,
     transform: SceneTransform,
 ) -> Result<Option<Entity>, SceneValidationError> {
+    try_spawn_scene_prefab_instance(world, scene, prefab_id, transform)
+        .map(|instance| instance.and_then(|instance| instance.root()))
+}
+
+/// Validates and spawns one prefab, returning its scene instance ID and root.
+pub fn try_spawn_scene_prefab_instance(
+    world: &mut World,
+    scene: &SceneDescriptor,
+    prefab_id: impl Into<String>,
+    transform: SceneTransform,
+) -> Result<Option<SpawnedSceneInstance>, SceneValidationError> {
     scene.validate()?;
     Ok(spawn_scene_prefab_unchecked(
         world, scene, prefab_id, transform,
@@ -1071,12 +1128,28 @@ pub fn spawn_scene_prefab(
     }
 }
 
+/// Spawns one prefab instance, returning its scene instance ID and root.
+pub fn spawn_scene_prefab_instance(
+    world: &mut World,
+    scene: &SceneDescriptor,
+    prefab_id: impl Into<String>,
+    transform: SceneTransform,
+) -> Option<SpawnedSceneInstance> {
+    match try_spawn_scene_prefab_instance(world, scene, prefab_id, transform) {
+        Ok(instance) => instance,
+        Err(err) => {
+            let _ = err;
+            None
+        }
+    }
+}
+
 fn spawn_scene_prefab_unchecked(
     world: &mut World,
     scene: &SceneDescriptor,
     prefab_id: impl Into<String>,
     transform: SceneTransform,
-) -> Option<Entity> {
+) -> Option<SpawnedSceneInstance> {
     register_scene_materials(world, scene);
     let prefab_id = prefab_id.into();
     scene.prefab(&prefab_id)?;
@@ -1099,14 +1172,11 @@ fn spawn_scene_prefab_unchecked(
         children: Vec::new(),
         ..Default::default()
     };
-    Some(spawn_scene_entity(
-        world,
-        &descriptor,
-        0,
-        "",
-        None,
-        &mut context,
-    ))
+    let root = spawn_scene_entity(world, &descriptor, 0, "", None, &mut context);
+    Some(SpawnedSceneInstance {
+        id: instance_id,
+        roots: vec![root],
+    })
 }
 
 struct SceneSpawnContext<'a> {
@@ -1692,6 +1762,53 @@ mod tests {
         assert_eq!(world.get::<Name>(root).unwrap().0, "crate_pair");
         assert!(world.get::<oxide_transform::Children>(root).is_some());
         assert!(spawn_scene_prefab(
+            &mut world,
+            &scene,
+            "missing_prefab",
+            SceneTransform::default()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn scene_descriptor_instance_spawn_returns_id_and_roots() {
+        let scene = prefab_test_scene();
+        let mut world = World::new();
+
+        let instance = spawn_scene_descriptor_instance(&mut world, &scene).unwrap();
+
+        assert_eq!(instance.roots.len(), 1);
+        assert_eq!(
+            scene_instance_id(&world, instance.root().unwrap()),
+            Some(instance.id)
+        );
+        assert_eq!(entities_in_scene_instance(&mut world, instance.id).len(), 4);
+    }
+
+    #[test]
+    fn scene_prefab_instance_spawn_returns_id_and_root() {
+        let scene = prefab_test_scene();
+        let mut world = World::new();
+
+        let instance = spawn_scene_prefab_instance(
+            &mut world,
+            &scene,
+            "crate_pair",
+            SceneTransform::from_position([4.0, 0.0, -2.0]),
+        )
+        .unwrap();
+
+        assert_eq!(instance.roots.len(), 1);
+        assert_eq!(
+            world.get::<Name>(instance.root().unwrap()).unwrap().0,
+            "crate_pair"
+        );
+        assert_eq!(
+            scene_instance_id(&world, instance.root().unwrap()),
+            Some(instance.id)
+        );
+        assert_eq!(entities_in_scene_instance(&mut world, instance.id).len(), 3);
+        assert!(spawn_scene_prefab_instance(
             &mut world,
             &scene,
             "missing_prefab",
