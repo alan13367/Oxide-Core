@@ -924,6 +924,9 @@ pub struct SceneMaterialDescriptor {
     /// Base material color for top-level materials or per-entity tint for meshes.
     #[serde(default = "default_material_color")]
     pub color: [f32; 4],
+    /// Alpha compositing mode used by the automatic scene renderer.
+    #[serde(default)]
+    pub alpha_mode: SceneAlphaMode,
     /// Optional label or path-like reference for the material's albedo texture.
     ///
     /// Labels such as `#image_0` resolve against labeled `TextureImageAssets`;
@@ -940,6 +943,7 @@ impl Default for SceneMaterialDescriptor {
             name: default_material_name(),
             shader: SceneBuiltinShader::Unlit,
             color: default_material_color(),
+            alpha_mode: SceneAlphaMode::Opaque,
             albedo_texture: None,
         }
     }
@@ -955,7 +959,34 @@ impl From<SceneMaterialDescriptor> for RenderMaterial {
             material_type: value.shader.material_type(),
             name: value.name,
             base_color: [1.0, 1.0, 1.0, 1.0],
+            alpha_mode: value.alpha_mode.into(),
             albedo_texture: value.albedo_texture,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneAlphaMode {
+    #[default]
+    Opaque,
+    Blend,
+}
+
+impl From<SceneAlphaMode> for oxide_renderer::descriptor::AlphaMode {
+    fn from(value: SceneAlphaMode) -> Self {
+        match value {
+            SceneAlphaMode::Opaque => oxide_renderer::descriptor::AlphaMode::Opaque,
+            SceneAlphaMode::Blend => oxide_renderer::descriptor::AlphaMode::Blend,
+        }
+    }
+}
+
+impl From<oxide_renderer::descriptor::AlphaMode> for SceneAlphaMode {
+    fn from(value: oxide_renderer::descriptor::AlphaMode) -> Self {
+        match value {
+            oxide_renderer::descriptor::AlphaMode::Opaque => SceneAlphaMode::Opaque,
+            oxide_renderer::descriptor::AlphaMode::Blend => SceneAlphaMode::Blend,
         }
     }
 }
@@ -1388,6 +1419,7 @@ fn scene_material_descriptor_from_render_material(
             shader,
             name,
             base_color,
+            alpha_mode,
             albedo_texture,
             ..
         } => {
@@ -1406,6 +1438,7 @@ fn scene_material_descriptor_from_render_material(
                 name: name.clone(),
                 shader,
                 color: multiply_colors(*base_color, tint),
+                alpha_mode: (*alpha_mode).into(),
                 albedo_texture: albedo_texture.clone(),
             })
         }
@@ -2287,6 +2320,7 @@ mod tests {
                         material_type: oxide_renderer::descriptor::MaterialType::Basic,
                         name: "basic".to_string(),
                         base_color: [1.0; 4],
+                        alpha_mode: oxide_renderer::descriptor::AlphaMode::Opaque,
                         albedo_texture: None,
                     },
                 ),
@@ -2317,6 +2351,7 @@ mod tests {
                         material_type: oxide_renderer::descriptor::MaterialType::Lit,
                         name: "crate".to_string(),
                         base_color: [0.8, 0.7, 0.6, 1.0],
+                        alpha_mode: oxide_renderer::descriptor::AlphaMode::Blend,
                         albedo_texture: Some("#crate_albedo".to_string()),
                     },
                 )
@@ -2332,6 +2367,7 @@ mod tests {
         assert_eq!(material.name, "crate");
         assert_eq!(material.shader, SceneBuiltinShader::Lit);
         assert_eq!(material.color, [0.4, 0.7, 0.6, 1.0]);
+        assert_eq!(material.alpha_mode, SceneAlphaMode::Blend);
         assert_eq!(material.albedo_texture.as_deref(), Some("#crate_albedo"));
     }
 
@@ -3037,6 +3073,7 @@ mod tests {
                 name: "materials.crate".to_string(),
                 shader: SceneBuiltinShader::Lit,
                 color: [0.9, 0.7, 0.45, 1.0],
+                alpha_mode: SceneAlphaMode::Blend,
                 albedo_texture: Some("#crate_albedo".to_string()),
                 ..Default::default()
             }],
@@ -3064,9 +3101,12 @@ mod tests {
             library.get("materials.crate"),
             Some(RenderMaterial::Builtin {
                 name,
+                alpha_mode,
                 albedo_texture: Some(texture),
                 ..
-            }) if name == "materials.crate" && texture == "#crate_albedo"
+            }) if name == "materials.crate"
+                && *alpha_mode == oxide_renderer::descriptor::AlphaMode::Blend
+                && texture == "#crate_albedo"
         ));
 
         let mesh = world.get::<RenderMesh>(roots[0]).unwrap();
@@ -3189,6 +3229,7 @@ mod tests {
                         {
                             "name": "crate_lit",
                             "shader": "lit",
+                            "alpha_mode": "blend",
                             "color": [0.9, 0.7, 0.45, 1.0],
                             "albedo_texture": "#crate_albedo"
                         }
@@ -3225,6 +3266,7 @@ mod tests {
             scene.materials[0].albedo_texture.as_deref(),
             Some("#crate_albedo")
         );
+        assert_eq!(scene.materials[0].alpha_mode, SceneAlphaMode::Blend);
         let SceneEntityKind::Mesh { material, .. } = &scene.entities[1].kind else {
             panic!("expected mesh entity");
         };

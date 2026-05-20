@@ -21,7 +21,7 @@ pub use crate::asset::{
     poll_material_descriptor_assets, poll_native_asset_reloads, poll_render_asset_reloads,
     publish_asset_change_events, register_material_asset, reload_changed_material_descriptors,
     reload_changed_native_assets, reload_changed_render_assets, reload_material_descriptor_path,
-    request_material_descriptor_load, AssetChange, AssetChangeCursor, AssetChangeKind,
+    request_material_descriptor_load, AlphaMode, AssetChange, AssetChangeCursor, AssetChangeKind,
     AssetLoadStatus, AssetPath, AssetServer, AssetServerError, AssetServerResource, AssetStore,
     Assets, Handle, HandleAllocator, MaterialAssets, MaterialDescriptorAssets,
     MaterialDescriptorHandle, MaterialFilter, MaterialHandle, MeshCache, MeshFilter, MeshHandle,

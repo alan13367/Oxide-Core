@@ -32,7 +32,7 @@ use crate::scene::{reload_changed_oxscenes, SceneDescriptor, SceneMaterialLibrar
 use crate::watcher::AssetWatcher;
 
 pub use oxide_asset::*;
-pub use oxide_renderer::descriptor::MaterialDescriptor;
+pub use oxide_renderer::descriptor::{AlphaMode, MaterialDescriptor};
 pub use oxide_scene::{
     MaterialDescriptorAssets, MaterialFilter, MeshCache, MeshFilter, TextureImageAssets,
 };
@@ -576,6 +576,7 @@ mod tests {
             },
             fallback_shader: Some("lit".to_string()),
             base_color: [1.0, 1.0, 1.0, 1.0],
+            alpha_mode: AlphaMode::Opaque,
             albedo_texture: Some("textures/stone.png".to_string()),
             normal_texture: Some("textures/stone_n.png".to_string()),
             roughness_texture: Some("textures/stone_r.png".to_string()),
@@ -605,6 +606,7 @@ mod tests {
             },
             fallback_shader: Some("lit".to_string()),
             base_color: [1.0, 1.0, 1.0, 1.0],
+            alpha_mode: AlphaMode::Opaque,
             albedo_texture: Some("#image_0".to_string()),
             normal_texture: None,
             roughness_texture: None,

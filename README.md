@@ -16,7 +16,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **glTF Import Bridging**: imported glTF meshes, materials, and images are published as labeled Oxide assets, and spawned nodes retain lightweight mesh/material references that the automatic scene renderer can draw through `MeshFilter`
 - **Native Scene Reloading**: `.oxscene` handles can be refreshed from direct file changes or dependency changes without duplicating spawned roots
 - **Automatic Scene Renderer**: optional plugin that renders `RenderMesh` scene entities without app-owned pipelines
-- **Scene Material Library**: reusable named scene materials can be registered directly, declared inside `.oxscene` with base colors and albedo texture labels, populated from loaded `.oxmat` descriptors, and referenced from `.oxscene` meshes
+- **Scene Material Library**: reusable named scene materials can be registered directly, declared inside `.oxscene` with base colors, alpha modes, and albedo texture labels, populated from loaded `.oxmat` descriptors, and referenced from `.oxscene` meshes
 - **Camera Render Views**: ordered multi-camera scene rendering with active flags, normalized viewports, per-camera clear colors, and render-layer filtering
 - **Render Layers**: filter meshes, terrain, and sprites by camera/renderable layer masks for world views, first-person overlays, editor-only helpers, and debug cameras
 - **Ordered Render Passes**: plugins can register lightweight frame callbacks around stable built-in anchors for scene, text, app queue, and egui rendering
@@ -542,7 +542,7 @@ Current physics runtime highlights include:
 - Use built-in shaders through `BuiltinShader` (`basic`, `lit`, `unlit`, `sky_gradient`, `sprite_ui`, `fallback`)
 - Load custom shaders through `ShaderSource::File` or `ShaderSource::WgslOwned`
 - Build pipelines through `MaterialPipeline` with optional fallback behavior
-- Load descriptor-driven materials from files via `load_material_descriptor(...)` (supports legacy JSON/RON/TOML plus versioned `.oxmat`, including material `base_color` and albedo texture references)
+- Load descriptor-driven materials from files via `load_material_descriptor(...)` (supports legacy JSON/RON/TOML plus versioned `.oxmat`, including material `base_color`, `alpha_mode`, and albedo texture references)
 - Load material descriptors asynchronously with `request_material_descriptor_load(...)`; `DefaultPlugins` publishes ready descriptors into `MaterialDescriptorAssets`, registers them in `SceneMaterialLibrary` by descriptor name/base color, tracks shader/texture dependencies for in-place reloads, publishes albedo texture files into `TextureImageAssets`, and lets `MaterialFilter` render directly from descriptor handles
 
 ### Hot-Reloading

@@ -11,7 +11,7 @@ use oxide_ecs::entity::Entity;
 use oxide_ecs::world::World;
 use oxide_light::LightBuffer;
 use oxide_renderer::depth::DepthTexture;
-use oxide_renderer::descriptor::MaterialType;
+use oxide_renderer::descriptor::{AlphaMode, MaterialType};
 use oxide_renderer::mesh::{Mesh3D, Vertex, Vertex3D};
 use oxide_renderer::pipeline::create_shader;
 use oxide_renderer::shader::BuiltinShader;
@@ -282,6 +282,7 @@ impl SceneInstanceRaw {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct MaterialBatchKey {
     mode: MaterialMode,
+    alpha_mode: AlphaMode,
     identity: String,
     albedo_texture: Option<String>,
 }
@@ -323,16 +324,19 @@ impl MaterialBatchKey {
                 material_type,
                 name,
                 base_color,
+                alpha_mode,
                 albedo_texture,
             } => Self {
                 mode: material_mode(*shader, *material_type),
+                alpha_mode: *alpha_mode,
                 identity: format!(
-                    "builtin:{shader:?}:{material_type:?}:{name}:{base_color:?}:{albedo_texture:?}"
+                    "builtin:{shader:?}:{material_type:?}:{name}:{base_color:?}:{alpha_mode:?}:{albedo_texture:?}"
                 ),
                 albedo_texture: albedo_texture.clone(),
             },
             RenderMaterial::Named(name) => Self {
                 mode: MaterialMode::Lit,
+                alpha_mode: AlphaMode::Opaque,
                 identity: format!("named:{name}"),
                 albedo_texture: None,
             },
@@ -360,6 +364,7 @@ fn multiply_color(left: [f32; 4], right: [f32; 4]) -> [f32; 4] {
 struct InstanceBatch {
     buffer: wgpu::Buffer,
     count: u32,
+    alpha_mode: AlphaMode,
     material_texture: Option<wgpu::BindGroup>,
 }
 
@@ -499,6 +504,7 @@ pub struct SceneRenderer {
     camera_buffer: CameraBuffer,
     light_buffer: LightBuffer,
     pipeline: wgpu::RenderPipeline,
+    alpha_pipeline: wgpu::RenderPipeline,
     sprite_world_pipeline: wgpu::RenderPipeline,
     sprite_overlay_pipeline: wgpu::RenderPipeline,
     sprite_texture_layout: wgpu::BindGroupLayout,
@@ -539,10 +545,28 @@ impl SceneRenderer {
         let pipeline = create_scene_pipeline(
             device,
             &shader,
-            format,
-            &camera_buffer.bind_group_layout,
-            &light_buffer.bind_group_layout,
-            &material_texture_layout,
+            ScenePipelineConfig {
+                format,
+                camera_layout: &camera_buffer.bind_group_layout,
+                light_layout: &light_buffer.bind_group_layout,
+                material_texture_layout: &material_texture_layout,
+                blend: None,
+                depth_write_enabled: true,
+                label: "Scene Renderer Pipeline",
+            },
+        );
+        let alpha_pipeline = create_scene_pipeline(
+            device,
+            &shader,
+            ScenePipelineConfig {
+                format,
+                camera_layout: &camera_buffer.bind_group_layout,
+                light_layout: &light_buffer.bind_group_layout,
+                material_texture_layout: &material_texture_layout,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                depth_write_enabled: false,
+                label: "Scene Renderer Alpha Pipeline",
+            },
         );
         let sprite_texture_layout =
             create_texture_bind_group_layout(device, "Scene Sprite Texture Layout");
@@ -607,6 +631,7 @@ impl SceneRenderer {
             camera_buffer,
             light_buffer,
             pipeline,
+            alpha_pipeline,
             sprite_world_pipeline,
             sprite_overlay_pipeline,
             sprite_texture_layout,
@@ -738,49 +763,72 @@ impl SceneRenderer {
             render_pass.set_pipeline(&self.pipeline);
             render_pass.set_bind_group(0, &scene_view.camera.bind_group, &[]);
             render_pass.set_bind_group(1, &self.light_buffer.bind_group, &[]);
+            self.queue_scene_geometry(&mut render_pass, scene_view, AlphaMode::Opaque);
 
-            for instances in &scene_view.cube_instances {
-                set_material_texture(
-                    &mut render_pass,
-                    &self.fallback_material_texture.bind_group,
-                    instances,
-                );
-                draw_mesh_batch(&mut render_pass, &self.cube_mesh, instances);
-            }
-
-            for batch in &scene_view.sphere_instances {
-                if let Some(mesh) = self.sphere_meshes.get(&(batch.segments, batch.rings)) {
-                    set_material_texture(
-                        &mut render_pass,
-                        &self.fallback_material_texture.bind_group,
-                        &batch.instances,
-                    );
-                    draw_mesh_batch(&mut render_pass, mesh, &batch.instances);
-                }
-            }
-
-            for draw in &scene_view.mesh_handle_draws {
-                set_material_texture(
-                    &mut render_pass,
-                    &self.fallback_material_texture.bind_group,
-                    &draw.instances,
-                );
-                draw_prepared_mesh_batch(&mut render_pass, draw);
-            }
-
-            for terrain in &scene_view.terrain_draws {
-                if let Some(entry) = self.terrain_meshes.get(&terrain.entity) {
-                    set_material_texture(
-                        &mut render_pass,
-                        &self.fallback_material_texture.bind_group,
-                        &terrain.instances,
-                    );
-                    draw_mesh_batch(&mut render_pass, &entry.mesh, &terrain.instances);
-                }
-            }
+            render_pass.set_pipeline(&self.alpha_pipeline);
+            self.queue_scene_geometry(&mut render_pass, scene_view, AlphaMode::Blend);
 
             self.queue_sprites(&mut render_pass, scene_view);
             self.queue_gizmo_lines(&mut render_pass, scene_view);
+        }
+    }
+
+    fn queue_scene_geometry<'pass>(
+        &'pass self,
+        render_pass: &mut wgpu::RenderPass<'pass>,
+        scene_view: &'pass SceneViewDraw,
+        alpha_mode: AlphaMode,
+    ) {
+        for instances in &scene_view.cube_instances {
+            if instances.alpha_mode != alpha_mode {
+                continue;
+            }
+            set_material_texture(
+                render_pass,
+                &self.fallback_material_texture.bind_group,
+                instances,
+            );
+            draw_mesh_batch(render_pass, &self.cube_mesh, instances);
+        }
+
+        for batch in &scene_view.sphere_instances {
+            if batch.instances.alpha_mode != alpha_mode {
+                continue;
+            }
+            if let Some(mesh) = self.sphere_meshes.get(&(batch.segments, batch.rings)) {
+                set_material_texture(
+                    render_pass,
+                    &self.fallback_material_texture.bind_group,
+                    &batch.instances,
+                );
+                draw_mesh_batch(render_pass, mesh, &batch.instances);
+            }
+        }
+
+        for draw in &scene_view.mesh_handle_draws {
+            if draw.instances.alpha_mode != alpha_mode {
+                continue;
+            }
+            set_material_texture(
+                render_pass,
+                &self.fallback_material_texture.bind_group,
+                &draw.instances,
+            );
+            draw_prepared_mesh_batch(render_pass, draw);
+        }
+
+        for terrain in &scene_view.terrain_draws {
+            if terrain.instances.alpha_mode != alpha_mode {
+                continue;
+            }
+            if let Some(entry) = self.terrain_meshes.get(&terrain.entity) {
+                set_material_texture(
+                    render_pass,
+                    &self.fallback_material_texture.bind_group,
+                    &terrain.instances,
+                );
+                draw_mesh_batch(render_pass, &entry.mesh, &terrain.instances);
+            }
         }
     }
 
@@ -877,6 +925,7 @@ impl SceneRenderer {
                     device,
                     "Scene Cube Instances",
                     instances,
+                    material.alpha_mode,
                     self.material_bind_group_for(material),
                 )
             })
@@ -891,6 +940,7 @@ impl SceneRenderer {
                 device,
                 "Scene Sphere Instances",
                 &instances,
+                material.alpha_mode,
                 self.material_bind_group_for(&material),
             ) {
                 sphere_batches.push(SphereInstanceBatch {
@@ -951,6 +1001,7 @@ impl SceneRenderer {
                 device,
                 "Scene Mesh Handle Instances",
                 &instances,
+                material.alpha_mode,
                 self.material_bind_group_for(&material),
             ) {
                 draws.push(MeshHandleDraw {
@@ -1001,12 +1052,14 @@ impl SceneRenderer {
                 .material
                 .base_color_with_library(material_library.as_ref());
             let material_texture = self.material_bind_group_for(&material);
+            let alpha_mode = material.alpha_mode;
             let instance =
                 SceneInstanceRaw::new(model, multiply_color(terrain.tint, base_color), material);
             if let Some(instances) = create_material_instance_batch(
                 device,
                 "Terrain Instances",
                 &[instance],
+                alpha_mode,
                 material_texture,
             ) {
                 draws.push(TerrainDraw { entity, instances });
@@ -1256,26 +1309,34 @@ impl SceneRenderer {
     }
 }
 
+struct ScenePipelineConfig<'a> {
+    format: wgpu::TextureFormat,
+    camera_layout: &'a wgpu::BindGroupLayout,
+    light_layout: &'a wgpu::BindGroupLayout,
+    material_texture_layout: &'a wgpu::BindGroupLayout,
+    blend: Option<wgpu::BlendState>,
+    depth_write_enabled: bool,
+    label: &'a str,
+}
+
 fn create_scene_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
-    format: wgpu::TextureFormat,
-    camera_layout: &wgpu::BindGroupLayout,
-    light_layout: &wgpu::BindGroupLayout,
-    material_texture_layout: &wgpu::BindGroupLayout,
+    config: ScenePipelineConfig<'_>,
 ) -> wgpu::RenderPipeline {
+    let layout_label = format!("{} Layout", config.label);
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Scene Renderer Pipeline Layout"),
+        label: Some(&layout_label),
         bind_group_layouts: &[
-            Some(camera_layout),
-            Some(light_layout),
-            Some(material_texture_layout),
+            Some(config.camera_layout),
+            Some(config.light_layout),
+            Some(config.material_texture_layout),
         ],
         immediate_size: 0,
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Scene Renderer Pipeline"),
+        label: Some(config.label),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: shader,
@@ -1287,8 +1348,8 @@ fn create_scene_pipeline(
             module: shader,
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: None,
+                format: config.format,
+                blend: config.blend,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             compilation_options: Default::default(),
@@ -1304,8 +1365,12 @@ fn create_scene_pipeline(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth24PlusStencil8,
-            depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::Less),
+            depth_write_enabled: Some(config.depth_write_enabled),
+            depth_compare: Some(if config.depth_write_enabled {
+                wgpu::CompareFunction::Less
+            } else {
+                wgpu::CompareFunction::LessEqual
+            }),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
@@ -1575,6 +1640,7 @@ fn create_instance_batch<T: Pod>(
     Some(InstanceBatch {
         buffer,
         count: instances.len() as u32,
+        alpha_mode: AlphaMode::Opaque,
         material_texture: None,
     })
 }
@@ -1583,9 +1649,11 @@ fn create_material_instance_batch(
     device: &wgpu::Device,
     label: &str,
     instances: &[SceneInstanceRaw],
+    alpha_mode: AlphaMode,
     material_texture: Option<wgpu::BindGroup>,
 ) -> Option<InstanceBatch> {
     create_instance_batch(device, label, instances).map(|mut batch| {
+        batch.alpha_mode = alpha_mode;
         batch.material_texture = material_texture;
         batch
     })
@@ -1973,6 +2041,7 @@ mod tests {
             material_type: MaterialType::Unlit,
             name: "ui".to_string(),
             base_color: [1.0, 1.0, 1.0, 1.0],
+            alpha_mode: AlphaMode::Opaque,
             albedo_texture: None,
         };
 
@@ -1989,6 +2058,7 @@ mod tests {
             material_type: MaterialType::Lit,
             name: "scene_lit".to_string(),
             base_color: [1.0, 1.0, 1.0, 1.0],
+            alpha_mode: AlphaMode::Opaque,
             albedo_texture: None,
         };
 
@@ -2013,6 +2083,7 @@ mod tests {
             material_type: MaterialType::Lit,
             name: "textured".to_string(),
             base_color: [1.0, 1.0, 1.0, 1.0],
+            alpha_mode: AlphaMode::Opaque,
             albedo_texture: Some("#image_0".to_string()),
         });
         let second = MaterialBatchKey::from_material(&RenderMaterial::Builtin {
@@ -2020,6 +2091,7 @@ mod tests {
             material_type: MaterialType::Lit,
             name: "textured".to_string(),
             base_color: [1.0, 1.0, 1.0, 1.0],
+            alpha_mode: AlphaMode::Opaque,
             albedo_texture: Some("#image_1".to_string()),
         });
 
@@ -2039,6 +2111,7 @@ mod tests {
                 material_type: MaterialType::Unlit,
                 name: "matte".to_string(),
                 base_color: [0.5, 0.75, 1.0, 1.0],
+                alpha_mode: AlphaMode::Opaque,
                 albedo_texture: None,
             },
         );
@@ -2054,8 +2127,25 @@ mod tests {
         assert_eq!(resolved.mode, MaterialMode::Unlit);
         assert_eq!(
             resolved.identity,
-            "builtin:Unlit:Unlit:matte:[0.5, 0.75, 1.0, 1.0]:None"
+            "builtin:Unlit:Unlit:matte:[0.5, 0.75, 1.0, 1.0]:Opaque:None"
         );
+    }
+
+    #[test]
+    fn material_batch_key_preserves_alpha_mode() {
+        let material = RenderMaterial::Builtin {
+            shader: BuiltinShader::Unlit,
+            material_type: MaterialType::Unlit,
+            name: "glass".to_string(),
+            base_color: [1.0, 1.0, 1.0, 0.5],
+            alpha_mode: AlphaMode::Blend,
+            albedo_texture: None,
+        };
+
+        let key = MaterialBatchKey::from_material(&material);
+
+        assert_eq!(key.alpha_mode, AlphaMode::Blend);
+        assert!(key.identity.contains(":Blend:"));
     }
 
     #[test]
@@ -2068,6 +2158,7 @@ mod tests {
                 material_type: MaterialType::Unlit,
                 name: "bronze".to_string(),
                 base_color: [0.5, 0.25, 0.75, 0.5],
+                alpha_mode: AlphaMode::Opaque,
                 albedo_texture: None,
             },
         );
@@ -2097,6 +2188,7 @@ mod tests {
                 },
                 fallback_shader: Some("lit".to_string()),
                 base_color: [0.25, 0.5, 0.75, 1.0],
+                alpha_mode: AlphaMode::Blend,
                 albedo_texture: Some("#image_0".to_string()),
                 normal_texture: None,
                 roughness_texture: None,
@@ -2113,6 +2205,7 @@ mod tests {
                         material_type: MaterialType::Unlit,
                         name: "component_material".to_string(),
                         base_color: [1.0, 0.0, 0.0, 1.0],
+                        alpha_mode: AlphaMode::Opaque,
                         albedo_texture: None,
                     },
                 ),
@@ -2126,6 +2219,7 @@ mod tests {
             [0.25, 0.5, 0.75, 1.0]
         );
         assert_eq!(material.albedo_texture_with_library(None), Some("#image_0"));
+        assert_eq!(material.alpha_mode_with_library(None), AlphaMode::Blend);
         assert_eq!(
             MaterialBatchKey::from_material(&material).mode,
             MaterialMode::Lit

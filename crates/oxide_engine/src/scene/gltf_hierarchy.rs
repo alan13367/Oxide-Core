@@ -628,7 +628,9 @@ mod tests {
     use super::*;
     use crate::asset::AssetServerResource;
     use glam::{Quat, Vec3};
-    use oxide_renderer::descriptor::{MaterialDescriptor, MaterialType, ShaderDescriptor};
+    use oxide_renderer::descriptor::{
+        AlphaMode, MaterialDescriptor, MaterialType, ShaderDescriptor,
+    };
     use oxide_renderer::texture::TextureImage;
     use oxide_transform::{Children, Parent};
 
@@ -641,6 +643,7 @@ mod tests {
             },
             fallback_shader: Some("lit".to_string()),
             base_color,
+            alpha_mode: AlphaMode::Opaque,
             albedo_texture: None,
             normal_texture: None,
             roughness_texture: None,

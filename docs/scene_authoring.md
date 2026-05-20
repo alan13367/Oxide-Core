@@ -91,8 +91,8 @@ The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
   supports disabled cameras, normalized viewports, and scene clear overrides.
 - `TerrainDescriptor` and `SceneWorldDescriptor` describe terrain and blockout
   objects for code-first maps.
-- `SceneMaterialDescriptor` includes `color` and optional `albedo_texture`
-  fields used by the automatic renderer.
+- `SceneMaterialDescriptor` includes `color`, `alpha_mode`, and optional
+  `albedo_texture` fields used by the automatic renderer.
 - `Name`, `Parent`, `Children`, `TransformComponent`, and `GlobalTransform`
   provide scene identity and hierarchy.
 
@@ -126,6 +126,7 @@ existing color target so viewports can be composited.
       {
         "name": "crate_lit",
         "shader": "lit",
+        "alpha_mode": "blend",
         "color": [0.9, 0.7, 0.45, 1.0],
         "albedo_texture": "#crate_albedo"
       }
@@ -306,6 +307,7 @@ same `.oxscene` can resolve without Rust setup:
     {
       "name": "enemy_unlit",
       "shader": "unlit",
+      "alpha_mode": "blend",
       "color": [1.0, 0.4, 0.35, 1.0],
       "albedo_texture": "#enemy_albedo"
     }
@@ -329,10 +331,11 @@ loaded `.oxmat` materials through the material `ref` field:
 ```
 
 For top-level scene material declarations, `color` becomes the reusable
-material base color and `albedo_texture` stores the material texture label or
-path-like reference. For mesh entities and prefab overrides, `color` remains
-the per-entity tint even when material shader data is resolved from the
-library. Texture labels such as `#image_0` or `#crate_albedo` resolve against
+material base color, `alpha_mode` controls opaque versus alpha-blended scene
+geometry, and `albedo_texture` stores the material texture label or path-like
+reference. For mesh entities and prefab overrides, `color` remains the
+per-entity tint even when material shader data is resolved from the library.
+Texture labels such as `#image_0` or `#crate_albedo` resolve against
 `TextureImageAssets`; file paths such as `textures/crate.png` are loaded by the
 native scene asset pipeline and tracked as scene dependencies. Loaded `.oxmat`
 descriptors and import tooling can also publish those images before the scene

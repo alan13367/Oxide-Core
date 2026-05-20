@@ -9,12 +9,22 @@ use crate::shader::{BuiltinShader, ShaderSource};
 pub const OXMAT_FORMAT: &str = "oxide.oxmat";
 pub const OXMAT_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MaterialType {
     Lit,
     Unlit,
     Basic,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AlphaMode {
+    /// Render fully opaque with depth writes enabled.
+    #[default]
+    Opaque,
+    /// Blend source alpha over the framebuffer with depth writes disabled.
+    Blend,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +44,9 @@ pub struct MaterialDescriptor {
     /// Base material color multiplied with each renderable's per-entity tint.
     #[serde(default = "default_base_color")]
     pub base_color: [f32; 4],
+    /// Alpha compositing mode used by renderer-facing pipelines.
+    #[serde(default)]
+    pub alpha_mode: AlphaMode,
     /// Path to the albedo (diffuse) texture file.
     #[serde(default)]
     pub albedo_texture: Option<String>,
@@ -231,6 +244,7 @@ mod tests {
         assert_eq!(material.name, "Legacy");
         assert_eq!(material.material_type, MaterialType::Unlit);
         assert_eq!(material.base_color, [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(material.alpha_mode, AlphaMode::Opaque);
         let _ = fs::remove_file(path);
     }
 
@@ -246,6 +260,7 @@ mod tests {
                     "name": "Wrapped",
                     "material_type": "lit",
                     "base_color": [0.8, 0.7, 0.6, 1.0],
+                    "alpha_mode": "blend",
                     "shader": { "source": "builtin", "shader": "lit" }
                 }
             }"#,
@@ -256,6 +271,7 @@ mod tests {
         assert_eq!(material.name, "Wrapped");
         assert_eq!(material.material_type, MaterialType::Lit);
         assert_eq!(material.base_color, [0.8, 0.7, 0.6, 1.0]);
+        assert_eq!(material.alpha_mode, AlphaMode::Blend);
         let _ = fs::remove_file(path);
     }
 
@@ -295,6 +311,7 @@ mod tests {
             },
             fallback_shader: None,
             base_color: [0.3, 0.4, 0.5, 1.0],
+            alpha_mode: AlphaMode::Blend,
             albedo_texture: None,
             normal_texture: None,
             roughness_texture: None,
@@ -303,6 +320,7 @@ mod tests {
         save_material_descriptor(&path, &material).unwrap();
         let raw = fs::read_to_string(&path).unwrap();
         assert!(raw.contains("\"format\": \"oxide.oxmat\""));
+        assert!(raw.contains("\"alpha_mode\": \"blend\""));
 
         let loaded = load_material_descriptor(&path).unwrap();
         assert_eq!(loaded, material);

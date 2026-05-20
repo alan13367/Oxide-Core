@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use oxide_asset::Handle;
 use oxide_ecs::{Component, Resource};
 
-use oxide_renderer::descriptor::{MaterialDescriptor, MaterialType};
+use oxide_renderer::descriptor::{AlphaMode, MaterialDescriptor, MaterialType};
 use oxide_renderer::mesh::Mesh3D;
 use oxide_renderer::shader::BuiltinShader;
 use oxide_renderer::texture::TextureImage;
@@ -239,6 +239,7 @@ pub enum RenderMaterial {
         material_type: MaterialType,
         name: String,
         base_color: [f32; 4],
+        alpha_mode: AlphaMode,
         albedo_texture: Option<String>,
     },
     Named(String),
@@ -251,6 +252,7 @@ impl Default for RenderMaterial {
             material_type: MaterialType::Unlit,
             name: "default_unlit".to_string(),
             base_color: [1.0, 1.0, 1.0, 1.0],
+            alpha_mode: AlphaMode::Opaque,
             albedo_texture: None,
         }
     }
@@ -269,6 +271,7 @@ impl RenderMaterial {
             material_type: descriptor.material_type,
             name: descriptor.name.clone(),
             base_color: descriptor.base_color,
+            alpha_mode: descriptor.alpha_mode,
             albedo_texture: descriptor.albedo_texture.clone(),
         }
     }
@@ -298,6 +301,20 @@ impl RenderMaterial {
         match self {
             Self::Builtin { albedo_texture, .. } => albedo_texture.as_deref(),
             Self::Named(_) => None,
+        }
+    }
+
+    /// Returns the alpha compositing mode resolved through an optional library.
+    pub fn alpha_mode_with_library(&self, library: Option<&SceneMaterialLibrary>) -> AlphaMode {
+        if let Self::Named(name) = self {
+            if let Some(resolved) = library.and_then(|library| library.get(name)) {
+                return resolved.alpha_mode_with_library(None);
+            }
+        }
+
+        match self {
+            Self::Builtin { alpha_mode, .. } => *alpha_mode,
+            Self::Named(_) => AlphaMode::Opaque,
         }
     }
 

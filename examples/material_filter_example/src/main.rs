@@ -32,6 +32,7 @@ impl App for MaterialFilterExample {
                 },
                 fallback_shader: Some("lit".to_string()),
                 base_color: [0.15, 0.45, 1.0, 1.0],
+                alpha_mode: AlphaMode::Opaque,
                 albedo_texture: None,
                 normal_texture: None,
                 roughness_texture: None,

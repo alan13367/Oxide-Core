@@ -180,6 +180,7 @@ fn extract_materials(document: &gltf::Document) -> Vec<(String, MaterialDescript
                 },
                 fallback_shader: Some("lit".to_string()),
                 base_color: pbr.base_color_factor(),
+                alpha_mode: crate::descriptor::AlphaMode::Opaque,
                 albedo_texture,
                 normal_texture: None,
                 roughness_texture: None,

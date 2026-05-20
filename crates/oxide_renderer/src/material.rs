@@ -4,8 +4,11 @@ use std::sync::OnceLock;
 
 use wgpu::{BindGroup, BindGroupLayout, Device, RenderPipeline, TextureFormat};
 
-use crate::descriptor::{MaterialDescriptor, MaterialDescriptorError, MaterialType};
-use crate::pipeline::{create_lit_pipeline, create_shader, create_unlit_pipeline};
+use crate::descriptor::{AlphaMode, MaterialDescriptor, MaterialDescriptorError, MaterialType};
+use crate::pipeline::{
+    create_basic_pipeline_with_alpha, create_lit_pipeline_with_alpha, create_shader,
+    create_unlit_pipeline_with_alpha,
+};
 use crate::shader::{
     builtin_shader_source, load_shader_source, BuiltinShader, ShaderSource, ShaderSourceError,
 };
@@ -80,6 +83,31 @@ impl MaterialPipeline {
         material_type: MaterialType,
         name: impl Into<String>,
     ) -> Self {
+        Self::from_builtin_with_alpha(
+            device,
+            queue,
+            format,
+            camera_layout,
+            light_layout,
+            shader,
+            material_type,
+            AlphaMode::Opaque,
+            name,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_builtin_with_alpha(
+        device: &Device,
+        queue: &wgpu::Queue,
+        format: TextureFormat,
+        camera_layout: &BindGroupLayout,
+        light_layout: &BindGroupLayout,
+        shader: BuiltinShader,
+        material_type: MaterialType,
+        alpha_mode: AlphaMode,
+        name: impl Into<String>,
+    ) -> Self {
         let shader_src = builtin_shader_source(shader);
         let shader_module = create_shader(device, shader_src, Some("Builtin Material Shader"));
 
@@ -87,13 +115,14 @@ impl MaterialPipeline {
 
         let (pipeline, bind_group) = match material_type {
             MaterialType::Lit => {
-                let pipeline = create_lit_pipeline(
+                let pipeline = create_lit_pipeline_with_alpha(
                     device,
                     &shader_module,
                     format,
                     camera_layout,
                     material_layout,
                     light_layout,
+                    alpha_mode,
                 );
                 let fallback = FallbackTexture::new(device, queue);
                 let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -113,12 +142,13 @@ impl MaterialPipeline {
                 (pipeline, Some(bind_group))
             }
             MaterialType::Unlit => {
-                let pipeline = create_unlit_pipeline(
+                let pipeline = create_unlit_pipeline_with_alpha(
                     device,
                     &shader_module,
                     format,
                     camera_layout,
                     material_layout,
+                    alpha_mode,
                 );
                 let fallback = FallbackTexture::new(device, queue);
                 let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -139,7 +169,7 @@ impl MaterialPipeline {
             }
             MaterialType::Basic => {
                 let pipeline =
-                    crate::pipeline::create_basic_pipeline(device, &shader_module, format);
+                    create_basic_pipeline_with_alpha(device, &shader_module, format, alpha_mode);
                 (pipeline, None)
             }
         };
@@ -164,6 +194,33 @@ impl MaterialPipeline {
         albedo_texture: Option<&Texture>,
         name: impl Into<String>,
     ) -> Result<Self, MaterialError> {
+        Self::from_source_with_alpha(
+            device,
+            queue,
+            format,
+            camera_layout,
+            light_layout,
+            source,
+            material_type,
+            AlphaMode::Opaque,
+            albedo_texture,
+            name,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_source_with_alpha(
+        device: &Device,
+        queue: &wgpu::Queue,
+        format: TextureFormat,
+        camera_layout: &BindGroupLayout,
+        light_layout: &BindGroupLayout,
+        source: &ShaderSource,
+        material_type: MaterialType,
+        alpha_mode: AlphaMode,
+        albedo_texture: Option<&Texture>,
+        name: impl Into<String>,
+    ) -> Result<Self, MaterialError> {
         let shader_src = load_shader_source(source)?;
         let shader_module = create_shader(device, &shader_src, Some("Custom Material Shader"));
 
@@ -171,25 +228,27 @@ impl MaterialPipeline {
 
         let (pipeline, bind_group) = match material_type {
             MaterialType::Lit => {
-                let pipeline = create_lit_pipeline(
+                let pipeline = create_lit_pipeline_with_alpha(
                     device,
                     &shader_module,
                     format,
                     camera_layout,
                     material_layout,
                     light_layout,
+                    alpha_mode,
                 );
                 let bind_group =
                     create_material_bind_group(device, queue, material_layout, albedo_texture);
                 (pipeline, Some(bind_group))
             }
             MaterialType::Unlit => {
-                let pipeline = create_unlit_pipeline(
+                let pipeline = create_unlit_pipeline_with_alpha(
                     device,
                     &shader_module,
                     format,
                     camera_layout,
                     material_layout,
+                    alpha_mode,
                 );
                 let bind_group =
                     create_material_bind_group(device, queue, material_layout, albedo_texture);
@@ -197,7 +256,7 @@ impl MaterialPipeline {
             }
             MaterialType::Basic => {
                 let pipeline =
-                    crate::pipeline::create_basic_pipeline(device, &shader_module, format);
+                    create_basic_pipeline_with_alpha(device, &shader_module, format, alpha_mode);
                 (pipeline, None)
             }
         };
@@ -223,9 +282,38 @@ impl MaterialPipeline {
         albedo_texture: Option<&Texture>,
         name: impl Into<String>,
     ) -> Self {
+        Self::from_source_with_fallback_and_alpha(
+            device,
+            queue,
+            format,
+            camera_layout,
+            light_layout,
+            source,
+            fallback_shader,
+            material_type,
+            AlphaMode::Opaque,
+            albedo_texture,
+            name,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_source_with_fallback_and_alpha(
+        device: &Device,
+        queue: &wgpu::Queue,
+        format: TextureFormat,
+        camera_layout: &BindGroupLayout,
+        light_layout: &BindGroupLayout,
+        source: &ShaderSource,
+        fallback_shader: BuiltinShader,
+        material_type: MaterialType,
+        alpha_mode: AlphaMode,
+        albedo_texture: Option<&Texture>,
+        name: impl Into<String>,
+    ) -> Self {
         let name = name.into();
 
-        match Self::from_source(
+        match Self::from_source_with_alpha(
             device,
             queue,
             format,
@@ -233,6 +321,7 @@ impl MaterialPipeline {
             light_layout,
             source,
             material_type,
+            alpha_mode,
             albedo_texture,
             name.clone(),
         ) {
@@ -245,7 +334,7 @@ impl MaterialPipeline {
                     err
                 );
 
-                Self::from_builtin(
+                Self::from_builtin_with_alpha(
                     device,
                     queue,
                     format,
@@ -253,6 +342,7 @@ impl MaterialPipeline {
                     light_layout,
                     fallback_shader,
                     material_type,
+                    alpha_mode,
                     name,
                 )
             }
@@ -282,7 +372,7 @@ impl MaterialPipeline {
             None
         };
 
-        Ok(Self::from_source_with_fallback(
+        Ok(Self::from_source_with_fallback_and_alpha(
             device,
             queue,
             format,
@@ -291,6 +381,7 @@ impl MaterialPipeline {
             &source,
             fallback,
             descriptor.material_type,
+            descriptor.alpha_mode,
             albedo_texture.as_ref(),
             descriptor.name.clone(),
         ))
