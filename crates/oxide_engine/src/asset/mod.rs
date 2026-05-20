@@ -19,7 +19,8 @@ use oxide_renderer::mesh::Mesh3D;
 #[cfg(feature = "gltf-import")]
 use wgpu::{Device, Queue};
 
-use crate::scene::SceneMaterialLibrary;
+use crate::scene::{reload_changed_oxscenes, SceneDescriptor, SceneMaterialLibrary};
+use crate::watcher::AssetWatcher;
 
 pub use oxide_asset::*;
 
@@ -45,6 +46,24 @@ pub struct MaterialDescriptorAssets {
 pub type MeshHandle = CoreHandle<Mesh3D>;
 pub type MaterialHandle = CoreHandle<MaterialPipeline>;
 pub type MaterialDescriptorHandle = CoreHandle<MaterialDescriptor>;
+
+/// Result of routing changed source paths through Oxide's native reload systems.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NativeAssetReloadSummary {
+    /// Changed paths reported by a watcher or caller.
+    pub changed_paths: Vec<PathBuf>,
+    /// Native scene descriptors that started reloading.
+    pub oxscenes: Vec<CoreHandle<SceneDescriptor>>,
+    /// Material descriptors that started reloading.
+    pub material_descriptors: Vec<MaterialDescriptorHandle>,
+}
+
+impl NativeAssetReloadSummary {
+    /// Returns true when no changed paths produced native asset reloads.
+    pub fn is_empty(&self) -> bool {
+        self.oxscenes.is_empty() && self.material_descriptors.is_empty()
+    }
+}
 
 /// ECS resource storing handle-indexed glTF scenes.
 #[cfg(feature = "gltf-import")]
@@ -165,6 +184,47 @@ where
         }
     }
     reloaded
+}
+
+/// Reloads native Oxide assets affected by changed source paths.
+///
+/// This fans out one changed-path list to the built-in `.oxscene` and `.oxmat`
+/// reload systems. Reload completion is still published by the normal
+/// `oxscene_spawn_system` and `material_descriptor_asset_system` systems.
+pub fn reload_changed_native_assets<I, P>(
+    world: &mut World,
+    changed_paths: I,
+) -> NativeAssetReloadSummary
+where
+    I: IntoIterator<Item = P>,
+    P: Into<PathBuf>,
+{
+    let changed_paths: Vec<PathBuf> = changed_paths.into_iter().map(Into::into).collect();
+    let oxscenes = reload_changed_oxscenes(world, changed_paths.iter().cloned());
+    let material_descriptors = if world.contains_resource::<AssetServerResource>() {
+        let server = world.resource_mut::<AssetServerResource>();
+        reload_changed_material_descriptors(&mut server.server, changed_paths.iter().cloned())
+    } else {
+        Vec::new()
+    };
+
+    NativeAssetReloadSummary {
+        changed_paths,
+        oxscenes,
+        material_descriptors,
+    }
+}
+
+/// Polls the installed [`AssetWatcher`] and reloads affected native Oxide assets.
+///
+/// Returns an empty summary when no watcher is installed or no relevant assets
+/// are affected.
+pub fn poll_native_asset_reloads(world: &mut World) -> NativeAssetReloadSummary {
+    let Some(watcher) = world.get_non_send_resource_mut::<AssetWatcher>() else {
+        return NativeAssetReloadSummary::default();
+    };
+    let changed_paths = watcher.poll_changed_files().to_vec();
+    reload_changed_native_assets(world, changed_paths)
 }
 
 /// Publishes completed material descriptor loads and records source dependencies.
@@ -310,6 +370,10 @@ pub fn load_gltf_async(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scene::{
+        oxscene_spawn_system, request_oxscene_spawn, take_spawned_oxscene_roots,
+        SceneDescriptorAssets,
+    };
     use oxide_asset::AssetChangeKind;
     use std::fs;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -413,6 +477,69 @@ mod tests {
         panic!("scene material library was not updated from material descriptor asset");
     }
 
+    #[test]
+    fn native_asset_reload_summary_fans_out_changed_paths() {
+        let root = temp_dir("oxide_native_asset_reload");
+        let material_path = root.join("stone.oxmat");
+        let shader_path = root.join("stone.wgsl");
+        let scene_path = root.join("level.oxscene");
+        let scene_dependency_path = root.join("level.sidecar");
+        fs::write(&shader_path, "// shader").unwrap();
+        fs::write(&scene_dependency_path, "{}").unwrap();
+        write_material(&material_path, "Stone", "stone.wgsl");
+        write_scene_with_dependencies(&scene_path, "Original Level", ["level.sidecar"]);
+
+        let mut world = World::new();
+        world.insert_resource(AssetServerResource::default());
+        world.insert_resource(MaterialDescriptorAssets::default());
+        let material_handle = {
+            let server = world.resource_mut::<AssetServerResource>();
+            request_material_descriptor_load(&mut server.server, &material_path)
+        };
+        let scene_handle = request_oxscene_spawn(&mut world, &scene_path);
+
+        run_until_native_assets_named(
+            &mut world,
+            material_handle,
+            "Stone",
+            scene_handle,
+            "Original Level",
+        );
+        let _ = take_spawned_oxscene_roots(&mut world, scene_handle);
+
+        write_material(&material_path, "Reloaded Stone", "stone.wgsl");
+        write_scene_with_dependencies(&scene_path, "Reloaded Level", ["level.sidecar"]);
+        let summary = reload_changed_native_assets(
+            &mut world,
+            [shader_path.clone(), scene_dependency_path.clone()],
+        );
+
+        assert_eq!(
+            summary.changed_paths,
+            vec![shader_path, scene_dependency_path]
+        );
+        assert_eq!(summary.material_descriptors, vec![material_handle]);
+        assert_eq!(summary.oxscenes, vec![scene_handle]);
+        assert!(!summary.is_empty());
+
+        run_until_native_assets_named(
+            &mut world,
+            material_handle,
+            "Reloaded Stone",
+            scene_handle,
+            "Reloaded Level",
+        );
+        assert!(take_spawned_oxscene_roots(&mut world, scene_handle).is_none());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn poll_native_asset_reloads_is_empty_without_watcher() {
+        let mut world = World::new();
+        assert!(poll_native_asset_reloads(&mut world).is_empty());
+    }
+
     fn poll_until_material_named(
         server: &mut CoreAssetServer,
         assets: &mut CoreAssets<MaterialDescriptor>,
@@ -431,6 +558,41 @@ mod tests {
         panic!("material descriptor was not loaded with expected name '{expected_name}'");
     }
 
+    fn run_until_native_assets_named(
+        world: &mut World,
+        material_handle: MaterialDescriptorHandle,
+        expected_material_name: &str,
+        scene_handle: CoreHandle<SceneDescriptor>,
+        expected_scene_name: &str,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            material_descriptor_asset_system(world);
+            oxscene_spawn_system(world);
+            let material_loaded = world
+                .resource::<MaterialDescriptorAssets>()
+                .assets
+                .get(&material_handle)
+                .map(|material| material.name.as_str())
+                == Some(expected_material_name);
+            let scene_loaded = world
+                .resource::<SceneDescriptorAssets>()
+                .assets
+                .get(&scene_handle)
+                .and_then(|scene| scene.entities.first())
+                .and_then(|entity| entity.name.as_deref())
+                == Some(expected_scene_name);
+            if material_loaded && scene_loaded {
+                return;
+            }
+            std::thread::yield_now();
+        }
+
+        panic!(
+            "native assets did not load material '{expected_material_name}' and scene '{expected_scene_name}'"
+        );
+    }
+
     fn write_material(path: &std::path::Path, name: &str, shader: &str) {
         fs::write(
             path,
@@ -444,6 +606,38 @@ mod tests {
                         "base_color": [0.45, 0.3, 0.18, 1.0],
                         "shader": {{ "source": "file", "path": "{shader}" }},
                         "fallback_shader": "lit"
+                    }}
+                }}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    fn write_scene_with_dependencies<I, S>(path: &std::path::Path, name: &str, dependencies: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let dependencies = dependencies
+            .into_iter()
+            .map(|dependency| format!(r#""{}""#, dependency.as_ref()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        fs::write(
+            path,
+            format!(
+                r#"{{
+                    "format": "oxide.oxscene",
+                    "version": 1,
+                    "scene": {{
+                        "dependencies": [{dependencies}],
+                        "entities": [
+                            {{
+                                "name": "{name}",
+                                "type": "mesh",
+                                "primitive": "cube"
+                            }}
+                        ]
                     }}
                 }}"#
             ),

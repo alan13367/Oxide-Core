@@ -53,6 +53,9 @@ the engine prelude for normal game code.
   should refresh native scene descriptors while preserving handles. Declare
   `.oxscene` `dependencies` when sidecar material, sprite, or import files
   should invalidate the scene during hot reload.
+- Use `reload_changed_native_assets` or `poll_native_asset_reloads` when a
+  watcher should route changed paths through Oxide's built-in `.oxscene` and
+  `.oxmat` reload systems together.
 - Use `RenderMesh` to describe render intent without storing GPU buffers in
   gameplay components.
 - Use `SceneMaterialLibrary` with `RenderMaterial::Named` when many entities
@@ -371,15 +374,16 @@ let removed_entities = despawn_scene_instance(&mut world, instance);
 During development, native scene descriptors can be reloaded in place:
 
 ```rust
-if let Some(watcher) = world.get_non_send_resource_mut::<AssetWatcher>() {
-    let changed = watcher.poll_changed_files().to_vec();
-    reload_changed_oxscenes(&mut world, changed);
+let reloads = poll_native_asset_reloads(&mut world);
+if !reloads.is_empty() {
+    tracing::info!("Reloading native assets: {:?}", reloads.changed_paths);
 }
 ```
 
-The reload updates `SceneDescriptorAssets`; it does not duplicate the already
-spawned world. Queue the returned handle explicitly if the game wants to create
-a new instance from the refreshed descriptor.
+Native reloads update `SceneDescriptorAssets` and `MaterialDescriptorAssets`;
+they do not duplicate already spawned scene instances. Queue a returned scene
+handle explicitly if the game wants to create a new instance from the refreshed
+descriptor.
 
 ```rust
 if let Some(audio) = world.get_resource::<Audio>() {
