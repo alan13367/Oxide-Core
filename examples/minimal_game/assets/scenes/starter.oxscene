@@ -2,6 +2,9 @@
   "format": "oxide.oxscene",
   "version": 1,
   "scene": {
+    "dependencies": [
+      "materials/crate_unlit.oxmat"
+    ],
     "materials": [
       {
         "name": "crate_unlit",

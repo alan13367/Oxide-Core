@@ -44,7 +44,9 @@ the engine prelude for normal game code.
   registered sprite billboards, and reusable prefabs that can be instantiated
   from `.oxscene` data or Rust with per-instance child overrides.
 - Use `reload_oxscene_path` or `reload_changed_oxscenes` when development tools
-  should refresh native scene descriptors while preserving handles.
+  should refresh native scene descriptors while preserving handles. Declare
+  `.oxscene` `dependencies` when sidecar material, sprite, or import files
+  should invalidate the scene during hot reload.
 - Use `RenderMesh` to describe render intent without storing GPU buffers in
   gameplay components.
 - Use `SceneMaterialLibrary` with `RenderMaterial::Named` when many entities

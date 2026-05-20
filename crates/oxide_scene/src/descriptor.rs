@@ -60,6 +60,9 @@ pub struct Name(pub String);
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SceneDescriptor {
+    /// Extra source paths that should invalidate this scene during hot reload.
+    #[serde(default)]
+    pub dependencies: Vec<String>,
     /// Reusable material intents registered before scene entities are spawned.
     #[serde(default)]
     pub materials: Vec<SceneMaterialDescriptor>,
@@ -74,6 +77,7 @@ pub struct SceneDescriptor {
 impl SceneDescriptor {
     pub fn starter_scene() -> Self {
         Self {
+            dependencies: Vec::new(),
             materials: Vec::new(),
             prefabs: Vec::new(),
             entities: vec![
@@ -143,9 +147,27 @@ impl SceneDescriptor {
     /// in authoring tools.
     pub fn validation_diagnostics(&self) -> Vec<SceneValidationDiagnostic> {
         let mut diagnostics = Vec::new();
+        let mut seen_dependencies = HashSet::new();
         let mut seen_materials = HashSet::new();
         let mut seen_prefabs = HashSet::new();
         let mut prefabs = HashMap::new();
+
+        for (index, dependency) in self.dependencies.iter().enumerate() {
+            let path = format!("dependencies[{index}]");
+            if dependency.trim().is_empty() {
+                diagnostics.push(SceneValidationDiagnostic::new(
+                    path,
+                    "scene dependency paths must not be empty",
+                ));
+                continue;
+            }
+            if !seen_dependencies.insert(dependency.trim()) {
+                diagnostics.push(SceneValidationDiagnostic::new(
+                    path,
+                    format!("duplicate scene dependency path '{}'", dependency.trim()),
+                ));
+            }
+        }
 
         for (index, material) in self.materials.iter().enumerate() {
             let path = format!("materials[{index}]");
@@ -1368,6 +1390,7 @@ mod tests {
     #[test]
     fn sprite_scene_entities_spawn_billboards() {
         let scene = SceneDescriptor {
+            dependencies: Vec::new(),
             materials: Vec::new(),
             prefabs: Vec::new(),
             entities: vec![SceneEntityDescriptor {
@@ -1400,6 +1423,7 @@ mod tests {
     #[test]
     fn hidden_scene_entities_spawn_visibility_component() {
         let scene = SceneDescriptor {
+            dependencies: Vec::new(),
             materials: Vec::new(),
             prefabs: Vec::new(),
             entities: vec![SceneEntityDescriptor {
@@ -1422,6 +1446,7 @@ mod tests {
     #[test]
     fn scene_entities_spawn_render_layer_masks() {
         let scene = SceneDescriptor {
+            dependencies: Vec::new(),
             materials: Vec::new(),
             prefabs: Vec::new(),
             entities: vec![SceneEntityDescriptor {
@@ -1447,6 +1472,7 @@ mod tests {
     #[test]
     fn mesh_scene_entities_can_reference_named_materials() {
         let scene = SceneDescriptor {
+            dependencies: Vec::new(),
             materials: Vec::new(),
             prefabs: Vec::new(),
             entities: vec![SceneEntityDescriptor {
@@ -1476,6 +1502,7 @@ mod tests {
     #[test]
     fn scene_materials_register_into_world_library_before_spawning() {
         let scene = SceneDescriptor {
+            dependencies: Vec::new(),
             materials: vec![SceneMaterialDescriptor {
                 name: "materials.crate".to_string(),
                 shader: SceneBuiltinShader::Lit,
@@ -1518,6 +1545,7 @@ mod tests {
     #[test]
     fn camera_entities_spawn_render_view_metadata() {
         let scene = SceneDescriptor {
+            dependencies: Vec::new(),
             materials: Vec::new(),
             prefabs: Vec::new(),
             entities: vec![SceneEntityDescriptor {
@@ -1580,6 +1608,36 @@ mod tests {
         assert_eq!(sprite.tint, [1.0, 1.0, 1.0, 1.0]);
         assert_eq!(sprite.facing, SceneSpriteFacing::YBillboard);
         assert_eq!(sprite.depth, SceneSpriteDepthMode::World);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_scene_descriptor_accepts_declared_dependencies() {
+        let path = temp_path("dependency_scene", "oxscene");
+        fs::write(
+            &path,
+            r#"{
+                "format": "oxide.oxscene",
+                "version": 1,
+                "scene": {
+                    "dependencies": [
+                        "materials/stone.oxmat",
+                        "sprites/hud.png"
+                    ],
+                    "entities": []
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let scene = load_scene_descriptor(&path).unwrap();
+        assert_eq!(
+            scene.dependencies,
+            vec![
+                "materials/stone.oxmat".to_string(),
+                "sprites/hud.png".to_string()
+            ]
+        );
         let _ = fs::remove_file(path);
     }
 
@@ -1651,6 +1709,7 @@ mod tests {
     #[test]
     fn scene_validation_reports_prefab_authoring_errors() {
         let scene = SceneDescriptor {
+            dependencies: Vec::new(),
             materials: Vec::new(),
             prefabs: vec![
                 ScenePrefabDescriptor {
@@ -1714,6 +1773,7 @@ mod tests {
     #[test]
     fn scene_validation_reports_prefab_override_authoring_errors() {
         let scene = SceneDescriptor {
+            dependencies: Vec::new(),
             materials: Vec::new(),
             prefabs: vec![ScenePrefabDescriptor {
                 id: "crate_pair".to_string(),
@@ -1772,6 +1832,7 @@ mod tests {
     #[test]
     fn scene_validation_reports_material_authoring_errors() {
         let scene = SceneDescriptor {
+            dependencies: Vec::new(),
             materials: vec![
                 SceneMaterialDescriptor {
                     name: "crate".to_string(),
@@ -1799,6 +1860,30 @@ mod tests {
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.path == "materials[2].name"
                 && diagnostic.message == "material names must not be empty"
+        }));
+    }
+
+    #[test]
+    fn scene_validation_reports_dependency_authoring_errors() {
+        let scene = SceneDescriptor {
+            dependencies: vec![
+                "materials/stone.oxmat".to_string(),
+                " materials/stone.oxmat ".to_string(),
+                String::new(),
+            ],
+            ..Default::default()
+        };
+
+        let err = scene.validate().unwrap_err();
+        assert!(err.diagnostics().iter().any(|diagnostic| {
+            diagnostic.path == "dependencies[1]"
+                && diagnostic
+                    .message
+                    .contains("duplicate scene dependency path")
+        }));
+        assert!(err.diagnostics().iter().any(|diagnostic| {
+            diagnostic.path == "dependencies[2]"
+                && diagnostic.message == "scene dependency paths must not be empty"
         }));
     }
 
@@ -1834,6 +1919,7 @@ mod tests {
     #[test]
     fn try_spawn_scene_descriptor_rejects_invalid_scene_without_spawning() {
         let scene = SceneDescriptor {
+            dependencies: Vec::new(),
             materials: Vec::new(),
             prefabs: Vec::new(),
             entities: vec![SceneEntityDescriptor {
@@ -1858,6 +1944,7 @@ mod tests {
 
     fn prefab_test_scene() -> SceneDescriptor {
         SceneDescriptor {
+            dependencies: Vec::new(),
             materials: Vec::new(),
             prefabs: vec![ScenePrefabDescriptor {
                 id: "crate_pair".to_string(),

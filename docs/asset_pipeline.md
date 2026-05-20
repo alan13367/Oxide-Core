@@ -25,9 +25,10 @@ asset documents for scenes and materials.
 
 ## First Runtime Asset Types
 
-- `.oxscene`: scene descriptor with entities, transforms, lights, cameras, and
-  render intent. `load_scene_descriptor(...)` accepts both legacy raw scene JSON
-  and wrapped `.oxscene`; `save_scene_descriptor(...)` writes the wrapper.
+- `.oxscene`: scene descriptor with entities, transforms, lights, cameras,
+  scene-declared dependency paths, and render intent.
+  `load_scene_descriptor(...)` accepts both legacy raw scene JSON and wrapped
+  `.oxscene`; `save_scene_descriptor(...)` writes the wrapper.
 - `.oxmesh`: preprocessed mesh buffers and metadata.
 - `.oxmat`: material descriptor targeting Oxide renderer pipelines.
   `load_material_descriptor(...)` accepts legacy JSON/RON/TOML and wrapped
@@ -46,6 +47,10 @@ scene assets whose source path or dependency paths match file watcher output.
 Reloading updates `SceneDescriptorAssets` and preserves the handle; it does not
 spawn duplicate roots. Queue the returned handle with `queue_oxscene_spawn` only
 when the app intentionally wants a fresh instance of the reloaded descriptor.
+Scene documents can declare relative or absolute dependency paths in
+`scene.dependencies`; the runtime records them against the loaded scene handle
+so changes to referenced material, sprite, or imported data files can invalidate
+the scene without app code manually updating the `AssetServer`.
 
 `examples/minimal_game` demonstrates this path with
 `assets/scenes/starter.oxscene`.

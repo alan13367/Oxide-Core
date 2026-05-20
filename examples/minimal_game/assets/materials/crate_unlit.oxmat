@@ -1,0 +1,13 @@
+{
+  "format": "oxide.oxmat",
+  "version": 1,
+  "material": {
+    "name": "crate_unlit",
+    "material_type": "unlit",
+    "shader": {
+      "source": "builtin",
+      "shader": "unlit"
+    },
+    "fallback_shader": "fallback"
+  }
+}

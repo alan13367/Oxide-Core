@@ -105,6 +105,9 @@ existing color target so viewports can be composited.
   "format": "oxide.oxscene",
   "version": 1,
   "scene": {
+    "dependencies": [
+      "materials/crate_lit.oxmat"
+    ],
     "materials": [
       {
         "name": "crate_lit",
@@ -174,13 +177,18 @@ let root = try_spawn_scene_prefab(
 ```
 
 Native scene loads validate authored data before publishing the descriptor.
+Use top-level `dependencies` for material, sprite, import, or sidecar data files
+that should trigger scene reloads when they change. Relative paths are resolved
+from the `.oxscene` file location when the scene is loaded through the runtime
+asset path.
 Prefab override paths use slash-separated entity names, such as
 `"Crate Base/Crate Top"`. Unnamed prefab entities can be addressed by sibling
 index segments such as `"#0/#1"`.
 
-Validation reports duplicate material names, empty material names, duplicate
-prefab IDs, missing prefab references, recursive prefab graphs, invalid prefab
-override paths, and empty sprite IDs with descriptor paths such as
+Validation reports duplicate or empty dependency paths, duplicate material
+names, empty material names, duplicate prefab IDs, missing prefab references,
+recursive prefab graphs, invalid prefab override paths, and empty sprite IDs
+with descriptor paths such as
 `entities[0].children[1].id`. Use `SceneDescriptor::validate()` in editor tools
 and `try_spawn_scene_descriptor` / `try_spawn_scene_prefab` when code wants
 structured `SceneValidationError` diagnostics before mutating the world.

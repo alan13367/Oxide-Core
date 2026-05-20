@@ -1,7 +1,7 @@
 //! Native Oxide scene asset loading and spawn utilities.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::asset::{AssetServerError, AssetServerResource, Assets, Handle};
 use oxide_ecs::entity::Entity;
@@ -142,14 +142,19 @@ pub fn oxscene_spawn_system(world: &mut World) {
     };
 
     if !completed.is_empty() {
-        let scene_assets = world.resource_mut::<SceneDescriptorAssets>();
+        let mut scenes = Vec::new();
         for result in completed {
             match result {
                 Ok((handle, scene)) => {
-                    scene_assets.assets.insert(handle, scene);
+                    record_scene_dependencies(world, &handle, &scene);
+                    scenes.push((handle, scene));
                 }
                 Err(err) => tracing::warn!("Failed to load Oxide scene: {err}"),
             }
+        }
+        let scene_assets = world.resource_mut::<SceneDescriptorAssets>();
+        for (handle, scene) in scenes {
+            scene_assets.assets.insert(handle, scene);
         }
     }
 
@@ -183,6 +188,53 @@ pub fn oxscene_spawn_system(world: &mut World) {
         for (handle, roots) in spawned {
             results.roots_by_scene.insert(handle.id(), roots);
         }
+    }
+}
+
+fn record_scene_dependencies(
+    world: &mut World,
+    handle: &Handle<SceneDescriptor>,
+    scene: &SceneDescriptor,
+) {
+    let dependencies = {
+        let server = world.resource::<AssetServerResource>();
+        server
+            .server
+            .asset_path(handle)
+            .map(|path| scene_descriptor_dependencies(path, scene))
+            .unwrap_or_default()
+    };
+    let server = world.resource_mut::<AssetServerResource>();
+    let _ = server.server.set_asset_dependencies(handle, dependencies);
+}
+
+/// Returns dependency paths that should invalidate a native scene descriptor.
+pub fn scene_descriptor_dependencies(
+    descriptor_path: impl AsRef<Path>,
+    scene: &SceneDescriptor,
+) -> Vec<PathBuf> {
+    let base = descriptor_path.as_ref().parent().map(PathBuf::from);
+    let mut dependencies: Vec<_> = scene
+        .dependencies
+        .iter()
+        .filter_map(|dependency| {
+            let dependency = dependency.trim();
+            (!dependency.is_empty()).then(|| resolve_scene_dependency(base.as_ref(), dependency))
+        })
+        .collect();
+    dependencies.sort();
+    dependencies.dedup();
+    dependencies
+}
+
+fn resolve_scene_dependency(base: Option<&PathBuf>, dependency: &str) -> PathBuf {
+    let path = PathBuf::from(dependency);
+    if path.is_absolute() {
+        path
+    } else if let Some(base) = base {
+        base.join(path)
+    } else {
+        path
     }
 }
 
@@ -220,6 +272,7 @@ mod tests {
         };
 
         let scene = SceneDescriptor {
+            dependencies: Vec::new(),
             materials: Vec::new(),
             prefabs: Vec::new(),
             entities: vec![SceneEntityDescriptor {
@@ -297,6 +350,91 @@ mod tests {
         let _ = fs::remove_file(dependency_path);
     }
 
+    #[test]
+    fn loaded_oxscene_records_declared_dependency_paths() {
+        let scene_path = temp_path("declared_dependency_scene", "oxscene");
+        let dependency_path = scene_path
+            .parent()
+            .unwrap()
+            .join("declared_scene_material.oxmat");
+        write_scene_with_dependencies(
+            &scene_path,
+            "Declared Dependency Cube",
+            ["declared_scene_material.oxmat"],
+        );
+        fs::write(&dependency_path, "{}").unwrap();
+
+        let mut world = World::new();
+        let handle = request_oxscene_spawn(&mut world, &scene_path);
+        run_until_scene_asset_named(&mut world, handle, "Declared Dependency Cube");
+
+        let server = world.resource::<AssetServerResource>();
+        let expected_dependency = server
+            .server
+            .asset_path(&handle)
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("declared_scene_material.oxmat");
+        let dependencies = server.server.asset_dependencies(&handle).unwrap();
+        assert_eq!(dependencies, &[expected_dependency]);
+
+        let _ = fs::remove_file(scene_path);
+        let _ = fs::remove_file(dependency_path);
+    }
+
+    #[test]
+    fn reload_changed_oxscenes_matches_declared_dependency_paths() {
+        let scene_path = temp_path("declared_reload_scene", "oxscene");
+        let dependency_path = scene_path.parent().unwrap().join("declared_reload.oxmat");
+        write_scene_with_dependencies(
+            &scene_path,
+            "Declared Original Cube",
+            ["declared_reload.oxmat"],
+        );
+        fs::write(&dependency_path, "{}").unwrap();
+
+        let mut world = World::new();
+        let handle = request_oxscene_spawn(&mut world, &scene_path);
+        run_until_scene_asset_named(&mut world, handle, "Declared Original Cube");
+        let _ = take_spawned_oxscene_roots(&mut world, handle);
+
+        write_scene_with_dependencies(
+            &scene_path,
+            "Declared Reloaded Cube",
+            ["declared_reload.oxmat"],
+        );
+        let reloaded = reload_changed_oxscenes(&mut world, [dependency_path.clone()]);
+        assert_eq!(reloaded, vec![handle]);
+
+        run_until_scene_asset_named(&mut world, handle, "Declared Reloaded Cube");
+        assert!(take_spawned_oxscene_roots(&mut world, handle).is_none());
+
+        let _ = fs::remove_file(scene_path);
+        let _ = fs::remove_file(dependency_path);
+    }
+
+    #[test]
+    fn scene_descriptor_dependencies_resolve_relative_to_scene() {
+        let scene = SceneDescriptor {
+            dependencies: vec![
+                "materials/stone.oxmat".to_string(),
+                "materials/stone.oxmat".to_string(),
+                "sprites/hud.png".to_string(),
+            ],
+            ..Default::default()
+        };
+
+        let dependencies = scene_descriptor_dependencies("assets/scenes/level.oxscene", &scene);
+        assert_eq!(
+            dependencies,
+            vec![
+                PathBuf::from("assets/scenes/materials/stone.oxmat"),
+                PathBuf::from("assets/scenes/sprites/hud.png"),
+            ]
+        );
+    }
+
     fn run_until_scene_asset_named(
         world: &mut World,
         handle: Handle<SceneDescriptor>,
@@ -322,6 +460,19 @@ mod tests {
     }
 
     fn write_scene(path: &std::path::Path, name: &str) {
+        write_scene_with_dependencies(path, name, std::iter::empty::<&str>());
+    }
+
+    fn write_scene_with_dependencies<I, S>(path: &std::path::Path, name: &str, dependencies: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let dependencies = dependencies
+            .into_iter()
+            .map(|dependency| format!(r#""{}""#, dependency.as_ref()))
+            .collect::<Vec<_>>()
+            .join(", ");
         fs::write(
             path,
             format!(
@@ -329,6 +480,7 @@ mod tests {
                     "format": "oxide.oxscene",
                     "version": 1,
                     "scene": {{
+                        "dependencies": [{dependencies}],
                         "entities": [
                             {{
                                 "name": "{name}",

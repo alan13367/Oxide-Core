@@ -11,8 +11,8 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Audio**: `oxide_audio` playback, software mixing, generated tones, and WAV clip loading via an engine `AudioPlugin`
 - **Focused Runtime Crates**: camera, lighting, scene, UI, editor, audio, physics, asset, input, transform, renderer, and ECS code live outside the façade crate behind Oxide-owned APIs
 - **Materials + Shaders**: built-in shader pack plus custom WGSL (inline/file) with fallback support
-- **Native Asset Documents**: versioned `.oxscene` and `.oxmat` JSON wrappers with legacy descriptor loading support, nested scene entities, scene-declared materials, registered sprite billboards, reusable scene prefabs with instance overrides, and descriptor validation diagnostics
-- **Asset Dependency Tracking**: `AssetServer` records secondary source paths, can query typed handles affected by a changed file, can reload known paths in place, and `Assets<T>` exposes per-handle revisions plus cursor-readable change records for cache invalidation
+- **Native Asset Documents**: versioned `.oxscene` and `.oxmat` JSON wrappers with legacy descriptor loading support, nested scene entities, scene-declared dependencies/materials, registered sprite billboards, reusable scene prefabs with instance overrides, and descriptor validation diagnostics
+- **Asset Dependency Tracking**: `AssetServer` records secondary source paths, `.oxscene` files can declare scene dependency paths, typed handles can be queried by changed file, known paths can be reloaded in place, and `Assets<T>` exposes per-handle revisions plus cursor-readable change records for cache invalidation
 - **Native Scene Reloading**: `.oxscene` handles can be refreshed from direct file changes or dependency changes without duplicating spawned roots
 - **Automatic Scene Renderer**: optional plugin that renders `RenderMesh` scene entities without app-owned pipelines
 - **Scene Material Library**: reusable named scene materials can be registered directly, declared inside `.oxscene`, populated from loaded `.oxmat` descriptors, and referenced from `.oxscene` meshes
