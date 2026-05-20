@@ -73,6 +73,46 @@ where
         self
     }
 
+    /// Replaces every trigger for an action.
+    pub fn set_triggers<I>(&mut self, action: A, triggers: I) -> &mut Self
+    where
+        I: IntoIterator<Item = InputTrigger>,
+    {
+        self.bindings.insert(action, triggers.into_iter().collect());
+        self
+    }
+
+    /// Removes one trigger from an action.
+    ///
+    /// Returns `true` when the action had the trigger. Empty action entries are
+    /// removed.
+    pub fn unbind(&mut self, action: &A, trigger: InputTrigger) -> bool {
+        let Some(triggers) = self.bindings.get_mut(action) else {
+            return false;
+        };
+        let previous_len = triggers.len();
+        triggers.retain(|candidate| *candidate != trigger);
+        let removed = triggers.len() != previous_len;
+        if triggers.is_empty() {
+            self.bindings.remove(action);
+        }
+        removed
+    }
+
+    /// Removes a trigger from every action and returns the number of actions changed.
+    pub fn unbind_trigger(&mut self, trigger: InputTrigger) -> usize {
+        let mut changed = 0;
+        self.bindings.retain(|_, triggers| {
+            let previous_len = triggers.len();
+            triggers.retain(|candidate| *candidate != trigger);
+            if triggers.len() != previous_len {
+                changed += 1;
+            }
+            !triggers.is_empty()
+        });
+        changed
+    }
+
     /// Removes every trigger for an action.
     pub fn clear_action(&mut self, action: &A) -> Option<Vec<InputTrigger>> {
         self.bindings.remove(action)
@@ -88,6 +128,33 @@ where
         self.bindings
             .iter()
             .map(|(action, triggers)| (action, triggers.as_slice()))
+    }
+
+    /// Iterates actions currently using `trigger`.
+    pub fn actions_for_trigger(&self, trigger: InputTrigger) -> impl Iterator<Item = &A> {
+        self.bindings
+            .iter()
+            .filter_map(move |(action, triggers)| triggers.contains(&trigger).then_some(action))
+    }
+
+    /// Returns true when more than one action uses `trigger`.
+    pub fn has_conflict(&self, trigger: InputTrigger) -> bool {
+        self.actions_for_trigger(trigger).take(2).count() > 1
+    }
+
+    /// Returns every trigger currently used by more than one action.
+    pub fn conflicting_triggers(&self) -> Vec<InputTrigger> {
+        let mut seen = HashSet::new();
+        let mut conflicts = HashSet::new();
+        for triggers in self.bindings.values() {
+            let unique_triggers: HashSet<_> = triggers.iter().copied().collect();
+            for trigger in unique_triggers {
+                if !seen.insert(trigger) {
+                    conflicts.insert(trigger);
+                }
+            }
+        }
+        conflicts.into_iter().collect()
     }
 
     /// Returns `true` when no actions are bound.
@@ -166,6 +233,46 @@ where
         self
     }
 
+    /// Replaces every trigger contribution for an axis.
+    pub fn set_triggers<I>(&mut self, axis: A, triggers: I) -> &mut Self
+    where
+        I: IntoIterator<Item = AxisTrigger>,
+    {
+        self.bindings.insert(axis, triggers.into_iter().collect());
+        self
+    }
+
+    /// Removes one physical trigger from an axis regardless of scale.
+    ///
+    /// Returns `true` when the axis had the trigger. Empty axis entries are
+    /// removed.
+    pub fn unbind(&mut self, axis: &A, trigger: InputTrigger) -> bool {
+        let Some(triggers) = self.bindings.get_mut(axis) else {
+            return false;
+        };
+        let previous_len = triggers.len();
+        triggers.retain(|candidate| candidate.trigger != trigger);
+        let removed = triggers.len() != previous_len;
+        if triggers.is_empty() {
+            self.bindings.remove(axis);
+        }
+        removed
+    }
+
+    /// Removes a physical trigger from every axis and returns the number of axes changed.
+    pub fn unbind_trigger(&mut self, trigger: InputTrigger) -> usize {
+        let mut changed = 0;
+        self.bindings.retain(|_, triggers| {
+            let previous_len = triggers.len();
+            triggers.retain(|candidate| candidate.trigger != trigger);
+            if triggers.len() != previous_len {
+                changed += 1;
+            }
+            !triggers.is_empty()
+        });
+        changed
+    }
+
     /// Removes every trigger for an axis.
     pub fn clear_axis(&mut self, axis: &A) -> Option<Vec<AxisTrigger>> {
         self.bindings.remove(axis)
@@ -181,6 +288,37 @@ where
         self.bindings
             .iter()
             .map(|(axis, triggers)| (axis, triggers.as_slice()))
+    }
+
+    /// Iterates axes currently using `trigger`.
+    pub fn axes_for_trigger(&self, trigger: InputTrigger) -> impl Iterator<Item = &A> {
+        self.bindings.iter().filter_map(move |(axis, triggers)| {
+            triggers
+                .iter()
+                .any(|candidate| candidate.trigger == trigger)
+                .then_some(axis)
+        })
+    }
+
+    /// Returns true when more than one axis uses `trigger`.
+    pub fn has_conflict(&self, trigger: InputTrigger) -> bool {
+        self.axes_for_trigger(trigger).take(2).count() > 1
+    }
+
+    /// Returns every physical trigger currently used by more than one axis.
+    pub fn conflicting_triggers(&self) -> Vec<InputTrigger> {
+        let mut seen = HashSet::new();
+        let mut conflicts = HashSet::new();
+        for triggers in self.bindings.values() {
+            let unique_triggers: HashSet<_> =
+                triggers.iter().map(|trigger| trigger.trigger).collect();
+            for trigger in unique_triggers {
+                if !seen.insert(trigger) {
+                    conflicts.insert(trigger);
+                }
+            }
+        }
+        conflicts.into_iter().collect()
     }
 
     /// Returns `true` when no axes are bound.
@@ -446,6 +584,30 @@ mod tests {
     }
 
     #[test]
+    fn action_bindings_support_rebinding_and_conflict_queries() {
+        let mut bindings = ActionBindings::new();
+        bindings
+            .bind_key(GameAction::Jump, KeyCode::Space)
+            .bind_key(GameAction::Fire, KeyCode::Space);
+
+        assert!(bindings.has_conflict(KeyCode::Space.into()));
+        assert_eq!(
+            bindings.actions_for_trigger(KeyCode::Space.into()).count(),
+            2
+        );
+        assert!(bindings
+            .conflicting_triggers()
+            .contains(&InputTrigger::Key(KeyCode::Space)));
+
+        bindings.set_triggers(GameAction::Fire, [InputTrigger::Mouse(MouseButton::Left)]);
+        assert!(!bindings.has_conflict(KeyCode::Space.into()));
+        assert!(bindings.unbind(&GameAction::Jump, KeyCode::Space.into()));
+        assert!(bindings.triggers(&GameAction::Jump).is_empty());
+        assert_eq!(bindings.unbind_trigger(MouseButton::Left.into()), 1);
+        assert!(bindings.is_empty());
+    }
+
+    #[test]
     fn axis_input_tracks_key_pairs_and_release_to_zero() {
         let mut keyboard = KeyboardInput::default();
         let mouse = MouseInput::default();
@@ -503,5 +665,29 @@ mod tests {
         mouse.process_button(MouseButton::Left, true);
         axes.sync(&bindings, &keyboard, &mouse);
         assert_eq!(axes.value(&GameAxis::Throttle), 1.0);
+    }
+
+    #[test]
+    fn axis_bindings_support_rebinding_and_conflict_queries() {
+        let mut bindings = AxisBindings::new();
+        bindings
+            .bind_key(GameAxis::MoveX, KeyCode::KeyA, -1.0)
+            .bind_key(GameAxis::Throttle, KeyCode::KeyA, 1.0);
+
+        assert!(bindings.has_conflict(KeyCode::KeyA.into()));
+        assert_eq!(bindings.axes_for_trigger(KeyCode::KeyA.into()).count(), 2);
+        assert!(bindings
+            .conflicting_triggers()
+            .contains(&InputTrigger::Key(KeyCode::KeyA)));
+
+        bindings.set_triggers(
+            GameAxis::Throttle,
+            [AxisTrigger::new(MouseButton::Right, 1.0)],
+        );
+        assert!(!bindings.has_conflict(KeyCode::KeyA.into()));
+        assert!(bindings.unbind(&GameAxis::MoveX, KeyCode::KeyA.into()));
+        assert!(bindings.triggers(&GameAxis::MoveX).is_empty());
+        assert_eq!(bindings.unbind_trigger(MouseButton::Right.into()), 1);
+        assert!(bindings.is_empty());
     }
 }

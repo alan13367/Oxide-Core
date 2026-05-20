@@ -300,6 +300,10 @@ axes.bind_key_pair(GameAxis::MoveX, KeyCode::KeyA, KeyCode::KeyD);
 world.insert_resource(axes);
 ```
 
+Both action and axis bindings support runtime rebinding with `set_triggers`,
+single-trigger removal with `unbind` / `unbind_trigger`, and conflict checks
+with `has_conflict` or `conflicting_triggers`.
+
 Scene descriptors can keep reusable object templates next to the level data:
 
 ```rust

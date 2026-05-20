@@ -475,6 +475,10 @@ app::<MyApp>()
 button-style state for gameplay code. `AxisInput::value` provides clamped
 `-1.0..=1.0` values for movement-style controls. `minimal_game` demonstrates
 using Space as an action-bound spawn command and A/D as an axis-bound input.
+Settings screens and editor tools can rebind controls with
+`set_triggers`, remove specific mappings with `unbind` / `unbind_trigger`,
+and detect overlapping bindings with `has_conflict` or
+`conflicting_triggers`.
 
 ### 9. Async glTF Scene Spawn Pipeline
 

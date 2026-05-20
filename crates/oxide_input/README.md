@@ -14,3 +14,8 @@ state after `sync_action_input_system::<T>` runs in an app schedule.
 triggers. `AxisInput<T>` stores normalized `-1.0..=1.0` values after
 `sync_axis_input_system::<T>` runs, which keeps WASD-style movement out of
 gameplay systems.
+
+Bindings can be edited at runtime for settings menus or editor tools:
+`set_triggers` replaces one action/axis, `unbind` removes one physical input,
+`unbind_trigger` clears a physical input everywhere, and
+`conflicting_triggers` reports overlaps.
