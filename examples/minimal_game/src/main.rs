@@ -99,19 +99,11 @@ impl App for MinimalGame {
     fn update(&mut self) {
         if !self.scene_loaded {
             if let Some(roots) = take_spawned_oxscene_roots(&mut self.world, self.scene_handle) {
-                for root in &roots {
-                    if let Some(from) = self
-                        .world
-                        .get::<TransformComponent>(*root)
-                        .map(|transform| transform.transform)
-                    {
-                        let mut to = from;
-                        to.position.y += 0.25;
-                        self.world.entity_mut(*root).insert(
-                            TransformTween::ping_pong(from, to, Duration::from_secs(2))
-                                .with_easing(TweenEasing::SmoothStep),
-                        );
-                    }
+                if let Some(crate_pair) = entity_by_scene_path(&mut self.world, "Crate Pair") {
+                    add_y_pulse(&mut self.world, crate_pair, 0.25, Duration::from_secs(2));
+                }
+                if let Some(marker) = first_entity_with_tag(&mut self.world, "marker") {
+                    add_y_pulse(&mut self.world, marker, 0.15, Duration::from_millis(900));
                 }
                 self.world
                     .resource_mut::<PendingSceneRoots>()
@@ -181,6 +173,19 @@ impl App for MinimalGame {
     }
 
     fn on_event(&mut self, _event: EngineEvent) {}
+}
+
+fn add_y_pulse(world: &mut World, entity: Entity, height: f32, duration: Duration) {
+    if let Some(from) = world
+        .get::<TransformComponent>(entity)
+        .map(|transform| transform.transform)
+    {
+        let mut to = from;
+        to.position.y += height;
+        world.entity_mut(entity).insert(
+            TransformTween::ping_pong(from, to, duration).with_easing(TweenEasing::SmoothStep),
+        );
+    }
 }
 
 fn fixed_tick_system(mut ticks: ResMut<FixedTickCounter>) {

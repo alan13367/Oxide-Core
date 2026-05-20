@@ -58,6 +58,20 @@ impl OxSceneDocument {
 #[derive(Component, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Name(pub String);
 
+/// Stable slash-separated authored path assigned when a scene or prefab spawns.
+///
+/// Named entities use their trimmed `Name` as the path segment. Unnamed sibling
+/// entities use `#index`, matching prefab override path syntax.
+#[derive(Component, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SceneEntityPath(pub String);
+
+impl SceneEntityPath {
+    /// Returns the authored path string.
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
 /// Stable authored labels for gameplay queries, editor filters, and tooling.
 #[derive(Component, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tags(Vec<String>);
@@ -126,6 +140,42 @@ pub fn first_entity_with_tag(world: &mut World, tag: &str) -> Option<Entity> {
     query
         .iter(world)
         .find_map(|(entity, tags)| tags.contains(tag).then_some(entity))
+}
+
+/// Returns the authored scene path for `entity`, if it was spawned from a scene descriptor.
+pub fn scene_entity_path(world: &World, entity: Entity) -> Option<&str> {
+    world
+        .get::<SceneEntityPath>(entity)
+        .map(SceneEntityPath::as_str)
+}
+
+/// Returns the entity with the exact authored scene `path`.
+pub fn entity_by_scene_path(world: &mut World, path: &str) -> Option<Entity> {
+    let path = normalize_scene_entity_path(path);
+    let mut query = world.query::<(Entity, &SceneEntityPath)>();
+    query
+        .iter(world)
+        .find_map(|(entity, entity_path)| (entity_path.as_str() == path).then_some(entity))
+}
+
+/// Returns every entity at or below the authored scene `path`.
+///
+/// This is useful for attaching gameplay state to a loaded prefab or scene
+/// subtree without manually traversing `Children`.
+pub fn entities_under_scene_path(world: &mut World, path: &str) -> Vec<Entity> {
+    let path = normalize_scene_entity_path(path);
+    if path.is_empty() {
+        return Vec::new();
+    }
+    let prefix = format!("{path}/");
+    let mut query = world.query::<(Entity, &SceneEntityPath)>();
+    query
+        .iter(world)
+        .filter_map(|(entity, entity_path)| {
+            let entity_path = entity_path.as_str();
+            (entity_path == path || entity_path.starts_with(prefix.as_str())).then_some(entity)
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -805,7 +855,10 @@ fn spawn_scene_descriptor_unchecked(world: &mut World, scene: &SceneDescriptor) 
     scene
         .entities
         .iter()
-        .map(|entity| spawn_scene_entity(world, entity, &prefabs, None, &mut prefab_stack))
+        .enumerate()
+        .map(|(index, entity)| {
+            spawn_scene_entity(world, entity, index, "", &prefabs, None, &mut prefab_stack)
+        })
         .collect()
 }
 
@@ -885,6 +938,8 @@ fn spawn_scene_prefab_unchecked(
     Some(spawn_scene_entity(
         world,
         &descriptor,
+        0,
+        "",
         &prefabs,
         None,
         &mut prefab_stack,
@@ -894,14 +949,18 @@ fn spawn_scene_prefab_unchecked(
 fn spawn_scene_entity(
     world: &mut World,
     descriptor: &SceneEntityDescriptor,
+    index: usize,
+    parent_path: &str,
     prefabs: &HashMap<&str, &ScenePrefabDescriptor>,
     parent: Option<Entity>,
     prefab_stack: &mut Vec<String>,
 ) -> Entity {
     let transform = Transform::from(descriptor.transform);
+    let path = scene_entity_descriptor_path(descriptor, index, parent_path);
     let mut entity_mut = world.spawn((
         TransformComponent::new(transform),
         GlobalTransform::default(),
+        SceneEntityPath(path.clone()),
     ));
 
     if let Some(name) = &descriptor.name {
@@ -1002,7 +1061,15 @@ fn spawn_scene_entity(
                             "",
                             overrides.as_slice(),
                         );
-                        spawn_scene_entity(world, &child, prefabs, Some(entity), prefab_stack);
+                        spawn_scene_entity(
+                            world,
+                            &child,
+                            index,
+                            path.as_str(),
+                            prefabs,
+                            Some(entity),
+                            prefab_stack,
+                        );
                     }
                     let _ = prefab_stack.pop();
                 }
@@ -1010,8 +1077,16 @@ fn spawn_scene_entity(
         }
     }
 
-    for child in &descriptor.children {
-        spawn_scene_entity(world, child, prefabs, Some(entity), prefab_stack);
+    for (index, child) in descriptor.children.iter().enumerate() {
+        spawn_scene_entity(
+            world,
+            child,
+            index,
+            path.as_str(),
+            prefabs,
+            Some(entity),
+            prefab_stack,
+        );
     }
 
     entity
@@ -1066,6 +1141,14 @@ fn prefab_entity_path(
     index: usize,
     parent_path: &str,
 ) -> String {
+    scene_entity_descriptor_path(descriptor, index, parent_path)
+}
+
+fn scene_entity_descriptor_path(
+    descriptor: &SceneEntityDescriptor,
+    index: usize,
+    parent_path: &str,
+) -> String {
     let segment = descriptor
         .name
         .as_deref()
@@ -1078,6 +1161,10 @@ fn prefab_entity_path(
     } else {
         format!("{parent_path}/{segment}")
     }
+}
+
+fn normalize_scene_entity_path(path: &str) -> String {
+    normalize_prefab_override_path(path)
 }
 
 fn normalize_prefab_override_path(path: &str) -> String {
@@ -1519,6 +1606,67 @@ mod tests {
         assert!(entity_has_tag(&world, roots[0], " spawn_point "));
         assert!(!entity_has_tag(&world, roots[2], "enemy"));
         assert!(entities_with_tag(&mut world, "missing").is_empty());
+    }
+
+    #[test]
+    fn scene_entities_spawn_authored_paths_for_hierarchies_and_prefabs() {
+        let scene = prefab_test_scene();
+        let mut world = World::new();
+
+        let roots = spawn_scene_descriptor(&mut world, &scene);
+        let instance = roots[0];
+        let base = entity_by_scene_path(&mut world, "Crate Pair Instance/Crate Base").unwrap();
+        let top =
+            entity_by_scene_path(&mut world, "Crate Pair Instance/Crate Base/Crate Top").unwrap();
+        let marker =
+            entity_by_scene_path(&mut world, " Crate Pair Instance / Instance Marker ").unwrap();
+
+        assert_eq!(
+            scene_entity_path(&world, instance),
+            Some("Crate Pair Instance")
+        );
+        assert_eq!(
+            scene_entity_path(&world, top),
+            Some("Crate Pair Instance/Crate Base/Crate Top")
+        );
+        assert_eq!(
+            entities_under_scene_path(&mut world, "Crate Pair Instance/Crate Base").len(),
+            2
+        );
+        assert_eq!(
+            world.get::<oxide_transform::Parent>(base).unwrap().0,
+            instance
+        );
+        assert_eq!(
+            world.get::<oxide_transform::Parent>(marker).unwrap().0,
+            instance
+        );
+    }
+
+    #[test]
+    fn unnamed_scene_entities_use_index_path_segments() {
+        let scene = SceneDescriptor {
+            dependencies: Vec::new(),
+            materials: Vec::new(),
+            prefabs: Vec::new(),
+            entities: vec![SceneEntityDescriptor {
+                name: None,
+                kind: SceneEntityKind::Empty,
+                children: vec![SceneEntityDescriptor {
+                    name: None,
+                    kind: SceneEntityKind::Empty,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        };
+
+        let mut world = World::new();
+        let roots = spawn_scene_descriptor(&mut world, &scene);
+        let child = entity_by_scene_path(&mut world, "#0/#0").unwrap();
+
+        assert_eq!(scene_entity_path(&world, roots[0]), Some("#0"));
+        assert_eq!(scene_entity_path(&world, child), Some("#0/#0"));
     }
 
     #[test]
