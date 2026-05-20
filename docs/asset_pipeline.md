@@ -158,10 +158,10 @@ Use `request_material_descriptor_load(server, path)` to asynchronously load a
 `.oxmat`, JSON, RON, or TOML material descriptor into
 `MaterialDescriptorAssets`. `DefaultPlugins` installs
 `material_descriptor_asset_system`, which publishes ready descriptors and
-records dependencies for file shaders and texture paths. Non-virtual albedo
-texture paths are loaded into `TextureImageAssets` using the authored texture
-path as a label, which lets the automatic scene renderer bind them through the
-same material texture cache used for glTF image labels. Loaded descriptors are
+records dependencies for file shaders and texture paths. Non-virtual
+albedo/normal/roughness texture paths are loaded into `TextureImageAssets` using
+the authored texture path as a label, which lets renderer systems bind them
+through the same material texture cache used for glTF image labels. Loaded descriptors are
 also registered into `SceneMaterialLibrary` by `MaterialDescriptor::name`, so
 `RenderMaterial::Named("stone".to_string())` can resolve through the automatic
 scene renderer. Entities can also store `MaterialFilter` to render directly from

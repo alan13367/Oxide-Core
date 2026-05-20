@@ -408,11 +408,8 @@ pub fn material_descriptor_asset_system(world: &mut World) {
             Ok((handle, source_path, descriptor)) => {
                 let scene_material = descriptor.clone();
                 if let Some(path) = source_path {
-                    if let Some(texture) =
-                        material_descriptor_albedo_texture_source(&path, &descriptor)
-                    {
-                        texture_requests.push(texture);
-                    }
+                    texture_requests
+                        .extend(material_descriptor_texture_sources(&path, &descriptor));
                 }
                 assets.assets.insert(handle, descriptor);
                 scene_materials.push(scene_material);
@@ -525,19 +522,30 @@ fn resolve_descriptor_dependency(base: Option<&PathBuf>, path: &str) -> PathBuf 
     }
 }
 
-fn material_descriptor_albedo_texture_source(
+fn material_descriptor_texture_sources(
     descriptor_path: &std::path::Path,
     descriptor: &MaterialDescriptor,
-) -> Option<(String, PathBuf)> {
-    let texture = descriptor
-        .albedo_texture
-        .as_ref()
-        .filter(|path| !is_virtual_texture_ref(path))?;
+) -> Vec<(String, PathBuf)> {
     let base = descriptor_path.parent().map(PathBuf::from);
-    Some((
-        texture.clone(),
-        resolve_descriptor_dependency(base.as_ref(), texture),
-    ))
+    let mut textures = Vec::new();
+    for texture in [
+        descriptor.albedo_texture.as_ref(),
+        descriptor.normal_texture.as_ref(),
+        descriptor.roughness_texture.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|path| !is_virtual_texture_ref(path))
+    {
+        let source = (
+            texture.clone(),
+            resolve_descriptor_dependency(base.as_ref(), texture),
+        );
+        if !textures.contains(&source) {
+            textures.push(source);
+        }
+    }
+    textures
 }
 
 fn material_descriptor_asset_error(
@@ -793,12 +801,22 @@ mod tests {
     }
 
     #[test]
-    fn material_descriptor_asset_system_publishes_albedo_texture_images() {
+    fn material_descriptor_asset_system_publishes_material_texture_images() {
         let root = temp_dir("oxide_scene_material_texture_asset");
         let material_path = root.join("textured.oxmat");
-        let texture_path = root.join("albedo.png");
-        write_png_1x1(&texture_path);
-        write_material_with_albedo(&material_path, "Textured", "albedo.png");
+        let albedo_path = root.join("albedo.png");
+        let normal_path = root.join("normal.png");
+        let roughness_path = root.join("roughness.png");
+        write_png_1x1(&albedo_path);
+        write_png_1x1(&normal_path);
+        write_png_1x1(&roughness_path);
+        write_material_with_texture_slots(
+            &material_path,
+            "Textured",
+            "albedo.png",
+            "normal.png",
+            "roughness.png",
+        );
 
         let mut world = World::new();
         world.insert_resource(AssetServerResource::default());
@@ -817,10 +835,18 @@ mod tests {
             {
                 assert_eq!((image.width, image.height), (1, 1));
                 assert_eq!(image.rgba.as_slice(), &[255, 0, 0, 255]);
-                assert!(world
-                    .resource::<AssetServerResource>()
-                    .server
-                    .handle_for_path::<TextureImage>(&texture_path)
+                let texture_assets = world.resource::<TextureImageAssets>();
+                assert!(texture_assets.get_labeled("normal.png").is_some());
+                assert!(texture_assets.get_labeled("roughness.png").is_some());
+                let server = &world.resource::<AssetServerResource>().server;
+                assert!(server
+                    .handle_for_path::<TextureImage>(&albedo_path)
+                    .is_some());
+                assert!(server
+                    .handle_for_path::<TextureImage>(&normal_path)
+                    .is_some());
+                assert!(server
+                    .handle_for_path::<TextureImage>(&roughness_path)
                     .is_some());
                 let _ = fs::remove_dir_all(root);
                 return;
@@ -828,7 +854,7 @@ mod tests {
             std::thread::yield_now();
         }
 
-        panic!("material albedo texture was not published into TextureImageAssets");
+        panic!("material texture slots were not published into TextureImageAssets");
     }
 
     #[test]
@@ -1026,7 +1052,13 @@ mod tests {
         .unwrap();
     }
 
-    fn write_material_with_albedo(path: &std::path::Path, name: &str, albedo: &str) {
+    fn write_material_with_texture_slots(
+        path: &std::path::Path,
+        name: &str,
+        albedo: &str,
+        normal: &str,
+        roughness: &str,
+    ) {
         fs::write(
             path,
             format!(
@@ -1039,7 +1071,9 @@ mod tests {
                         "base_color": [1.0, 1.0, 1.0, 1.0],
                         "shader": {{ "source": "builtin", "shader": "lit" }},
                         "fallback_shader": "lit",
-                        "albedo_texture": "{albedo}"
+                        "albedo_texture": "{albedo}",
+                        "normal_texture": "{normal}",
+                        "roughness_texture": "{roughness}"
                     }}
                 }}"#
             ),
