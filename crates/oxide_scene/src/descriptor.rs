@@ -595,6 +595,7 @@ impl SceneDescriptor {
                     format!("duplicate material name '{}'", material.name),
                 ));
             }
+            validate_scene_material(material, path.as_str(), &mut diagnostics);
         }
 
         for (index, prefab) in self.prefabs.iter().enumerate() {
@@ -914,12 +915,22 @@ pub struct SceneMaterialDescriptor {
     /// Optional `SceneMaterialLibrary` key to use instead of inline shader data.
     #[serde(default, rename = "ref")]
     pub reference: Option<String>,
+    /// Stable material name used when registering top-level scene materials.
     #[serde(default = "default_material_name")]
     pub name: String,
+    /// Built-in shader family used for inline material data.
     #[serde(default)]
     pub shader: SceneBuiltinShader,
+    /// Base material color for top-level materials or per-entity tint for meshes.
     #[serde(default = "default_material_color")]
     pub color: [f32; 4],
+    /// Optional label or path-like reference for the material's albedo texture.
+    ///
+    /// Labels such as `#image_0` resolve against labeled `TextureImageAssets`;
+    /// file-backed textures can be published by material descriptor loading or
+    /// project tooling before the scene renderer prepares the frame.
+    #[serde(default)]
+    pub albedo_texture: Option<String>,
 }
 
 impl Default for SceneMaterialDescriptor {
@@ -929,6 +940,7 @@ impl Default for SceneMaterialDescriptor {
             name: default_material_name(),
             shader: SceneBuiltinShader::Unlit,
             color: default_material_color(),
+            albedo_texture: None,
         }
     }
 }
@@ -943,7 +955,7 @@ impl From<SceneMaterialDescriptor> for RenderMaterial {
             material_type: value.shader.material_type(),
             name: value.name,
             base_color: [1.0, 1.0, 1.0, 1.0],
-            albedo_texture: None,
+            albedo_texture: value.albedo_texture,
         }
     }
 }
@@ -1376,6 +1388,7 @@ fn scene_material_descriptor_from_render_material(
             shader,
             name,
             base_color,
+            albedo_texture,
             ..
         } => {
             let shader = match shader {
@@ -1393,6 +1406,7 @@ fn scene_material_descriptor_from_render_material(
                 name: name.clone(),
                 shader,
                 color: multiply_colors(*base_color, tint),
+                albedo_texture: albedo_texture.clone(),
             })
         }
     }
@@ -1870,6 +1884,10 @@ fn validate_scene_entity(
     validate_entity_tags(descriptor, path.as_str(), diagnostics);
 
     match &descriptor.kind {
+        SceneEntityKind::Mesh { material, .. } => {
+            let material_path = format!("{path}.material");
+            validate_scene_material(material, &material_path, diagnostics);
+        }
         SceneEntityKind::Prefab { id, overrides } => {
             if id.trim().is_empty() {
                 diagnostics.push(SceneValidationDiagnostic::new(
@@ -1923,6 +1941,25 @@ fn validate_scene_entity(
             prefab_stack,
             diagnostics,
         );
+    }
+}
+
+fn validate_scene_material(
+    material: &SceneMaterialDescriptor,
+    path: &str,
+    diagnostics: &mut Vec<SceneValidationDiagnostic>,
+) {
+    if matches!(material.reference.as_deref(), Some(reference) if reference.trim().is_empty()) {
+        diagnostics.push(SceneValidationDiagnostic::new(
+            format!("{path}.ref"),
+            "material references must not be empty",
+        ));
+    }
+    if matches!(material.albedo_texture.as_deref(), Some(texture) if texture.trim().is_empty()) {
+        diagnostics.push(SceneValidationDiagnostic::new(
+            format!("{path}.albedo_texture"),
+            "material albedo textures must not be empty",
+        ));
     }
 }
 
@@ -2002,6 +2039,10 @@ fn validate_prefab_overrides(
                 format!("{path}.overrides[{index}].material"),
                 format!("material overrides require a mesh target '{override_path}'"),
             ));
+        }
+        if let Some(material) = &prefab_override.material {
+            let material_path = format!("{path}.overrides[{index}].material");
+            validate_scene_material(material, &material_path, diagnostics);
         }
     }
 }
@@ -2260,6 +2301,38 @@ mod tests {
                 shader: "Basic".to_string()
             }
         );
+    }
+
+    #[test]
+    fn scene_descriptor_export_preserves_material_albedo_texture() {
+        let mut world = World::new();
+        let entity = world
+            .spawn((
+                TransformComponent::default(),
+                GlobalTransform::default(),
+                RenderMesh::new(
+                    MeshPrimitive::Cube,
+                    RenderMaterial::Builtin {
+                        shader: oxide_renderer::shader::BuiltinShader::Lit,
+                        material_type: oxide_renderer::descriptor::MaterialType::Lit,
+                        name: "crate".to_string(),
+                        base_color: [0.8, 0.7, 0.6, 1.0],
+                        albedo_texture: Some("#crate_albedo".to_string()),
+                    },
+                )
+                .with_tint([0.5, 1.0, 1.0, 1.0]),
+            ))
+            .id();
+
+        let scene = scene_descriptor_from_roots(&world, [entity]).unwrap();
+
+        let SceneEntityKind::Mesh { material, .. } = &scene.entities[0].kind else {
+            panic!("expected exported mesh");
+        };
+        assert_eq!(material.name, "crate");
+        assert_eq!(material.shader, SceneBuiltinShader::Lit);
+        assert_eq!(material.color, [0.4, 0.7, 0.6, 1.0]);
+        assert_eq!(material.albedo_texture.as_deref(), Some("#crate_albedo"));
     }
 
     #[test]
@@ -2964,6 +3037,7 @@ mod tests {
                 name: "materials.crate".to_string(),
                 shader: SceneBuiltinShader::Lit,
                 color: [0.9, 0.7, 0.45, 1.0],
+                albedo_texture: Some("#crate_albedo".to_string()),
                 ..Default::default()
             }],
             prefabs: Vec::new(),
@@ -2988,7 +3062,11 @@ mod tests {
         let library = world.get_resource::<SceneMaterialLibrary>().unwrap();
         assert!(matches!(
             library.get("materials.crate"),
-            Some(RenderMaterial::Builtin { name, .. }) if name == "materials.crate"
+            Some(RenderMaterial::Builtin {
+                name,
+                albedo_texture: Some(texture),
+                ..
+            }) if name == "materials.crate" && texture == "#crate_albedo"
         ));
 
         let mesh = world.get::<RenderMesh>(roots[0]).unwrap();
@@ -3094,6 +3172,67 @@ mod tests {
                 "materials/stone.oxmat".to_string(),
                 "sprites/hud.png".to_string()
             ]
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_scene_descriptor_accepts_textured_scene_materials() {
+        let path = temp_path("textured_scene_material", "oxscene");
+        fs::write(
+            &path,
+            r##"{
+                "format": "oxide.oxscene",
+                "version": 1,
+                "scene": {
+                    "materials": [
+                        {
+                            "name": "crate_lit",
+                            "shader": "lit",
+                            "color": [0.9, 0.7, 0.45, 1.0],
+                            "albedo_texture": "#crate_albedo"
+                        }
+                    ],
+                    "entities": [
+                        {
+                            "name": "Crate",
+                            "type": "mesh",
+                            "primitive": "cube",
+                            "material": {
+                                "ref": "crate_lit",
+                                "color": [0.8, 0.8, 0.8, 1.0]
+                            }
+                        },
+                        {
+                            "name": "Inline Textured",
+                            "type": "mesh",
+                            "primitive": "cube",
+                            "material": {
+                                "name": "inline_unlit",
+                                "shader": "unlit",
+                                "albedo_texture": "#inline_albedo"
+                            }
+                        }
+                    ]
+                }
+            }"##,
+        )
+        .unwrap();
+
+        let scene = load_scene_descriptor(&path).unwrap();
+
+        assert_eq!(
+            scene.materials[0].albedo_texture.as_deref(),
+            Some("#crate_albedo")
+        );
+        let SceneEntityKind::Mesh { material, .. } = &scene.entities[1].kind else {
+            panic!("expected mesh entity");
+        };
+        assert_eq!(material.albedo_texture.as_deref(), Some("#inline_albedo"));
+        let render_material = RenderMaterial::from(material.clone());
+        assert_eq!(
+            render_material.albedo_texture_with_library(None),
+            Some("#inline_albedo")
         );
         let _ = fs::remove_file(path);
     }
@@ -3366,9 +3505,23 @@ mod tests {
                     name: "   ".to_string(),
                     ..Default::default()
                 },
+                SceneMaterialDescriptor {
+                    name: "blank_texture".to_string(),
+                    albedo_texture: Some("   ".to_string()),
+                    ..Default::default()
+                },
             ],
             prefabs: Vec::new(),
-            entities: Vec::new(),
+            entities: vec![SceneEntityDescriptor {
+                kind: SceneEntityKind::Mesh {
+                    primitive: SceneMeshPrimitive::Cube,
+                    material: SceneMaterialDescriptor {
+                        reference: Some(" ".to_string()),
+                        ..Default::default()
+                    },
+                },
+                ..Default::default()
+            }],
         };
 
         let err = scene.validate().unwrap_err();
@@ -3380,6 +3533,14 @@ mod tests {
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.path == "materials[2].name"
                 && diagnostic.message == "material names must not be empty"
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "materials[3].albedo_texture"
+                && diagnostic.message == "material albedo textures must not be empty"
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "entities[0].material.ref"
+                && diagnostic.message == "material references must not be empty"
         }));
     }
 

@@ -91,8 +91,8 @@ The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
   supports disabled cameras, normalized viewports, and scene clear overrides.
 - `TerrainDescriptor` and `SceneWorldDescriptor` describe terrain and blockout
   objects for code-first maps.
-- `SceneMaterialDescriptor` includes a `color` field used by the automatic
-  renderer.
+- `SceneMaterialDescriptor` includes `color` and optional `albedo_texture`
+  fields used by the automatic renderer.
 - `Name`, `Parent`, `Children`, `TransformComponent`, and `GlobalTransform`
   provide scene identity and hierarchy.
 
@@ -126,7 +126,8 @@ existing color target so viewports can be composited.
       {
         "name": "crate_lit",
         "shader": "lit",
-        "color": [0.9, 0.7, 0.45, 1.0]
+        "color": [0.9, 0.7, 0.45, 1.0],
+        "albedo_texture": "#crate_albedo"
       }
     ],
     "prefabs": [
@@ -303,7 +304,8 @@ same `.oxscene` can resolve without Rust setup:
     {
       "name": "enemy_unlit",
       "shader": "unlit",
-      "color": [1.0, 0.4, 0.35, 1.0]
+      "color": [1.0, 0.4, 0.35, 1.0],
+      "albedo_texture": "#enemy_albedo"
     }
   ],
   "entities": []
@@ -325,8 +327,12 @@ loaded `.oxmat` materials through the material `ref` field:
 ```
 
 For top-level scene material declarations, `color` becomes the reusable
-material base color. For mesh entities and prefab overrides, `color` remains the
-per-entity tint even when material shader data is resolved from the library.
+material base color and `albedo_texture` stores the material texture label or
+path-like reference. For mesh entities and prefab overrides, `color` remains
+the per-entity tint even when material shader data is resolved from the
+library. Texture labels such as `#image_0` or `#crate_albedo` resolve against
+`TextureImageAssets`; loaded `.oxmat` descriptors and import tooling can publish
+those images before the scene renderer prepares the frame.
 
 ## Native Sprites
 
