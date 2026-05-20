@@ -148,6 +148,13 @@ impl<T> Assets<T> {
         self.data.get(&handle.id())
     }
 
+    /// Iterates loaded assets with their typed handles.
+    pub fn iter(&self) -> impl Iterator<Item = (Handle<T>, &T)> {
+        self.data
+            .iter()
+            .map(|(id, asset)| (Handle::new(*id), asset))
+    }
+
     pub fn get_mut(&mut self, handle: &Handle<T>) -> Option<&mut T> {
         self.data.get_mut(&handle.id())
     }
@@ -285,6 +292,24 @@ mod tests {
                 kind: AssetChangeKind::Removed
             }]
         );
+    }
+
+    #[test]
+    fn assets_iter_returns_typed_handles_and_values() {
+        let mut allocator = HandleAllocator::new();
+        let first = allocator.allocate::<u32>();
+        let second = allocator.allocate::<u32>();
+        let mut assets = Assets::new();
+
+        assets.insert(first, 7);
+        assets.insert(second, 11);
+
+        let mut entries = assets
+            .iter()
+            .map(|(handle, value)| (handle.id(), *value))
+            .collect::<Vec<_>>();
+        entries.sort_unstable();
+        assert_eq!(entries, vec![(first.id(), 7), (second.id(), 11)]);
     }
 
     #[test]

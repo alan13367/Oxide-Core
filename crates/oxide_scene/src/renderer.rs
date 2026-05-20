@@ -20,8 +20,8 @@ use oxide_renderer::wgpu;
 use oxide_transform::{is_visible, GlobalTransform, TransformComponent};
 
 use crate::{
-    MeshPrimitive, RenderLayers, RenderMaterial, RenderMesh, SceneGizmoLines, SpriteAssets,
-    SpriteBillboard, SpriteDepthMode, SpriteFacing, SpriteId, Terrain,
+    MeshPrimitive, RenderLayers, RenderMaterial, RenderMesh, SceneGizmoLines, SceneMaterialLibrary,
+    SpriteAssets, SpriteBillboard, SpriteDepthMode, SpriteFacing, SpriteId, Terrain,
 };
 
 const SCENE_RENDERER_SHADER: &str = r#"
@@ -285,7 +285,21 @@ impl MaterialMode {
 }
 
 impl MaterialBatchKey {
+    #[cfg(test)]
     fn from_material(material: &RenderMaterial) -> Self {
+        Self::from_material_with_library(material, None)
+    }
+
+    fn from_material_with_library(
+        material: &RenderMaterial,
+        library: Option<&SceneMaterialLibrary>,
+    ) -> Self {
+        if let RenderMaterial::Named(name) = material {
+            if let Some(resolved) = library.and_then(|library| library.get(name)) {
+                return Self::from_material_with_library(resolved, None);
+            }
+        }
+
         match material {
             RenderMaterial::Builtin {
                 shader,
@@ -720,6 +734,7 @@ impl SceneRenderer {
         world: &mut World,
         camera_layers: RenderLayers,
     ) -> (Vec<InstanceBatch>, Vec<SphereInstanceBatch>) {
+        let material_library = world.get_resource::<SceneMaterialLibrary>().cloned();
         let renderables = collect_renderables(world, camera_layers);
         let mut cube_instances = BTreeMap::<MaterialBatchKey, Vec<SceneInstanceRaw>>::new();
         let mut sphere_instances =
@@ -727,7 +742,10 @@ impl SceneRenderer {
 
         for (entity, render_mesh) in renderables {
             let model = entity_model_matrix(world, entity);
-            let material = MaterialBatchKey::from_material(&render_mesh.material);
+            let material = MaterialBatchKey::from_material_with_library(
+                &render_mesh.material,
+                material_library.as_ref(),
+            );
             let instance = SceneInstanceRaw::new(model, render_mesh.tint, material.clone());
             match render_mesh.primitive {
                 MeshPrimitive::Cube => {
@@ -775,6 +793,7 @@ impl SceneRenderer {
         world: &mut World,
         camera_layers: RenderLayers,
     ) -> Vec<TerrainDraw> {
+        let material_library = world.get_resource::<SceneMaterialLibrary>().cloned();
         let terrains = collect_terrains(world, camera_layers);
         let mut draws = Vec::new();
 
@@ -796,7 +815,10 @@ impl SceneRenderer {
             }
 
             let model = entity_model_matrix(world, entity);
-            let material = MaterialBatchKey::from_material(&terrain.material);
+            let material = MaterialBatchKey::from_material_with_library(
+                &terrain.material,
+                material_library.as_ref(),
+            );
             let instance = SceneInstanceRaw::new(model, terrain.tint, material);
             if let Some(instances) = create_instance_batch(device, "Terrain Instances", &[instance])
             {
@@ -1641,6 +1663,30 @@ mod tests {
         let second = MaterialBatchKey::from_material(&RenderMaterial::Named("glass".to_string()));
 
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn material_batch_key_resolves_named_scene_materials() {
+        let mut library = SceneMaterialLibrary::new();
+        library.register(
+            "matte",
+            RenderMaterial::Builtin {
+                shader: BuiltinShader::Unlit,
+                material_type: MaterialType::Unlit,
+                name: "matte".to_string(),
+            },
+        );
+
+        let unresolved =
+            MaterialBatchKey::from_material(&RenderMaterial::Named("matte".to_string()));
+        let resolved = MaterialBatchKey::from_material_with_library(
+            &RenderMaterial::Named("matte".to_string()),
+            Some(&library),
+        );
+
+        assert_eq!(unresolved.mode, MaterialMode::Lit);
+        assert_eq!(resolved.mode, MaterialMode::Unlit);
+        assert_eq!(resolved.identity, "builtin:Unlit:Unlit:matte");
     }
 
     #[test]

@@ -61,6 +61,8 @@ The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
 
 - `SceneDescriptor` is the data format for small native scenes and prefabs.
 - `RenderMesh` describes a primitive, material intent, and tint.
+- `SceneMaterialLibrary` stores reusable named material intents. The automatic
+  renderer resolves `RenderMaterial::Named` through it before batching.
 - `SceneSpriteDescriptor` describes sprite billboard entities inside `.oxscene`
   files by referencing a registered `SpriteId`.
 - `SpriteAssets` stores engine-native RGBA/PNG sprite images by `SpriteId`.
@@ -159,6 +161,31 @@ prefab graphs, and empty sprite IDs with descriptor paths such as
 `entities[0].children[1].id`. Use `SceneDescriptor::validate()` in editor tools
 and `try_spawn_scene_descriptor` / `try_spawn_scene_prefab` when code wants
 structured `SceneValidationError` diagnostics before mutating the world.
+
+## Scene Materials
+
+Code-first scenes can register named material intents once and reference them
+from many renderable entities:
+
+```rust
+let mut materials = SceneMaterialLibrary::new();
+materials.register("enemy_unlit", RenderMaterial::default());
+world.insert_resource(materials);
+
+world.spawn((
+    TransformComponent::default(),
+    RenderMesh::new(
+        MeshPrimitive::Cube,
+        RenderMaterial::Named("enemy_unlit".to_string()),
+    ),
+));
+```
+
+When `DefaultPlugins` loads a `.oxmat` descriptor through
+`request_material_descriptor_load`, the descriptor is also registered into
+`SceneMaterialLibrary` under `MaterialDescriptor::name`. This gives small
+scenes a data-driven material path without forcing gameplay components to hold
+renderer pipelines.
 
 ## Native Sprites
 

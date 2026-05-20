@@ -19,6 +19,8 @@ use oxide_renderer::mesh::Mesh3D;
 #[cfg(feature = "gltf-import")]
 use wgpu::{Device, Queue};
 
+use crate::scene::SceneMaterialLibrary;
+
 pub use oxide_asset::*;
 
 /// ECS resource wrapper for the engine asset server.
@@ -220,14 +222,27 @@ pub fn material_descriptor_asset_system(world: &mut World) {
         return;
     }
 
+    let mut scene_materials = Vec::new();
     let assets = world.resource_mut::<MaterialDescriptorAssets>();
     for result in completed {
         match result {
             Ok((handle, descriptor)) => {
+                let scene_material = descriptor.clone();
                 assets.assets.insert(handle, descriptor);
+                scene_materials.push(scene_material);
             }
             Err(err) => tracing::warn!("Failed to load material descriptor: {err}"),
         }
+    }
+    if scene_materials.is_empty() {
+        return;
+    }
+    if !world.contains_resource::<SceneMaterialLibrary>() {
+        world.insert_resource(SceneMaterialLibrary::default());
+    }
+    let library = world.resource_mut::<SceneMaterialLibrary>();
+    for descriptor in scene_materials {
+        library.register_descriptor(&descriptor);
     }
 }
 
@@ -361,6 +376,39 @@ mod tests {
         assert_eq!(assets.changes()[0].kind, AssetChangeKind::Modified);
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn material_descriptor_asset_system_updates_scene_material_library() {
+        let root = temp_dir("oxide_scene_material_asset");
+        let material_path = root.join("bronze.oxmat");
+        let shader_path = root.join("bronze.wgsl");
+        fs::write(&shader_path, "// shader").unwrap();
+        write_material(&material_path, "Bronze", "bronze.wgsl");
+
+        let mut world = World::new();
+        world.insert_resource(AssetServerResource::default());
+        world.insert_resource(MaterialDescriptorAssets::default());
+        {
+            let server = world.resource_mut::<AssetServerResource>();
+            request_material_descriptor_load(&mut server.server, &material_path);
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            material_descriptor_asset_system(&mut world);
+            if world
+                .get_resource::<SceneMaterialLibrary>()
+                .map(|library| library.contains("Bronze"))
+                .unwrap_or(false)
+            {
+                let _ = fs::remove_dir_all(root);
+                return;
+            }
+            std::thread::yield_now();
+        }
+
+        panic!("scene material library was not updated from material descriptor asset");
     }
 
     fn poll_until_material_named(

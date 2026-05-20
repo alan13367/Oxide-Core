@@ -1,8 +1,10 @@
 //! Mesh renderer component
 
-use oxide_ecs::Component;
+use std::collections::HashMap;
 
-use oxide_renderer::descriptor::MaterialType;
+use oxide_ecs::{Component, Resource};
+
+use oxide_renderer::descriptor::{MaterialDescriptor, MaterialType};
 use oxide_renderer::mesh::Mesh3D;
 use oxide_renderer::shader::BuiltinShader;
 
@@ -110,6 +112,68 @@ impl Default for RenderMaterial {
             material_type: MaterialType::Unlit,
             name: "default_unlit".to_string(),
         }
+    }
+}
+
+impl RenderMaterial {
+    /// Creates a renderer material intent from a loaded material descriptor.
+    pub fn from_descriptor(descriptor: &MaterialDescriptor) -> Self {
+        let shader = match descriptor.material_type {
+            MaterialType::Lit => BuiltinShader::Lit,
+            MaterialType::Unlit => BuiltinShader::Unlit,
+            MaterialType::Basic => BuiltinShader::Basic,
+        };
+        Self::Builtin {
+            shader,
+            material_type: descriptor.material_type,
+            name: descriptor.name.clone(),
+        }
+    }
+}
+
+/// Reusable material intents addressable by `RenderMaterial::Named`.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct SceneMaterialLibrary {
+    materials: HashMap<String, RenderMaterial>,
+}
+
+impl SceneMaterialLibrary {
+    /// Creates an empty scene material library.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Registers a named material intent.
+    pub fn register(&mut self, name: impl Into<String>, material: RenderMaterial) {
+        self.materials.insert(name.into(), material);
+    }
+
+    /// Registers a material descriptor under its descriptor name.
+    pub fn register_descriptor(&mut self, descriptor: &MaterialDescriptor) {
+        self.register(
+            descriptor.name.clone(),
+            RenderMaterial::from_descriptor(descriptor),
+        );
+    }
+
+    /// Returns a registered material by name.
+    pub fn get(&self, name: &str) -> Option<&RenderMaterial> {
+        self.materials.get(name)
+    }
+
+    /// Returns true if a material with `name` is registered.
+    pub fn contains(&self, name: &str) -> bool {
+        self.materials.contains_key(name)
+    }
+
+    /// Returns the number of registered materials.
+    pub fn len(&self) -> usize {
+        self.materials.len()
+    }
+
+    /// Returns true when the library has no registered materials.
+    pub fn is_empty(&self) -> bool {
+        self.materials.is_empty()
     }
 }
 
