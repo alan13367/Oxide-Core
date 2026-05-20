@@ -33,8 +33,69 @@ pub struct CameraRenderView {
     pub order: i32,
     /// Disabled views are ignored by renderers.
     pub is_active: bool,
+    /// Optional normalized viewport rectangle.
+    pub viewport: Option<CameraViewport>,
     /// Optional per-view clear color. `None` uses the renderer default.
     pub clear_color: Option<[f64; 4]>,
+}
+
+/// Normalized camera viewport rectangle.
+///
+/// Values are expressed as fractions of the render target. `[0, 0, 1, 1]`
+/// covers the full target; `[0.75, 0.0, 0.25, 0.25]` draws into the top-right
+/// quarter of the target.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CameraViewport {
+    /// Left edge as a fraction of target width.
+    pub x: f32,
+    /// Top edge as a fraction of target height.
+    pub y: f32,
+    /// Width as a fraction of target width.
+    pub width: f32,
+    /// Height as a fraction of target height.
+    pub height: f32,
+}
+
+impl CameraViewport {
+    /// Creates a normalized viewport rectangle.
+    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+        .clamped()
+    }
+
+    /// Returns a viewport covering the full render target.
+    pub fn full() -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        }
+    }
+
+    /// Returns this viewport clamped to a valid normalized target rectangle.
+    pub fn clamped(self) -> Self {
+        let x = self.x.clamp(0.0, 1.0);
+        let y = self.y.clamp(0.0, 1.0);
+        let max_width = 1.0 - x;
+        let max_height = 1.0 - y;
+        Self {
+            x,
+            y,
+            width: self.width.clamp(0.0, max_width),
+            height: self.height.clamp(0.0, max_height),
+        }
+    }
+
+    /// Returns true when the viewport has drawable area.
+    pub fn is_empty(self) -> bool {
+        self.width <= f32::EPSILON || self.height <= f32::EPSILON
+    }
 }
 
 impl Default for CameraRenderView {
@@ -42,6 +103,7 @@ impl Default for CameraRenderView {
         Self {
             order: 0,
             is_active: true,
+            viewport: None,
             clear_color: None,
         }
     }
@@ -65,6 +127,12 @@ impl CameraRenderView {
             is_active: false,
             ..Default::default()
         }
+    }
+
+    /// Sets the normalized viewport rectangle for this view.
+    pub fn with_viewport(mut self, viewport: CameraViewport) -> Self {
+        self.viewport = Some(viewport.clamped());
+        self
     }
 
     /// Sets a per-view clear color.
@@ -191,10 +259,20 @@ mod tests {
     fn camera_render_view_builders_set_metadata() {
         let view = CameraRenderView::new()
             .with_order(-3)
+            .with_viewport(CameraViewport::new(0.75, -1.0, 0.5, 0.5))
             .with_clear_color([0.1, 0.2, 0.3, 1.0]);
 
         assert_eq!(view.order, -3);
         assert!(view.is_active);
+        assert_eq!(
+            view.viewport,
+            Some(CameraViewport {
+                x: 0.75,
+                y: 0.0,
+                width: 0.25,
+                height: 0.5,
+            })
+        );
         assert_eq!(view.clear_color, Some([0.1, 0.2, 0.3, 1.0]));
         assert!(!CameraRenderView::disabled().is_active);
     }

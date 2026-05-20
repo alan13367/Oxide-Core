@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Quat, Vec2, Vec3};
-use oxide_camera::{CameraBuffer, CameraComponent, CameraRenderView, CameraUniform};
+use oxide_camera::{
+    CameraBuffer, CameraComponent, CameraRenderView, CameraUniform, CameraViewport,
+};
 use oxide_ecs::entity::Entity;
 use oxide_ecs::world::World;
 use oxide_light::LightBuffer;
@@ -433,11 +435,14 @@ pub struct SceneRenderer {
     sprite_index_count: u32,
     sprite_textures: HashMap<SpriteId, SpriteTexture>,
     sprite_batches: Vec<SpriteBatch>,
+    target_width: u32,
+    target_height: u32,
     gizmo_pipeline: wgpu::RenderPipeline,
     gizmo_vertex_buffer: wgpu::Buffer,
     gizmo_vertex_count: u32,
     clear_color: wgpu::Color,
     frame_clear_color: wgpu::Color,
+    frame_viewport: CameraViewport,
     stats: SceneRendererStats,
 }
 
@@ -527,11 +532,14 @@ impl SceneRenderer {
             sprite_index_count,
             sprite_textures: HashMap::new(),
             sprite_batches: Vec::new(),
+            target_width: width,
+            target_height: height,
             gizmo_pipeline,
             gizmo_vertex_buffer,
             gizmo_vertex_count: 0,
             clear_color,
             frame_clear_color: clear_color,
+            frame_viewport: CameraViewport::full(),
             stats: SceneRendererStats::default(),
         }
     }
@@ -556,7 +564,14 @@ impl SceneRenderer {
         self.frame_clear_color = camera
             .and_then(|camera| camera.clear_color)
             .unwrap_or(self.clear_color);
-        self.update_camera(queue, camera, aspect_ratio);
+        self.frame_viewport = camera
+            .and_then(|camera| camera.viewport)
+            .unwrap_or_else(CameraViewport::full);
+        let camera_aspect_ratio = camera
+            .and_then(|camera| camera.viewport)
+            .and_then(|viewport| viewport_aspect_ratio(viewport, aspect_ratio))
+            .unwrap_or(aspect_ratio);
+        self.update_camera(queue, camera, camera_aspect_ratio);
         self.light_buffer.update(device, queue, world);
         let camera_layers = camera.map(|camera| camera.layers).unwrap_or_default();
         self.prepare_instances(device, world, camera_layers);
@@ -593,6 +608,13 @@ impl SceneRenderer {
             multiview_mask: None,
         });
 
+        apply_render_viewport(
+            &mut render_pass,
+            self.frame_viewport,
+            self.target_width,
+            self.target_height,
+        );
+
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.camera_buffer.bind_group, &[]);
         render_pass.set_bind_group(1, &self.light_buffer.bind_group, &[]);
@@ -623,6 +645,8 @@ impl SceneRenderer {
         }
 
         self.depth_texture.resize(device, width, height);
+        self.target_width = width;
+        self.target_height = height;
     }
 
     fn update_camera(
@@ -1266,6 +1290,7 @@ fn collect_sprite_ids(world: &mut World) -> Vec<SpriteId> {
 struct PreparedCameraView {
     camera: CameraComponent,
     layers: RenderLayers,
+    viewport: Option<CameraViewport>,
     clear_color: Option<wgpu::Color>,
 }
 
@@ -1324,10 +1349,47 @@ fn active_camera_view(world: &mut World) -> Option<PreparedCameraView> {
         .map(|(entity, camera, view)| PreparedCameraView {
             camera,
             layers: render_layers(world, entity),
+            viewport: view.viewport,
             clear_color: view
                 .clear_color
                 .map(|[r, g, b, a]| wgpu::Color { r, g, b, a }),
         })
+}
+
+fn viewport_aspect_ratio(viewport: CameraViewport, target_aspect_ratio: f32) -> Option<f32> {
+    if viewport.is_empty() {
+        return None;
+    }
+    Some(target_aspect_ratio * viewport.width / viewport.height)
+}
+
+fn apply_render_viewport<'pass>(
+    render_pass: &mut wgpu::RenderPass<'pass>,
+    viewport: CameraViewport,
+    target_width: u32,
+    target_height: u32,
+) {
+    let viewport = viewport.clamped();
+    if viewport.is_empty() || target_width == 0 || target_height == 0 {
+        return;
+    }
+
+    let x = viewport.x * target_width as f32;
+    let y = viewport.y * target_height as f32;
+    let width = (viewport.width * target_width as f32).max(1.0);
+    let height = (viewport.height * target_height as f32).max(1.0);
+
+    render_pass.set_viewport(x, y, width, height, 0.0, 1.0);
+    let scissor_x = x.floor().clamp(0.0, target_width as f32) as u32;
+    let scissor_y = y.floor().clamp(0.0, target_height as f32) as u32;
+    let scissor_max_x = (x + width).ceil().clamp(0.0, target_width as f32) as u32;
+    let scissor_max_y = (y + height).ceil().clamp(0.0, target_height as f32) as u32;
+    render_pass.set_scissor_rect(
+        scissor_x,
+        scissor_y,
+        scissor_max_x.saturating_sub(scissor_x).max(1),
+        scissor_max_y.saturating_sub(scissor_y).max(1),
+    );
 }
 
 fn render_layers(world: &World, entity: Entity) -> RenderLayers {
@@ -1561,12 +1623,21 @@ mod tests {
             CameraComponent::default(),
             CameraRenderView::new()
                 .with_order(-1)
+                .with_viewport(CameraViewport::new(0.5, 0.0, 0.5, 0.25))
                 .with_clear_color([0.1, 0.2, 0.3, 1.0]),
             RenderLayers::layer(2),
         ));
 
         let camera = active_camera_view(&mut world).expect("active camera");
         assert_eq!(camera.layers, RenderLayers::layer(2));
+        assert_eq!(
+            camera.viewport,
+            Some(CameraViewport::new(0.5, 0.0, 0.5, 0.25))
+        );
+        assert_eq!(
+            viewport_aspect_ratio(camera.viewport.unwrap(), 16.0 / 9.0),
+            Some(32.0 / 9.0)
+        );
         assert_eq!(
             camera.clear_color,
             Some(wgpu::Color {

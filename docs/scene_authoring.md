@@ -71,7 +71,7 @@ The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
 - `RenderLayers` filters meshes, terrain, and sprites against the active
   camera's layer mask. Cameras and renderables default to layer `0`.
 - `CameraRenderView` selects the active camera deterministically by `order`,
-  supports disabled cameras, and can override the scene clear color.
+  supports disabled cameras, normalized viewports, and scene clear overrides.
 - `TerrainDescriptor` and `SceneWorldDescriptor` describe terrain and blockout
   objects for code-first maps.
 - `SceneMaterialDescriptor` includes a `color` field used by the automatic
@@ -89,8 +89,8 @@ Scene entities also support a `visible` field; setting it to `false` spawns
 `Visibility::Hidden` and hides that entity's subtree from the scene renderer
 without despawning it. Add `render_layers` with a raw bit mask when authored
 entities should only render through cameras on matching layers.
-Camera entities also support `order`, `active`, and `clear_color` fields for
-view selection and clear behavior.
+Camera entities also support `order`, `active`, `viewport`, and `clear_color`
+fields for view selection, normalized target rectangles, and clear behavior.
 
 ```json
 {
@@ -130,6 +130,7 @@ view selection and clear behavior.
         "type": "camera",
         "order": -1,
         "active": true,
+        "viewport": [0.75, 0.0, 0.25, 0.25],
         "clear_color": [0.02, 0.03, 0.04, 1.0],
         "render_layers": 1
       }

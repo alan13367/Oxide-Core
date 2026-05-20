@@ -29,7 +29,8 @@ the engine prelude for normal game code.
   first-person weapons, debug-only helpers, editor overlays, or alternate views.
 - Use `CameraRenderView` on camera entities when a game or tool has multiple
   cameras. Lower `order` values are selected first, inactive views are ignored,
-  and `clear_color` overrides the scene renderer's default clear color.
+  `viewport` draws into a normalized target rectangle, and `clear_color`
+  overrides the scene renderer's default clear color.
 - Use `ActionBindings<T>`, `ActionInput<T>`, and
   `sync_action_input_system::<T>` for semantic keyboard/mouse controls such as
   jump, fire, interact, or pause.
@@ -210,6 +211,7 @@ commands.spawn((
     CameraComponent::default(),
     CameraRenderView::new()
         .with_order(-1)
+        .with_viewport(CameraViewport::new(0.75, 0.0, 0.25, 0.25))
         .with_clear_color([0.02, 0.03, 0.04, 1.0]),
     TransformComponent::default(),
     RenderLayers::layer(1),

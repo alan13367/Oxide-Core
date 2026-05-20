@@ -27,7 +27,7 @@ pub use crate::audio::{
 };
 pub use crate::camera::{
     camera_controller_system, CameraBuffer, CameraComponent, CameraController, CameraRenderView,
-    CameraUniform,
+    CameraUniform, CameraViewport,
 };
 pub use crate::diagnostics::{
     frame_diagnostics_system, initialize_diagnostics, Diagnostic, Diagnostics,

@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::Path;
 
 use glam::{Quat, Vec2, Vec3};
-use oxide_camera::{CameraComponent, CameraController, CameraRenderView};
+use oxide_camera::{CameraComponent, CameraController, CameraRenderView, CameraViewport};
 use oxide_ecs::prelude::{Entity, World};
 use oxide_ecs::{Component, Resource};
 use oxide_light::{AmbientLight, DirectionalLight, PointLight};
@@ -81,6 +81,7 @@ impl SceneDescriptor {
                         controller: true,
                         order: 0,
                         active: true,
+                        viewport: None,
                         clear_color: None,
                     },
                     children: Vec::new(),
@@ -255,6 +256,9 @@ pub enum SceneEntityKind {
         /// Disabled cameras stay in the world but are ignored for rendering.
         #[serde(default = "default_visible")]
         active: bool,
+        /// Optional normalized viewport `[x, y, width, height]`.
+        #[serde(default)]
+        viewport: Option<[f32; 4]>,
         /// Optional per-camera clear color used by the automatic renderer.
         #[serde(default)]
         clear_color: Option<[f64; 4]>,
@@ -747,6 +751,7 @@ fn spawn_scene_entity(
             controller,
             order,
             active,
+            viewport,
             clear_color,
         } => {
             let mut camera = CameraComponent::new();
@@ -757,6 +762,8 @@ fn spawn_scene_entity(
                 CameraRenderView {
                     order: *order,
                     is_active: *active,
+                    viewport: viewport
+                        .map(|[x, y, width, height]| CameraViewport::new(x, y, width, height)),
                     clear_color: *clear_color,
                 },
             ));
@@ -1180,6 +1187,7 @@ mod tests {
                     controller: false,
                     order: -5,
                     active: false,
+                    viewport: Some([0.5, 0.0, 0.5, 0.5]),
                     clear_color: Some([0.2, 0.3, 0.4, 1.0]),
                 },
                 ..Default::default()
@@ -1193,6 +1201,7 @@ mod tests {
         let view = world.get::<CameraRenderView>(roots[0]).unwrap();
         assert_eq!(view.order, -5);
         assert!(!view.is_active);
+        assert_eq!(view.viewport, Some(CameraViewport::new(0.5, 0.0, 0.5, 0.5)));
         assert_eq!(view.clear_color, Some([0.2, 0.3, 0.4, 1.0]));
         assert_eq!(
             world.get::<RenderLayers>(roots[0]),
