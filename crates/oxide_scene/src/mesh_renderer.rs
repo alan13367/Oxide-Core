@@ -89,6 +89,11 @@ impl TextureImageAssets {
         self.assets.insert(handle, image);
     }
 
+    /// Associates an additional material-friendly label with an existing texture handle.
+    pub fn associate_label(&mut self, label: impl Into<String>, handle: TextureImageHandle) {
+        self.labels.insert(label.into(), handle);
+    }
+
     /// Returns an image by handle.
     pub fn get(&self, handle: TextureImageHandle) -> Option<&TextureImage> {
         self.assets.get(&handle)

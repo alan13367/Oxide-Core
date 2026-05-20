@@ -16,6 +16,7 @@ use oxide_renderer::descriptor::{
 use oxide_renderer::gltf::{load_gltf, GltfScene};
 use oxide_renderer::material::MaterialPipeline;
 use oxide_renderer::mesh::Mesh3D;
+use oxide_renderer::texture::TextureImage;
 #[cfg(feature = "gltf-import")]
 use wgpu::{Device, Queue};
 
@@ -211,13 +212,14 @@ pub fn material_descriptor_asset_system(world: &mut World) {
         for result in server.server.poll_ready::<MaterialDescriptor>() {
             match result {
                 Ok((handle, descriptor)) => {
+                    let source_path = server.server.asset_path(&handle).map(PathBuf::from);
                     let dependencies = server
                         .server
                         .asset_path(&handle)
                         .map(|path| material_descriptor_dependencies(path, &descriptor))
                         .unwrap_or_default();
                     let _ = server.server.set_asset_dependencies(&handle, dependencies);
-                    completed.push(Ok((handle, descriptor)));
+                    completed.push(Ok((handle, source_path, descriptor)));
                 }
                 Err(err) => completed.push(Err(err)),
             }
@@ -230,16 +232,27 @@ pub fn material_descriptor_asset_system(world: &mut World) {
     }
 
     let mut scene_materials = Vec::new();
+    let mut texture_requests = Vec::new();
     let assets = world.resource_mut::<MaterialDescriptorAssets>();
     for result in completed {
         match result {
-            Ok((handle, descriptor)) => {
+            Ok((handle, source_path, descriptor)) => {
                 let scene_material = descriptor.clone();
+                if let Some(path) = source_path {
+                    if let Some(texture) =
+                        material_descriptor_albedo_texture_source(&path, &descriptor)
+                    {
+                        texture_requests.push(texture);
+                    }
+                }
                 assets.assets.insert(handle, descriptor);
                 scene_materials.push(scene_material);
             }
             Err(err) => tracing::warn!("Failed to load material descriptor: {err}"),
         }
+    }
+    if !texture_requests.is_empty() {
+        publish_material_texture_assets(world, texture_requests);
     }
     if scene_materials.is_empty() {
         return;
@@ -251,6 +264,42 @@ pub fn material_descriptor_asset_system(world: &mut World) {
     for descriptor in scene_materials {
         library.register_descriptor(&descriptor);
     }
+}
+
+fn publish_material_texture_assets(world: &mut World, textures: Vec<(String, PathBuf)>) {
+    if !world.contains_resource::<TextureImageAssets>() {
+        world.insert_resource(TextureImageAssets::default());
+    }
+
+    let mut loaded = Vec::new();
+    for (label, path) in textures {
+        match TextureImage::from_file(&path) {
+            Ok(image) => loaded.push((label, path, image)),
+            Err(err) => tracing::warn!(
+                "Failed to load material texture '{}': {err}",
+                path.display()
+            ),
+        }
+    }
+
+    if loaded.is_empty() {
+        return;
+    }
+
+    let mut texture_assets = world
+        .remove_resource::<TextureImageAssets>()
+        .unwrap_or_default();
+    {
+        let server = world.resource_mut::<AssetServerResource>();
+        for (label, path, image) in loaded {
+            let handle = server
+                .server
+                .register_loaded_path::<TextureImage>(path.clone());
+            texture_assets.insert_labeled(label, handle, image);
+            texture_assets.associate_label(path.display().to_string(), handle);
+        }
+    }
+    world.insert_resource(texture_assets);
 }
 
 /// Returns shader and texture paths that should invalidate a material descriptor.
@@ -305,6 +354,21 @@ fn resolve_descriptor_dependency(base: Option<&PathBuf>, path: &str) -> PathBuf 
     } else {
         path
     }
+}
+
+fn material_descriptor_albedo_texture_source(
+    descriptor_path: &std::path::Path,
+    descriptor: &MaterialDescriptor,
+) -> Option<(String, PathBuf)> {
+    let texture = descriptor
+        .albedo_texture
+        .as_ref()
+        .filter(|path| !is_virtual_texture_ref(path))?;
+    let base = descriptor_path.parent().map(PathBuf::from);
+    Some((
+        texture.clone(),
+        resolve_descriptor_dependency(base.as_ref(), texture),
+    ))
 }
 
 fn material_descriptor_asset_error(
@@ -472,6 +536,45 @@ mod tests {
     }
 
     #[test]
+    fn material_descriptor_asset_system_publishes_albedo_texture_images() {
+        let root = temp_dir("oxide_scene_material_texture_asset");
+        let material_path = root.join("textured.oxmat");
+        let texture_path = root.join("albedo.png");
+        write_png_1x1(&texture_path);
+        write_material_with_albedo(&material_path, "Textured", "albedo.png");
+
+        let mut world = World::new();
+        world.insert_resource(AssetServerResource::default());
+        world.insert_resource(MaterialDescriptorAssets::default());
+        {
+            let server = world.resource_mut::<AssetServerResource>();
+            request_material_descriptor_load(&mut server.server, &material_path);
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            material_descriptor_asset_system(&mut world);
+            if let Some(image) = world
+                .get_resource::<TextureImageAssets>()
+                .and_then(|assets| assets.get_labeled("albedo.png"))
+            {
+                assert_eq!((image.width, image.height), (1, 1));
+                assert_eq!(image.rgba.as_slice(), &[255, 0, 0, 255]);
+                assert!(world
+                    .resource::<AssetServerResource>()
+                    .server
+                    .handle_for_path::<TextureImage>(&texture_path)
+                    .is_some());
+                let _ = fs::remove_dir_all(root);
+                return;
+            }
+            std::thread::yield_now();
+        }
+
+        panic!("material albedo texture was not published into TextureImageAssets");
+    }
+
+    #[test]
     fn native_asset_reload_summary_fans_out_changed_paths() {
         let root = temp_dir("oxide_native_asset_reload");
         let material_path = root.join("stone.oxmat");
@@ -603,6 +706,41 @@ mod tests {
                     }}
                 }}"#
             ),
+        )
+        .unwrap();
+    }
+
+    fn write_material_with_albedo(path: &std::path::Path, name: &str, albedo: &str) {
+        fs::write(
+            path,
+            format!(
+                r#"{{
+                    "format": "oxide.oxmat",
+                    "version": 1,
+                    "material": {{
+                        "name": "{name}",
+                        "material_type": "lit",
+                        "base_color": [1.0, 1.0, 1.0, 1.0],
+                        "shader": {{ "source": "builtin", "shader": "lit" }},
+                        "fallback_shader": "lit",
+                        "albedo_texture": "{albedo}"
+                    }}
+                }}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    fn write_png_1x1(path: &std::path::Path) {
+        fs::write(
+            path,
+            [
+                0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+                0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+                0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78,
+                0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99,
+                0x3d, 0x1d, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+            ],
         )
         .unwrap();
     }

@@ -66,6 +66,26 @@ impl TextureImage {
             rgba,
         })
     }
+
+    /// Loads a CPU-side texture image from a file.
+    #[cfg(feature = "image-import")]
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self, TextureError> {
+        let path = path.as_ref();
+        let path_str = path.display().to_string();
+        let img = image::open(path).map_err(|source| TextureError::ImageLoad {
+            path: path_str,
+            source,
+        })?;
+        let rgba = img.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        Self::from_rgba(width, height, rgba.into_raw())
+    }
+
+    /// Loads a CPU-side texture image from a file.
+    #[cfg(not(feature = "image-import"))]
+    pub fn from_file(_path: impl AsRef<Path>) -> Result<Self, TextureError> {
+        Err(TextureError::ImageImportDisabled)
+    }
 }
 
 /// A GPU texture with its view and sampler.
