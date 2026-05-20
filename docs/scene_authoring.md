@@ -215,6 +215,9 @@ once, use the returned instance ID or recover it from a root with
 `entity_by_scene_path_in_instance(&mut world, instance, "Crate Pair/Crate Base")`
 or `entities_under_scene_path_in_instance(&mut world, instance, "Encounter A")`
 after a scene loads.
+Spawn helpers also populate `SceneInstanceRegistry`; `scene_instance_index`
+returns the cached authored path/tag index for a loaded instance when gameplay
+or editor code needs repeated lookups without scanning the whole world.
 When a loaded copy is no longer needed, call `despawn_scene_instance(&mut world,
 instance)`. It removes entities in that instance and detaches any external
 parents or children that were linked to the scene at runtime.

@@ -327,7 +327,9 @@ roots are normal entities with `TransformComponent`, `GlobalTransform`, and
 `Children`, so gameplay systems and the editor can move or inspect them like any
 other hierarchy root. Use `instance.root()` for single-root prefab workflows and
 `instance.id` with scoped scene queries or `despawn_scene_instance` when managing
-the spawned copy later.
+the spawned copy later. Repeated path/tag lookups can use
+`scene_instance_index(&world, instance.id)` to read the cached
+`SceneInstanceRegistry` entry instead of scanning all scene entities.
 
 `.oxscene` prefab entities can provide `overrides` for named prefab children
 when an instance needs a different child transform, visibility, render layer, or

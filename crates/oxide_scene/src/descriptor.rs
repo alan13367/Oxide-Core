@@ -90,6 +90,101 @@ struct SceneInstanceCounter {
     next: u64,
 }
 
+/// Cached authored-path and tag lookup data for one spawned scene instance.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SceneInstanceIndex {
+    entities: Vec<Entity>,
+    paths: HashMap<String, Entity>,
+    path_entries: Vec<(String, Entity)>,
+    tags: HashMap<String, Vec<Entity>>,
+}
+
+impl SceneInstanceIndex {
+    /// Returns every entity recorded for this scene instance.
+    pub fn entities(&self) -> &[Entity] {
+        &self.entities
+    }
+
+    /// Returns the entity with the exact authored scene path.
+    pub fn entity_by_path(&self, path: &str) -> Option<Entity> {
+        let path = normalize_scene_entity_path(path);
+        self.paths.get(path.as_str()).copied()
+    }
+
+    /// Returns every entity at or below the authored scene path.
+    pub fn entities_under_path(&self, path: &str) -> Vec<Entity> {
+        let path = normalize_scene_entity_path(path);
+        if path.is_empty() {
+            return Vec::new();
+        }
+        let prefix = format!("{path}/");
+        self.path_entries
+            .iter()
+            .filter_map(|(entity_path, entity)| {
+                (entity_path == &path || entity_path.starts_with(prefix.as_str()))
+                    .then_some(*entity)
+            })
+            .collect()
+    }
+
+    /// Returns every entity with `tag` in this scene instance.
+    pub fn entities_with_tag(&self, tag: &str) -> Vec<Entity> {
+        self.tags.get(tag.trim()).cloned().unwrap_or_default()
+    }
+
+    /// Returns the first entity with `tag` in this scene instance.
+    pub fn first_entity_with_tag(&self, tag: &str) -> Option<Entity> {
+        self.tags
+            .get(tag.trim())
+            .and_then(|entities| entities.first().copied())
+    }
+
+    fn insert(&mut self, entity: Entity, path: String, tags: &Tags) {
+        self.entities.push(entity);
+        self.paths.insert(path.clone(), entity);
+        self.path_entries.push((path, entity));
+        for tag in tags.iter() {
+            self.tags.entry(tag.to_string()).or_default().push(entity);
+        }
+    }
+}
+
+/// Registry of spawned scene instances keyed by [`SceneInstanceId`].
+///
+/// The registry is populated by descriptor and prefab spawn helpers and removed
+/// when `despawn_scene_instance` unloads an instance. It avoids full-world scans
+/// for common gameplay/editor lookups by authored path or tag.
+#[derive(Resource, Default)]
+pub struct SceneInstanceRegistry {
+    instances: HashMap<SceneInstanceId, SceneInstanceIndex>,
+}
+
+impl SceneInstanceRegistry {
+    /// Returns the cached lookup index for an instance.
+    pub fn get(&self, instance_id: SceneInstanceId) -> Option<&SceneInstanceIndex> {
+        self.instances.get(&instance_id)
+    }
+
+    /// Returns true when the registry contains an index for `instance_id`.
+    pub fn contains(&self, instance_id: SceneInstanceId) -> bool {
+        self.instances.contains_key(&instance_id)
+    }
+
+    /// Removes an instance index.
+    pub fn remove(&mut self, instance_id: SceneInstanceId) -> Option<SceneInstanceIndex> {
+        self.instances.remove(&instance_id)
+    }
+
+    /// Iterates registered instance indexes.
+    pub fn iter(&self) -> impl Iterator<Item = (SceneInstanceId, &SceneInstanceIndex)> {
+        self.instances.iter().map(|(id, index)| (*id, index))
+    }
+
+    fn insert(&mut self, instance_id: SceneInstanceId, index: SceneInstanceIndex) {
+        self.instances.insert(instance_id, index);
+    }
+}
+
 /// Stable authored labels for gameplay queries, editor filters, and tooling.
 #[derive(Component, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tags(Vec<String>);
@@ -156,6 +251,14 @@ pub fn entities_with_tag_in_instance(
     instance_id: SceneInstanceId,
     tag: &str,
 ) -> Vec<Entity> {
+    if let Some(index) = scene_instance_index(world, instance_id) {
+        return index
+            .entities_with_tag(tag)
+            .into_iter()
+            .filter(|entity| world.contains(*entity))
+            .collect();
+    }
+
     let mut query = world.query::<(Entity, &Tags)>();
     query
         .iter(world)
@@ -184,6 +287,13 @@ pub fn first_entity_with_tag_in_instance(
     instance_id: SceneInstanceId,
     tag: &str,
 ) -> Option<Entity> {
+    if let Some(index) = scene_instance_index(world, instance_id) {
+        return index
+            .entities_with_tag(tag)
+            .into_iter()
+            .find(|entity| world.contains(*entity));
+    }
+
     let mut query = world.query::<(Entity, &Tags)>();
     query.iter(world).find_map(|(entity, tags)| {
         (tags.contains(tag) && scene_instance_id(world, entity) == Some(instance_id))
@@ -222,6 +332,13 @@ pub fn entity_by_scene_path_in_instance(
     instance_id: SceneInstanceId,
     path: &str,
 ) -> Option<Entity> {
+    if let Some(entity) = scene_instance_index(world, instance_id)
+        .and_then(|index| index.entity_by_path(path))
+        .filter(|entity| world.contains(*entity))
+    {
+        return Some(entity);
+    }
+
     let path = normalize_scene_entity_path(path);
     let mut query = world.query::<(Entity, &SceneEntityPath)>();
     query.iter(world).find_map(|(entity, entity_path)| {
@@ -260,6 +377,14 @@ pub fn entities_under_scene_path_in_instance(
     instance_id: SceneInstanceId,
     path: &str,
 ) -> Vec<Entity> {
+    if let Some(index) = scene_instance_index(world, instance_id) {
+        return index
+            .entities_under_path(path)
+            .into_iter()
+            .filter(|entity| world.contains(*entity))
+            .collect();
+    }
+
     let path = normalize_scene_entity_path(path);
     if path.is_empty() {
         return Vec::new();
@@ -279,11 +404,30 @@ pub fn entities_under_scene_path_in_instance(
 
 /// Returns every currently alive entity in `instance_id`.
 pub fn entities_in_scene_instance(world: &mut World, instance_id: SceneInstanceId) -> Vec<Entity> {
+    if let Some(index) = scene_instance_index(world, instance_id) {
+        return index
+            .entities()
+            .iter()
+            .copied()
+            .filter(|entity| world.contains(*entity))
+            .collect();
+    }
+
     let mut query = world.query::<(Entity, &SceneInstanceId)>();
     query
         .iter(world)
         .filter_map(|(entity, id)| (*id == instance_id).then_some(entity))
         .collect()
+}
+
+/// Returns the cached lookup index for a spawned scene instance.
+pub fn scene_instance_index(
+    world: &World,
+    instance_id: SceneInstanceId,
+) -> Option<&SceneInstanceIndex> {
+    world
+        .get_resource::<SceneInstanceRegistry>()
+        .and_then(|registry| registry.get(instance_id))
 }
 
 /// Despawns all entities in `instance_id` and detaches external hierarchy links.
@@ -318,6 +462,9 @@ pub fn despawn_scene_instance(world: &mut World, instance_id: SceneInstanceId) -
         if world.despawn(entity) {
             despawned.push(entity);
         }
+    }
+    if let Some(registry) = world.get_resource_mut::<SceneInstanceRegistry>() {
+        let _ = registry.remove(instance_id);
     }
     despawned
 }
@@ -1323,10 +1470,12 @@ fn spawn_scene_descriptor_unchecked(
     let instance_id = allocate_scene_instance_id(world);
     let prefabs = scene.prefab_lookup();
     let mut prefab_stack = Vec::new();
+    let mut index = SceneInstanceIndex::default();
     let mut context = SceneSpawnContext {
         instance_id,
         prefabs: &prefabs,
         prefab_stack: &mut prefab_stack,
+        index: &mut index,
     };
     let roots = scene
         .entities
@@ -1334,6 +1483,7 @@ fn spawn_scene_descriptor_unchecked(
         .enumerate()
         .map(|(index, entity)| spawn_scene_entity(world, entity, index, "", None, &mut context))
         .collect();
+    register_scene_instance_index(world, instance_id, index);
 
     SpawnedSceneInstance {
         id: instance_id,
@@ -1442,10 +1592,12 @@ fn spawn_scene_prefab_unchecked(
     let instance_id = allocate_scene_instance_id(world);
     let prefabs = scene.prefab_lookup();
     let mut prefab_stack = Vec::new();
+    let mut index = SceneInstanceIndex::default();
     let mut context = SceneSpawnContext {
         instance_id,
         prefabs: &prefabs,
         prefab_stack: &mut prefab_stack,
+        index: &mut index,
     };
     let descriptor = SceneEntityDescriptor {
         name: Some(prefab_id.clone()),
@@ -1458,6 +1610,7 @@ fn spawn_scene_prefab_unchecked(
         ..Default::default()
     };
     let root = spawn_scene_entity(world, &descriptor, 0, "", None, &mut context);
+    register_scene_instance_index(world, instance_id, index);
     Some(SpawnedSceneInstance {
         id: instance_id,
         roots: vec![root],
@@ -1468,6 +1621,20 @@ struct SceneSpawnContext<'a> {
     instance_id: SceneInstanceId,
     prefabs: &'a HashMap<&'a str, &'a ScenePrefabDescriptor>,
     prefab_stack: &'a mut Vec<String>,
+    index: &'a mut SceneInstanceIndex,
+}
+
+fn register_scene_instance_index(
+    world: &mut World,
+    instance_id: SceneInstanceId,
+    index: SceneInstanceIndex,
+) {
+    if !world.contains_resource::<SceneInstanceRegistry>() {
+        world.insert_resource(SceneInstanceRegistry::default());
+    }
+    world
+        .resource_mut::<SceneInstanceRegistry>()
+        .insert(instance_id, index);
 }
 
 fn spawn_scene_entity(
@@ -1501,6 +1668,9 @@ fn spawn_scene_entity(
     }
 
     let entity = entity_mut.id();
+    context
+        .index
+        .insert(entity, path.clone(), &Tags::new(descriptor.tags.clone()));
     if let Some(parent) = parent {
         attach_child(world, parent, entity);
     }
@@ -2521,6 +2691,43 @@ mod tests {
     }
 
     #[test]
+    fn scene_instance_registry_indexes_spawned_paths_and_tags() {
+        let mut scene = prefab_test_scene();
+        scene.entities[0].children[0].tags = vec!["marker".to_string()];
+        let mut world = World::new();
+
+        let instance = spawn_scene_descriptor_instance(&mut world, &scene).unwrap();
+        let index = scene_instance_index(&world, instance.id).unwrap();
+        let base = index
+            .entity_by_path("Crate Pair Instance/Crate Base")
+            .unwrap();
+        let marker = index.first_entity_with_tag("marker").unwrap();
+
+        assert_eq!(index.entities().len(), 4);
+        assert_eq!(
+            scene_entity_path(&world, base),
+            Some("Crate Pair Instance/Crate Base")
+        );
+        assert_eq!(
+            scene_entity_path(&world, marker),
+            Some("Crate Pair Instance/Instance Marker")
+        );
+        assert_eq!(
+            index
+                .entities_under_path("Crate Pair Instance/Crate Base")
+                .len(),
+            2
+        );
+        assert_eq!(
+            entities_with_tag_in_instance(&mut world, instance.id, "marker"),
+            vec![marker]
+        );
+        assert!(world
+            .resource::<SceneInstanceRegistry>()
+            .contains(instance.id));
+    }
+
+    #[test]
     fn despawn_scene_instance_removes_only_matching_instance() {
         let scene = prefab_test_scene();
         let mut world = World::new();
@@ -2544,6 +2751,8 @@ mod tests {
             entities_in_scene_instance(&mut world, second_instance).len(),
             4
         );
+        assert!(scene_instance_index(&world, first_instance).is_none());
+        assert!(scene_instance_index(&world, second_instance).is_some());
     }
 
     #[test]
