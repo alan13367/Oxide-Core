@@ -10,7 +10,9 @@ use oxide_ecs::prelude::{Entity, World};
 use oxide_ecs::{Component, Resource};
 use oxide_light::{AmbientLight, DirectionalLight, PointLight};
 use oxide_math::transform::Transform;
-use oxide_transform::{attach_child, GlobalTransform, TransformComponent, Visibility};
+use oxide_transform::{
+    attach_child, detach_child, Children, GlobalTransform, Parent, TransformComponent, Visibility,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -273,6 +275,51 @@ pub fn entities_under_scene_path_in_instance(
                 .then_some(entity)
         })
         .collect()
+}
+
+/// Returns every currently alive entity in `instance_id`.
+pub fn entities_in_scene_instance(world: &mut World, instance_id: SceneInstanceId) -> Vec<Entity> {
+    let mut query = world.query::<(Entity, &SceneInstanceId)>();
+    query
+        .iter(world)
+        .filter_map(|(entity, id)| (*id == instance_id).then_some(entity))
+        .collect()
+}
+
+/// Despawns all entities in `instance_id` and detaches external hierarchy links.
+///
+/// Entities outside the scene instance are preserved. If an external entity was
+/// parented to a despawned scene entity, it is detached before the scene entity
+/// is removed.
+pub fn despawn_scene_instance(world: &mut World, instance_id: SceneInstanceId) -> Vec<Entity> {
+    let entities = entities_in_scene_instance(world, instance_id);
+    if entities.is_empty() {
+        return Vec::new();
+    }
+
+    for entity in &entities {
+        if let Some(parent) = world.get::<Parent>(*entity).copied() {
+            if !entities.contains(&parent.0) && world.contains(parent.0) {
+                detach_child(world, parent.0, *entity);
+            }
+        }
+
+        if let Some(children) = world.get::<Children>(*entity).cloned() {
+            for child in children.iter() {
+                if !entities.contains(&child) && world.contains(child) {
+                    detach_child(world, *entity, child);
+                }
+            }
+        }
+    }
+
+    let mut despawned = Vec::new();
+    for entity in entities {
+        if world.despawn(entity) {
+            despawned.push(entity);
+        }
+    }
+    despawned
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1838,6 +1885,56 @@ mod tests {
             .len(),
             2
         );
+    }
+
+    #[test]
+    fn despawn_scene_instance_removes_only_matching_instance() {
+        let scene = prefab_test_scene();
+        let mut world = World::new();
+
+        let first_roots = spawn_scene_descriptor(&mut world, &scene);
+        let second_roots = spawn_scene_descriptor(&mut world, &scene);
+        let first_instance = scene_instance_id(&world, first_roots[0]).unwrap();
+        let second_instance = scene_instance_id(&world, second_roots[0]).unwrap();
+
+        let despawned = despawn_scene_instance(&mut world, first_instance);
+
+        assert_eq!(despawned.len(), 4);
+        assert!(despawned.iter().all(|entity| !world.contains(*entity)));
+        assert!(!world.contains(first_roots[0]));
+        assert!(world.contains(second_roots[0]));
+        assert_eq!(
+            entities_in_scene_instance(&mut world, first_instance).len(),
+            0
+        );
+        assert_eq!(
+            entities_in_scene_instance(&mut world, second_instance).len(),
+            4
+        );
+    }
+
+    #[test]
+    fn despawn_scene_instance_detaches_external_hierarchy_links() {
+        let scene = prefab_test_scene();
+        let mut world = World::new();
+        let external_parent = world.reserve_entity();
+        let external_child = world.spawn(TransformComponent::default()).id();
+        let roots = spawn_scene_descriptor(&mut world, &scene);
+        let instance = scene_instance_id(&world, roots[0]).unwrap();
+
+        attach_child(&mut world, external_parent, roots[0]);
+        attach_child(&mut world, roots[0], external_child);
+
+        let despawned = despawn_scene_instance(&mut world, instance);
+
+        assert!(despawned.contains(&roots[0]));
+        assert!(world.contains(external_parent));
+        assert!(world.contains(external_child));
+        assert!(world.get::<Parent>(external_child).is_none());
+        assert!(!world
+            .get::<Children>(external_parent)
+            .map(|children| children.iter().any(|child| child == roots[0]))
+            .unwrap_or(false));
     }
 
     #[test]

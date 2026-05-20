@@ -77,7 +77,9 @@ The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
   scene and prefab spawning. `SceneInstanceId` scopes those paths and tags to
   one spawned copy. Use `entity_by_scene_path_in_instance`,
   `entities_under_scene_path_in_instance`, and `scene_entity_path` when code or
-  tools need stable child lookup such as `Level/Player Spawn`.
+  tools need stable child lookup such as `Level/Player Spawn`. Use
+  `despawn_scene_instance` to unload one spawned copy and detach preserved
+  external hierarchy links.
 - `Tags` stores stable authored labels such as `enemy`, `spawn_point`, or
   `pickup` for gameplay queries and editor/tooling filters. Use
   `entities_with_tag_in_instance`, `first_entity_with_tag_in_instance`, and
@@ -203,6 +205,9 @@ root with `scene_instance_id(&world, root)`, then call
 `entity_by_scene_path_in_instance(&mut world, instance, "Crate Pair/Crate Base")`
 or `entities_under_scene_path_in_instance(&mut world, instance, "Encounter A")`
 after a scene loads.
+When a loaded copy is no longer needed, call `despawn_scene_instance(&mut world,
+instance)`. It removes entities in that instance and detaches any external
+parents or children that were linked to the scene at runtime.
 Prefab override paths use slash-separated entity names, such as
 `"Crate Base/Crate Top"`. Unnamed prefab entities can be addressed by sibling
 index segments such as `"#0/#1"`.

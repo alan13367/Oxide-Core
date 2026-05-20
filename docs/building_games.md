@@ -45,7 +45,8 @@ the engine prelude for normal game code.
   from `.oxscene` data or Rust with per-instance child overrides. Use authored
   scene paths plus `scene_instance_id`, `entity_by_scene_path_in_instance`, and
   `entities_under_scene_path_in_instance` for stable child lookup across
-  repeated scene copies, and entity `tags` plus `entities_with_tag_in_instance`,
+  repeated scene copies. Use `despawn_scene_instance` to unload one copy. Use
+  entity `tags` plus `entities_with_tag_in_instance`,
   `first_entity_with_tag_in_instance`, and `entity_has_tag` when gameplay
   systems need stable labels independent of display names.
 - Use `reload_oxscene_path` or `reload_changed_oxscenes` when development tools
@@ -363,6 +364,8 @@ if let Some(spawn) = first_entity_with_tag_in_instance(&mut world, instance, "pl
 for enemy in entities_with_tag_in_instance(&mut world, instance, "enemy") {
     // Attach AI, health, or runtime state after loading the scene.
 }
+
+let removed_entities = despawn_scene_instance(&mut world, instance);
 ```
 
 During development, native scene descriptors can be reloaded in place:
