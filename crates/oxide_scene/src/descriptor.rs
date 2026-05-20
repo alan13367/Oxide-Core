@@ -970,6 +970,7 @@ impl From<SceneMaterialDescriptor> for RenderMaterial {
 pub enum SceneAlphaMode {
     #[default]
     Opaque,
+    Mask,
     Blend,
 }
 
@@ -977,6 +978,7 @@ impl From<SceneAlphaMode> for oxide_renderer::descriptor::AlphaMode {
     fn from(value: SceneAlphaMode) -> Self {
         match value {
             SceneAlphaMode::Opaque => oxide_renderer::descriptor::AlphaMode::Opaque,
+            SceneAlphaMode::Mask => oxide_renderer::descriptor::AlphaMode::Mask,
             SceneAlphaMode::Blend => oxide_renderer::descriptor::AlphaMode::Blend,
         }
     }
@@ -986,6 +988,7 @@ impl From<oxide_renderer::descriptor::AlphaMode> for SceneAlphaMode {
     fn from(value: oxide_renderer::descriptor::AlphaMode) -> Self {
         match value {
             oxide_renderer::descriptor::AlphaMode::Opaque => SceneAlphaMode::Opaque,
+            oxide_renderer::descriptor::AlphaMode::Mask => SceneAlphaMode::Mask,
             oxide_renderer::descriptor::AlphaMode::Blend => SceneAlphaMode::Blend,
         }
     }
@@ -2351,7 +2354,7 @@ mod tests {
                         material_type: oxide_renderer::descriptor::MaterialType::Lit,
                         name: "crate".to_string(),
                         base_color: [0.8, 0.7, 0.6, 1.0],
-                        alpha_mode: oxide_renderer::descriptor::AlphaMode::Blend,
+                        alpha_mode: oxide_renderer::descriptor::AlphaMode::Mask,
                         albedo_texture: Some("#crate_albedo".to_string()),
                     },
                 )
@@ -2367,8 +2370,29 @@ mod tests {
         assert_eq!(material.name, "crate");
         assert_eq!(material.shader, SceneBuiltinShader::Lit);
         assert_eq!(material.color, [0.4, 0.7, 0.6, 1.0]);
-        assert_eq!(material.alpha_mode, SceneAlphaMode::Blend);
+        assert_eq!(material.alpha_mode, SceneAlphaMode::Mask);
         assert_eq!(material.albedo_texture.as_deref(), Some("#crate_albedo"));
+    }
+
+    #[test]
+    fn scene_alpha_modes_roundtrip_renderer_alpha_modes() {
+        for (scene, renderer) in [
+            (
+                SceneAlphaMode::Opaque,
+                oxide_renderer::descriptor::AlphaMode::Opaque,
+            ),
+            (
+                SceneAlphaMode::Mask,
+                oxide_renderer::descriptor::AlphaMode::Mask,
+            ),
+            (
+                SceneAlphaMode::Blend,
+                oxide_renderer::descriptor::AlphaMode::Blend,
+            ),
+        ] {
+            assert_eq!(oxide_renderer::descriptor::AlphaMode::from(scene), renderer);
+            assert_eq!(SceneAlphaMode::from(renderer), scene);
+        }
     }
 
     #[test]
@@ -3073,7 +3097,7 @@ mod tests {
                 name: "materials.crate".to_string(),
                 shader: SceneBuiltinShader::Lit,
                 color: [0.9, 0.7, 0.45, 1.0],
-                alpha_mode: SceneAlphaMode::Blend,
+                alpha_mode: SceneAlphaMode::Mask,
                 albedo_texture: Some("#crate_albedo".to_string()),
                 ..Default::default()
             }],
@@ -3105,7 +3129,7 @@ mod tests {
                 albedo_texture: Some(texture),
                 ..
             }) if name == "materials.crate"
-                && *alpha_mode == oxide_renderer::descriptor::AlphaMode::Blend
+                && *alpha_mode == oxide_renderer::descriptor::AlphaMode::Mask
                 && texture == "#crate_albedo"
         ));
 
@@ -3229,7 +3253,7 @@ mod tests {
                         {
                             "name": "crate_lit",
                             "shader": "lit",
-                            "alpha_mode": "blend",
+                            "alpha_mode": "mask",
                             "color": [0.9, 0.7, 0.45, 1.0],
                             "albedo_texture": "#crate_albedo"
                         }
@@ -3266,7 +3290,7 @@ mod tests {
             scene.materials[0].albedo_texture.as_deref(),
             Some("#crate_albedo")
         );
-        assert_eq!(scene.materials[0].alpha_mode, SceneAlphaMode::Blend);
+        assert_eq!(scene.materials[0].alpha_mode, SceneAlphaMode::Mask);
         let SceneEntityKind::Mesh { material, .. } = &scene.entities[1].kind else {
             panic!("expected mesh entity");
         };

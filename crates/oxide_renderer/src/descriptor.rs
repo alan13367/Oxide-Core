@@ -23,6 +23,8 @@ pub enum AlphaMode {
     /// Render fully opaque with depth writes enabled.
     #[default]
     Opaque,
+    /// Discard fragments with alpha below a fixed cutoff while keeping depth writes enabled.
+    Mask,
     /// Blend source alpha over the framebuffer with depth writes disabled.
     Blend,
 }
@@ -260,7 +262,7 @@ mod tests {
                     "name": "Wrapped",
                     "material_type": "lit",
                     "base_color": [0.8, 0.7, 0.6, 1.0],
-                    "alpha_mode": "blend",
+                    "alpha_mode": "mask",
                     "shader": { "source": "builtin", "shader": "lit" }
                 }
             }"#,
@@ -271,6 +273,27 @@ mod tests {
         assert_eq!(material.name, "Wrapped");
         assert_eq!(material.material_type, MaterialType::Lit);
         assert_eq!(material.base_color, [0.8, 0.7, 0.6, 1.0]);
+        assert_eq!(material.alpha_mode, AlphaMode::Mask);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_material_descriptor_accepts_alpha_blend_mode() {
+        let path = temp_path("blend_material", "json");
+        fs::write(
+            &path,
+            r#"{
+                "name": "Glass",
+                "material_type": "unlit",
+                "base_color": [1.0, 1.0, 1.0, 0.35],
+                "alpha_mode": "blend",
+                "shader": { "source": "builtin", "shader": "unlit" }
+            }"#,
+        )
+        .unwrap();
+
+        let material = load_material_descriptor(&path).unwrap();
+        assert_eq!(material.name, "Glass");
         assert_eq!(material.alpha_mode, AlphaMode::Blend);
         let _ = fs::remove_file(path);
     }
@@ -311,7 +334,7 @@ mod tests {
             },
             fallback_shader: None,
             base_color: [0.3, 0.4, 0.5, 1.0],
-            alpha_mode: AlphaMode::Blend,
+            alpha_mode: AlphaMode::Mask,
             albedo_texture: None,
             normal_texture: None,
             roughness_texture: None,
@@ -320,7 +343,7 @@ mod tests {
         save_material_descriptor(&path, &material).unwrap();
         let raw = fs::read_to_string(&path).unwrap();
         assert!(raw.contains("\"format\": \"oxide.oxmat\""));
-        assert!(raw.contains("\"alpha_mode\": \"blend\""));
+        assert!(raw.contains("\"alpha_mode\": \"mask\""));
 
         let loaded = load_material_descriptor(&path).unwrap();
         assert_eq!(loaded, material);

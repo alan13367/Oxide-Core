@@ -126,7 +126,7 @@ existing color target so viewports can be composited.
       {
         "name": "crate_lit",
         "shader": "lit",
-        "alpha_mode": "blend",
+        "alpha_mode": "mask",
         "color": [0.9, 0.7, 0.45, 1.0],
         "albedo_texture": "#crate_albedo"
       }
@@ -331,11 +331,12 @@ loaded `.oxmat` materials through the material `ref` field:
 ```
 
 For top-level scene material declarations, `color` becomes the reusable
-material base color, `alpha_mode` controls opaque versus alpha-blended scene
-geometry, and `albedo_texture` stores the material texture label or path-like
-reference. For mesh entities and prefab overrides, `color` remains the
-per-entity tint even when material shader data is resolved from the library.
-Alpha-blended scene geometry is drawn after opaque geometry and sorted
+material base color, `alpha_mode` controls opaque, alpha-masked, or
+alpha-blended scene geometry, and `albedo_texture` stores the material texture
+label or path-like reference. For mesh entities and prefab overrides, `color`
+remains the per-entity tint even when material shader data is resolved from the
+library. Alpha-masked geometry uses depth writes with a fixed 0.5 cutoff, while
+alpha-blended scene geometry is drawn after opaque geometry and sorted
 back-to-front by camera distance per material batch.
 Texture labels such as `#image_0` or `#crate_albedo` resolve against
 `TextureImageAssets`; file paths such as `textures/crate.png` are loaded by the

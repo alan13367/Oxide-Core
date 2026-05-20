@@ -85,6 +85,7 @@ struct VertexOutput {
     @location(3) material_mode: f32,
     @location(4) uv: vec2<f32>,
     @location(5) texture_weight: f32,
+    @location(6) alpha_mode: f32,
 };
 
 @vertex
@@ -100,6 +101,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.material_mode = input.material.x;
     output.uv = input.uv;
     output.texture_weight = input.material.y;
+    output.alpha_mode = input.material.z;
     return output;
 }
 
@@ -108,6 +110,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let sampled = textureSample(material_texture, material_sampler, input.uv);
     let texture_color = mix(vec4<f32>(1.0, 1.0, 1.0, 1.0), sampled, input.texture_weight);
     let surface_color = input.tint * texture_color;
+    if (input.alpha_mode > 0.5 && input.alpha_mode < 1.5 && surface_color.a < 0.5) {
+        discard;
+    }
 
     if (input.material_mode < 0.5) {
         return surface_color;
@@ -274,7 +279,12 @@ impl SceneInstanceRaw {
         Self {
             model: model.to_cols_array_2d(),
             tint,
-            material: [material.mode.shader_value(), has_texture, 0.0, 0.0],
+            material: [
+                material.mode.shader_value(),
+                has_texture,
+                material.alpha_mode.shader_value(),
+                0.0,
+            ],
         }
     }
 }
@@ -299,6 +309,25 @@ impl MaterialMode {
             Self::Unlit => 0.0,
             Self::Lit => 1.0,
         }
+    }
+}
+
+trait AlphaModeShaderExt {
+    fn shader_value(self) -> f32;
+    fn is_transparent_phase(&self) -> bool;
+}
+
+impl AlphaModeShaderExt for AlphaMode {
+    fn shader_value(self) -> f32 {
+        match self {
+            AlphaMode::Opaque => 0.0,
+            AlphaMode::Mask => 1.0,
+            AlphaMode::Blend => 2.0,
+        }
+    }
+
+    fn is_transparent_phase(&self) -> bool {
+        matches!(self, AlphaMode::Blend)
     }
 }
 
@@ -798,6 +827,7 @@ impl SceneRenderer {
             render_pass.set_bind_group(0, &scene_view.camera.bind_group, &[]);
             render_pass.set_bind_group(1, &self.light_buffer.bind_group, &[]);
             self.queue_scene_geometry(&mut render_pass, scene_view, AlphaMode::Opaque);
+            self.queue_scene_geometry(&mut render_pass, scene_view, AlphaMode::Mask);
 
             render_pass.set_pipeline(&self.alpha_pipeline);
             self.queue_scene_geometry(&mut render_pass, scene_view, AlphaMode::Blend);
@@ -813,7 +843,7 @@ impl SceneRenderer {
         scene_view: &'pass SceneViewDraw,
         alpha_mode: AlphaMode,
     ) {
-        if alpha_mode == AlphaMode::Blend {
+        if alpha_mode.is_transparent_phase() {
             self.queue_transparent_scene_geometry(render_pass, scene_view);
             return;
         }
@@ -879,12 +909,12 @@ impl SceneRenderer {
         let mut draws = Vec::new();
 
         for instances in &scene_view.cube_instances {
-            if instances.alpha_mode == AlphaMode::Blend {
+            if instances.alpha_mode.is_transparent_phase() {
                 draws.push(TransparentDraw::Cube(instances));
             }
         }
         for batch in &scene_view.sphere_instances {
-            if batch.instances.alpha_mode != AlphaMode::Blend {
+            if !batch.instances.alpha_mode.is_transparent_phase() {
                 continue;
             }
             if let Some(mesh) = self.sphere_meshes.get(&(batch.segments, batch.rings)) {
@@ -895,12 +925,12 @@ impl SceneRenderer {
             }
         }
         for draw in &scene_view.mesh_handle_draws {
-            if draw.instances.alpha_mode == AlphaMode::Blend {
+            if draw.instances.alpha_mode.is_transparent_phase() {
                 draws.push(TransparentDraw::Mesh(draw));
             }
         }
         for terrain in &scene_view.terrain_draws {
-            if terrain.instances.alpha_mode != AlphaMode::Blend {
+            if !terrain.instances.alpha_mode.is_transparent_phase() {
                 continue;
             }
             if let Some(entry) = self.terrain_meshes.get(&terrain.entity) {
@@ -2287,16 +2317,20 @@ mod tests {
         let material = RenderMaterial::Builtin {
             shader: BuiltinShader::Unlit,
             material_type: MaterialType::Unlit,
-            name: "glass".to_string(),
+            name: "leaf".to_string(),
             base_color: [1.0, 1.0, 1.0, 0.5],
-            alpha_mode: AlphaMode::Blend,
+            alpha_mode: AlphaMode::Mask,
             albedo_texture: None,
         };
 
         let key = MaterialBatchKey::from_material(&material);
+        let instance = SceneInstanceRaw::new(Mat4::IDENTITY, [1.0; 4], key.clone());
 
-        assert_eq!(key.alpha_mode, AlphaMode::Blend);
-        assert!(key.identity.contains(":Blend:"));
+        assert_eq!(key.alpha_mode, AlphaMode::Mask);
+        assert!(key.identity.contains(":Mask:"));
+        assert_eq!(instance.material[2], AlphaMode::Mask.shader_value());
+        assert!(!AlphaMode::Mask.is_transparent_phase());
+        assert!(AlphaMode::Blend.is_transparent_phase());
     }
 
     #[test]

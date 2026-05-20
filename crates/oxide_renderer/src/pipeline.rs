@@ -253,18 +253,18 @@ pub fn create_unlit_pipeline_with_alpha(
 
 fn blend_state(alpha_mode: AlphaMode) -> Option<BlendState> {
     match alpha_mode {
-        AlphaMode::Opaque => None,
+        AlphaMode::Opaque | AlphaMode::Mask => None,
         AlphaMode::Blend => Some(BlendState::ALPHA_BLENDING),
     }
 }
 
 fn depth_write_enabled(alpha_mode: AlphaMode) -> bool {
-    matches!(alpha_mode, AlphaMode::Opaque)
+    matches!(alpha_mode, AlphaMode::Opaque | AlphaMode::Mask)
 }
 
 fn depth_compare(alpha_mode: AlphaMode) -> CompareFunction {
     match alpha_mode {
-        AlphaMode::Opaque => CompareFunction::Less,
+        AlphaMode::Opaque | AlphaMode::Mask => CompareFunction::Less,
         AlphaMode::Blend => CompareFunction::LessEqual,
     }
 }

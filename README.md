@@ -542,7 +542,7 @@ Current physics runtime highlights include:
 - Use built-in shaders through `BuiltinShader` (`basic`, `lit`, `unlit`, `sky_gradient`, `sprite_ui`, `fallback`)
 - Load custom shaders through `ShaderSource::File` or `ShaderSource::WgslOwned`
 - Build pipelines through `MaterialPipeline` with optional fallback behavior
-- Load descriptor-driven materials from files via `load_material_descriptor(...)` (supports legacy JSON/RON/TOML plus versioned `.oxmat`, including material `base_color`, `alpha_mode`, and albedo texture references)
+- Load descriptor-driven materials from files via `load_material_descriptor(...)` (supports legacy JSON/RON/TOML plus versioned `.oxmat`, including material `base_color`, `alpha_mode` values `opaque`/`mask`/`blend`, and albedo texture references)
 - Load material descriptors asynchronously with `request_material_descriptor_load(...)`; `DefaultPlugins` publishes ready descriptors into `MaterialDescriptorAssets`, registers them in `SceneMaterialLibrary` by descriptor name/base color, tracks shader/texture dependencies for in-place reloads, publishes albedo texture files into `TextureImageAssets`, and lets `MaterialFilter` render directly from descriptor handles
 
 ### Hot-Reloading
