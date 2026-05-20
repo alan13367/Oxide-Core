@@ -335,6 +335,8 @@ material base color, `alpha_mode` controls opaque versus alpha-blended scene
 geometry, and `albedo_texture` stores the material texture label or path-like
 reference. For mesh entities and prefab overrides, `color` remains the
 per-entity tint even when material shader data is resolved from the library.
+Alpha-blended scene geometry is drawn after opaque geometry and sorted
+back-to-front by camera distance per material batch.
 Texture labels such as `#image_0` or `#crate_albedo` resolve against
 `TextureImageAssets`; file paths such as `textures/crate.png` are loaded by the
 native scene asset pipeline and tracked as scene dependencies. Loaded `.oxmat`

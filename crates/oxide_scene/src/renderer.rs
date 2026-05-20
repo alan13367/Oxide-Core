@@ -365,6 +365,7 @@ struct InstanceBatch {
     buffer: wgpu::Buffer,
     count: u32,
     alpha_mode: AlphaMode,
+    sort_depth: f32,
     material_texture: Option<wgpu::BindGroup>,
 }
 
@@ -477,6 +478,39 @@ struct MeshHandleDraw {
     index_buffer: wgpu::Buffer,
     index_count: u32,
     instances: InstanceBatch,
+}
+
+enum TransparentDraw<'a> {
+    Cube(&'a InstanceBatch),
+    Sphere {
+        instances: &'a InstanceBatch,
+        mesh: &'a Mesh3D,
+    },
+    Mesh(&'a MeshHandleDraw),
+    Terrain {
+        instances: &'a InstanceBatch,
+        mesh: &'a Mesh3D,
+    },
+}
+
+impl TransparentDraw<'_> {
+    fn sort_depth(&self) -> f32 {
+        match self {
+            Self::Cube(instances)
+            | Self::Sphere { instances, .. }
+            | Self::Terrain { instances, .. } => instances.sort_depth,
+            Self::Mesh(draw) => draw.instances.sort_depth,
+        }
+    }
+
+    fn kind_order(&self) -> u8 {
+        match self {
+            Self::Cube(_) => 0,
+            Self::Sphere { .. } => 1,
+            Self::Mesh(_) => 2,
+            Self::Terrain { .. } => 3,
+        }
+    }
 }
 
 struct ViewCameraBinding {
@@ -779,6 +813,11 @@ impl SceneRenderer {
         scene_view: &'pass SceneViewDraw,
         alpha_mode: AlphaMode,
     ) {
+        if alpha_mode == AlphaMode::Blend {
+            self.queue_transparent_scene_geometry(render_pass, scene_view);
+            return;
+        }
+
         for instances in &scene_view.cube_instances {
             if instances.alpha_mode != alpha_mode {
                 continue;
@@ -832,6 +871,91 @@ impl SceneRenderer {
         }
     }
 
+    fn queue_transparent_scene_geometry<'pass>(
+        &'pass self,
+        render_pass: &mut wgpu::RenderPass<'pass>,
+        scene_view: &'pass SceneViewDraw,
+    ) {
+        let mut draws = Vec::new();
+
+        for instances in &scene_view.cube_instances {
+            if instances.alpha_mode == AlphaMode::Blend {
+                draws.push(TransparentDraw::Cube(instances));
+            }
+        }
+        for batch in &scene_view.sphere_instances {
+            if batch.instances.alpha_mode != AlphaMode::Blend {
+                continue;
+            }
+            if let Some(mesh) = self.sphere_meshes.get(&(batch.segments, batch.rings)) {
+                draws.push(TransparentDraw::Sphere {
+                    instances: &batch.instances,
+                    mesh,
+                });
+            }
+        }
+        for draw in &scene_view.mesh_handle_draws {
+            if draw.instances.alpha_mode == AlphaMode::Blend {
+                draws.push(TransparentDraw::Mesh(draw));
+            }
+        }
+        for terrain in &scene_view.terrain_draws {
+            if terrain.instances.alpha_mode != AlphaMode::Blend {
+                continue;
+            }
+            if let Some(entry) = self.terrain_meshes.get(&terrain.entity) {
+                draws.push(TransparentDraw::Terrain {
+                    instances: &terrain.instances,
+                    mesh: &entry.mesh,
+                });
+            }
+        }
+
+        draws.sort_by(|left, right| {
+            right
+                .sort_depth()
+                .total_cmp(&left.sort_depth())
+                .then_with(|| left.kind_order().cmp(&right.kind_order()))
+        });
+
+        for draw in draws {
+            match draw {
+                TransparentDraw::Cube(instances) => {
+                    set_material_texture(
+                        render_pass,
+                        &self.fallback_material_texture.bind_group,
+                        instances,
+                    );
+                    draw_mesh_batch(render_pass, &self.cube_mesh, instances);
+                }
+                TransparentDraw::Sphere { instances, mesh } => {
+                    set_material_texture(
+                        render_pass,
+                        &self.fallback_material_texture.bind_group,
+                        instances,
+                    );
+                    draw_mesh_batch(render_pass, mesh, instances);
+                }
+                TransparentDraw::Mesh(draw) => {
+                    set_material_texture(
+                        render_pass,
+                        &self.fallback_material_texture.bind_group,
+                        &draw.instances,
+                    );
+                    draw_prepared_mesh_batch(render_pass, draw);
+                }
+                TransparentDraw::Terrain { instances, mesh } => {
+                    set_material_texture(
+                        render_pass,
+                        &self.fallback_material_texture.bind_group,
+                        instances,
+                    );
+                    draw_mesh_batch(render_pass, mesh, instances);
+                }
+            }
+        }
+    }
+
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         if width == 0 || height == 0 {
             return;
@@ -861,9 +985,11 @@ impl SceneRenderer {
             aspect_ratio,
         );
         let (cube_instances, sphere_instances) =
-            self.prepare_instances(device, world, camera.layers);
-        let mesh_handle_draws = self.prepare_mesh_handle_draws(device, world, camera.layers);
-        let terrain_draws = self.prepare_terrain(device, world, camera.layers);
+            self.prepare_instances(device, world, camera.layers, camera.camera.0.position);
+        let mesh_handle_draws =
+            self.prepare_mesh_handle_draws(device, world, camera.layers, camera.camera.0.position);
+        let terrain_draws =
+            self.prepare_terrain(device, world, camera.layers, camera.camera.0.position);
         let sprite_batches = self.prepare_sprites(device, world, camera);
 
         SceneViewDraw {
@@ -883,6 +1009,7 @@ impl SceneRenderer {
         device: &wgpu::Device,
         world: &mut World,
         camera_layers: RenderLayers,
+        camera_position: Vec3,
     ) -> (Vec<InstanceBatch>, Vec<SphereInstanceBatch>) {
         let material_library = world.get_resource::<SceneMaterialLibrary>().cloned();
         let renderables = collect_renderables(world, camera_layers);
@@ -926,6 +1053,7 @@ impl SceneRenderer {
                     "Scene Cube Instances",
                     instances,
                     material.alpha_mode,
+                    batch_sort_depth(instances, camera_position),
                     self.material_bind_group_for(material),
                 )
             })
@@ -941,6 +1069,7 @@ impl SceneRenderer {
                 "Scene Sphere Instances",
                 &instances,
                 material.alpha_mode,
+                batch_sort_depth(&instances, camera_position),
                 self.material_bind_group_for(&material),
             ) {
                 sphere_batches.push(SphereInstanceBatch {
@@ -959,6 +1088,7 @@ impl SceneRenderer {
         device: &wgpu::Device,
         world: &mut World,
         camera_layers: RenderLayers,
+        camera_position: Vec3,
     ) -> Vec<MeshHandleDraw> {
         let material_library = world.get_resource::<SceneMaterialLibrary>().cloned();
         let renderables = collect_mesh_filter_renderables(world, camera_layers);
@@ -1002,6 +1132,7 @@ impl SceneRenderer {
                 "Scene Mesh Handle Instances",
                 &instances,
                 material.alpha_mode,
+                batch_sort_depth(&instances, camera_position),
                 self.material_bind_group_for(&material),
             ) {
                 draws.push(MeshHandleDraw {
@@ -1021,6 +1152,7 @@ impl SceneRenderer {
         device: &wgpu::Device,
         world: &mut World,
         camera_layers: RenderLayers,
+        camera_position: Vec3,
     ) -> Vec<TerrainDraw> {
         let material_library = world.get_resource::<SceneMaterialLibrary>().cloned();
         let terrains = collect_terrains(world, camera_layers);
@@ -1060,6 +1192,7 @@ impl SceneRenderer {
                 "Terrain Instances",
                 &[instance],
                 alpha_mode,
+                batch_sort_depth(&[instance], camera_position),
                 material_texture,
             ) {
                 draws.push(TerrainDraw { entity, instances });
@@ -1641,6 +1774,7 @@ fn create_instance_batch<T: Pod>(
         buffer,
         count: instances.len() as u32,
         alpha_mode: AlphaMode::Opaque,
+        sort_depth: 0.0,
         material_texture: None,
     })
 }
@@ -1650,13 +1784,30 @@ fn create_material_instance_batch(
     label: &str,
     instances: &[SceneInstanceRaw],
     alpha_mode: AlphaMode,
+    sort_depth: f32,
     material_texture: Option<wgpu::BindGroup>,
 ) -> Option<InstanceBatch> {
     create_instance_batch(device, label, instances).map(|mut batch| {
         batch.alpha_mode = alpha_mode;
+        batch.sort_depth = sort_depth;
         batch.material_texture = material_texture;
         batch
     })
+}
+
+fn batch_sort_depth(instances: &[SceneInstanceRaw], camera_position: Vec3) -> f32 {
+    instances
+        .iter()
+        .map(|instance| instance_world_position(instance).distance_squared(camera_position))
+        .fold(0.0, f32::max)
+}
+
+fn instance_world_position(instance: &SceneInstanceRaw) -> Vec3 {
+    Vec3::new(
+        instance.model[3][0],
+        instance.model[3][1],
+        instance.model[3][2],
+    )
 }
 
 fn create_view_camera_binding(
@@ -2146,6 +2297,23 @@ mod tests {
 
         assert_eq!(key.alpha_mode, AlphaMode::Blend);
         assert!(key.identity.contains(":Blend:"));
+    }
+
+    #[test]
+    fn transparent_batch_sort_depth_uses_farthest_instance() {
+        let near = SceneInstanceRaw::new(
+            Mat4::from_translation(Vec3::new(0.0, 0.0, 2.0)),
+            [1.0; 4],
+            MaterialBatchKey::from_material(&RenderMaterial::default()),
+        );
+        let far = SceneInstanceRaw::new(
+            Mat4::from_translation(Vec3::new(0.0, 0.0, 5.0)),
+            [1.0; 4],
+            MaterialBatchKey::from_material(&RenderMaterial::default()),
+        );
+
+        assert_eq!(instance_world_position(&near), Vec3::new(0.0, 0.0, 2.0));
+        assert_eq!(batch_sort_depth(&[near, far], Vec3::ZERO), 25.0);
     }
 
     #[test]
