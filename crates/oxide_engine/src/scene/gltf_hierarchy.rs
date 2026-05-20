@@ -5,16 +5,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::asset::{
-    load_gltf_async, AssetServerResource, GltfSceneAssets, Handle, MaterialDescriptorAssets,
-    MaterialDescriptorHandle, MaterialFilter, MeshCache, MeshFilter, MeshHandle,
-    TextureImageAssets, TextureImageHandle,
+    load_gltf_async, reload_gltf_async, AssetServerResource, GltfSceneAssets, Handle,
+    MaterialDescriptorAssets, MaterialDescriptorHandle, MaterialFilter, MeshCache, MeshFilter,
+    MeshHandle, TextureImageAssets, TextureImageHandle,
 };
 use crate::scene::{MeshPrimitive, RenderMaterial, RenderMesh, SceneMaterialLibrary};
 use oxide_ecs::entity::Entity;
 use oxide_ecs::world::World;
 use oxide_ecs::{Component, Resource};
 use oxide_renderer::gltf::{GltfNode, GltfScene};
-use oxide_transform::{attach_child, GlobalTransform, TransformComponent};
+use oxide_transform::{
+    attach_child, detach_child, Children, GlobalTransform, Parent, TransformComponent,
+};
 
 use oxide_math::transform::Transform;
 use wgpu::{Device, Queue};
@@ -29,6 +31,12 @@ pub struct GltfMeshRef {
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GltfMaterialRef {
     pub material_index: usize,
+}
+
+/// Component tagging entities spawned from a loaded glTF scene handle.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GltfSceneInstance {
+    pub scene: Handle<GltfScene>,
 }
 
 /// Resource containing scene handles waiting to be spawned into ECS.
@@ -92,10 +100,40 @@ pub fn spawn_gltf_scene_hierarchy_with_assets(
     mesh_handles: Option<&[MeshHandle]>,
     material_handles: Option<&[MaterialDescriptorHandle]>,
 ) -> Vec<Entity> {
+    spawn_gltf_scene_hierarchy_inner(world, scene, mesh_handles, material_handles, None)
+}
+
+fn spawn_gltf_scene_hierarchy_for_handle(
+    world: &mut World,
+    handle: Handle<GltfScene>,
+    scene: &GltfScene,
+    mesh_handles: Option<&[MeshHandle]>,
+    material_handles: Option<&[MaterialDescriptorHandle]>,
+) -> Vec<Entity> {
+    spawn_gltf_scene_hierarchy_inner(world, scene, mesh_handles, material_handles, Some(handle))
+}
+
+fn spawn_gltf_scene_hierarchy_inner(
+    world: &mut World,
+    scene: &GltfScene,
+    mesh_handles: Option<&[MeshHandle]>,
+    material_handles: Option<&[MaterialDescriptorHandle]>,
+    scene_handle: Option<Handle<GltfScene>>,
+) -> Vec<Entity> {
     scene
         .nodes
         .iter()
-        .map(|node| spawn_gltf_node(world, scene, node, None, mesh_handles, material_handles))
+        .map(|node| {
+            spawn_gltf_node(
+                world,
+                scene,
+                node,
+                None,
+                mesh_handles,
+                material_handles,
+                scene_handle,
+            )
+        })
         .collect()
 }
 
@@ -106,6 +144,7 @@ fn spawn_gltf_node(
     parent: Option<Entity>,
     mesh_handles: Option<&[MeshHandle]>,
     material_handles: Option<&[MaterialDescriptorHandle]>,
+    scene_handle: Option<Handle<GltfScene>>,
 ) -> Entity {
     let mut entity_builder = world.spawn((
         TransformComponent::new(Transform {
@@ -115,6 +154,10 @@ fn spawn_gltf_node(
         }),
         GlobalTransform::default(),
     ));
+
+    if let Some(scene) = scene_handle {
+        entity_builder.insert(GltfSceneInstance { scene });
+    }
 
     if let Some(mesh_index) = node.mesh_index {
         entity_builder.insert(GltfMeshRef { mesh_index });
@@ -157,6 +200,7 @@ fn spawn_gltf_node(
             Some(entity),
             mesh_handles,
             material_handles,
+            scene_handle,
         );
     }
 
@@ -203,6 +247,76 @@ pub fn request_gltf_scene_spawn(
     };
     world.resource_mut::<PendingGltfSceneSpawns>().queue(handle);
     handle
+}
+
+/// Starts an in-place reload for a known glTF scene path and queues a respawn.
+pub fn reload_gltf_scene_path(
+    world: &mut World,
+    device: Arc<Device>,
+    queue: Arc<Queue>,
+    path: impl Into<PathBuf>,
+) -> Option<Handle<GltfScene>> {
+    if !world.contains_resource::<AssetServerResource>() {
+        return None;
+    }
+    if !world.contains_resource::<PendingGltfSceneSpawns>() {
+        world.insert_resource(PendingGltfSceneSpawns::default());
+    }
+    if !world.contains_resource::<GltfSceneAssets>() {
+        world.insert_resource(GltfSceneAssets::default());
+    }
+
+    let handle = {
+        let server = world.resource_mut::<AssetServerResource>();
+        reload_gltf_async(&mut server.server, device, queue, path)?
+    };
+    world.resource_mut::<PendingGltfSceneSpawns>().queue(handle);
+    Some(handle)
+}
+
+/// Reloads glTF scenes whose source paths match changed files.
+pub fn reload_changed_gltf_scenes<I, P>(
+    world: &mut World,
+    device: Arc<Device>,
+    queue: Arc<Queue>,
+    changed_paths: I,
+) -> Vec<Handle<GltfScene>>
+where
+    I: IntoIterator<Item = P>,
+    P: Into<PathBuf>,
+{
+    if !world.contains_resource::<AssetServerResource>() {
+        return Vec::new();
+    }
+
+    let reload_paths = {
+        let server = world.resource::<AssetServerResource>();
+        let mut reload_paths = Vec::new();
+        for changed_path in changed_paths {
+            for handle in server
+                .server
+                .handles_for_changed_path::<GltfScene>(changed_path.into())
+            {
+                if let Some(path) = server.server.asset_path(&handle) {
+                    let path = path.to_path_buf();
+                    if !reload_paths.contains(&path) {
+                        reload_paths.push(path);
+                    }
+                }
+            }
+        }
+        reload_paths
+    };
+
+    let mut reloaded = Vec::new();
+    for path in reload_paths {
+        if let Some(handle) = reload_gltf_scene_path(world, device.clone(), queue.clone(), path) {
+            if !reloaded.contains(&handle) {
+                reloaded.push(handle);
+            }
+        }
+    }
+    reloaded
 }
 
 /// Returns and removes spawned roots for a resolved scene handle.
@@ -318,8 +432,10 @@ pub fn gltf_scene_spawn_system(world: &mut World) {
                 .handles_by_scene
                 .get(&handle.id())
                 .cloned();
-            let roots = spawn_gltf_scene_hierarchy_with_assets(
+            let _ = despawn_gltf_scene_entities(world, handle);
+            let roots = spawn_gltf_scene_hierarchy_for_handle(
                 world,
+                handle,
                 &scene,
                 mesh_handles.as_deref(),
                 material_handles.as_deref(),
@@ -463,6 +579,44 @@ fn register_gltf_scene_materials(
     material_handles
 }
 
+fn despawn_gltf_scene_entities(world: &mut World, handle: Handle<GltfScene>) -> Vec<Entity> {
+    let entities = {
+        let mut query = world.query::<(Entity, &GltfSceneInstance)>();
+        query
+            .iter(world)
+            .filter_map(|(entity, instance)| (instance.scene == handle).then_some(entity))
+            .collect::<Vec<_>>()
+    };
+
+    if entities.is_empty() {
+        return Vec::new();
+    }
+
+    for entity in &entities {
+        if let Some(parent) = world.get::<Parent>(*entity).copied() {
+            if !entities.contains(&parent.0) && world.contains(parent.0) {
+                detach_child(world, parent.0, *entity);
+            }
+        }
+
+        if let Some(children) = world.get::<Children>(*entity).cloned() {
+            for child in children.iter() {
+                if !entities.contains(&child) && world.contains(child) {
+                    detach_child(world, *entity, child);
+                }
+            }
+        }
+    }
+
+    let mut despawned = Vec::new();
+    for entity in entities {
+        if world.despawn(entity) {
+            despawned.push(entity);
+        }
+    }
+    despawned
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -484,6 +638,23 @@ mod tests {
             albedo_texture: None,
             normal_texture: None,
             roughness_texture: None,
+        }
+    }
+
+    fn single_node_scene(name: &str, translation: Vec3) -> GltfScene {
+        GltfScene {
+            meshes: Vec::new(),
+            materials: Vec::new(),
+            images: Vec::new(),
+            mesh_material_indices: Vec::new(),
+            nodes: vec![GltfNode {
+                name: Some(name.to_string()),
+                mesh_index: None,
+                translation,
+                rotation: Quat::IDENTITY,
+                scale: Vec3::ONE,
+                children: Vec::new(),
+            }],
         }
     }
 
@@ -648,6 +819,78 @@ mod tests {
             take_spawned_scene_roots(&mut world, handle).expect("scene should have spawned");
         assert_eq!(spawned_roots.len(), 1);
         assert!(world.contains(spawned_roots[0]));
+        assert_eq!(
+            world
+                .get::<GltfSceneInstance>(spawned_roots[0])
+                .map(|instance| instance.scene),
+            Some(handle)
+        );
+    }
+
+    #[test]
+    fn queued_gltf_scene_respawn_replaces_previous_handle_entities() {
+        let mut world = World::new();
+        world.insert_resource(AssetServerResource::default());
+        world.insert_resource(GltfSceneAssets::default());
+        world.insert_resource(PendingGltfSceneSpawns::default());
+        world.insert_resource(SpawnedGltfScenes::default());
+
+        let handle = {
+            let server = world.resource_mut::<AssetServerResource>();
+            server.server.allocate_handle::<GltfScene>()
+        };
+
+        world
+            .resource_mut::<GltfSceneAssets>()
+            .assets
+            .insert(handle, single_node_scene("first", Vec3::new(1.0, 0.0, 0.0)));
+        queue_gltf_scene_spawn(&mut world, handle);
+        gltf_scene_spawn_system(&mut world);
+
+        let first_root = world
+            .resource::<SpawnedGltfScenes>()
+            .roots_by_scene
+            .get(&handle.id())
+            .and_then(|roots| roots.first())
+            .copied()
+            .expect("first scene should spawn");
+        let external_child = world
+            .spawn((TransformComponent::default(), GlobalTransform::default()))
+            .id();
+        attach_child(&mut world, first_root, external_child);
+
+        world.resource_mut::<GltfSceneAssets>().assets.insert(
+            handle,
+            single_node_scene("second", Vec3::new(2.0, 0.0, 0.0)),
+        );
+        queue_gltf_scene_spawn(&mut world, handle);
+        gltf_scene_spawn_system(&mut world);
+
+        let second_root = world
+            .resource::<SpawnedGltfScenes>()
+            .roots_by_scene
+            .get(&handle.id())
+            .and_then(|roots| roots.first())
+            .copied()
+            .expect("reloaded scene should respawn");
+
+        assert!(!world.contains(first_root));
+        assert!(world.contains(second_root));
+        assert!(world.contains(external_child));
+        assert!(world.get::<Parent>(external_child).is_none());
+        assert_eq!(
+            world
+                .get::<TransformComponent>(second_root)
+                .map(|transform| transform.transform.position),
+            Some(Vec3::new(2.0, 0.0, 0.0))
+        );
+
+        let mut query = world.query::<(Entity, &GltfSceneInstance)>();
+        let instances = query
+            .iter(&world)
+            .filter(|(_, instance)| instance.scene == handle)
+            .count();
+        assert_eq!(instances, 1);
     }
 
     #[test]

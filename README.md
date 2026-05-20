@@ -495,7 +495,9 @@ mesh nodes receive `GltfMeshRef`/`GltfMaterialRef` plus
 `MeshFilter`/`MaterialFilter` when stable handles are available. The automatic
 scene renderer draws `MeshFilter` entities from `MeshCache`; if the entity also
 has a `RenderMesh`, its material, tint, and labeled albedo texture are used for
-the imported mesh instead of drawing a built-in primitive.
+the imported mesh instead of drawing a built-in primitive. Spawned glTF entities
+are tagged with `GltfSceneInstance`, so reloading the same glTF handle replaces
+the previous imported hierarchy instead of duplicating stale entities.
 
 ### 10. Physics Plugin Integration
 
@@ -543,6 +545,10 @@ if !reloads.is_empty() {
     tracing::info!("Reloading native assets: {:?}", reloads.changed_paths);
 }
 ```
+
+glTF scenes that were loaded through the renderer can be reloaded with
+`reload_gltf_scene_path(...)` or `reload_changed_gltf_scenes(...)` when the app
+has access to the renderer device and queue.
 
 See `docs/shader_material_roadmap.md` for roadmap, implementation status, and API semver guarantees.
 See `docs/building_games.md` for the current game authoring path.

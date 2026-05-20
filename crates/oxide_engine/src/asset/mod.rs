@@ -333,6 +333,20 @@ pub fn load_gltf_async(
     })
 }
 
+/// Starts async glTF reloading into an existing typed scene handle.
+#[cfg(feature = "gltf-import")]
+pub fn reload_gltf_async(
+    server: &mut CoreAssetServer,
+    device: Arc<Device>,
+    queue: Arc<Queue>,
+    path: impl Into<PathBuf>,
+) -> Option<CoreHandle<GltfScene>> {
+    server.reload_path_async(path.into(), move |path| {
+        load_gltf(&device, &queue, &path)
+            .map_err(|err| CoreAssetServerError::Message(err.to_string()))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

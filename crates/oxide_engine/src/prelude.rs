@@ -12,7 +12,7 @@ pub use crate::app::{
     VISIBILITY_PROPAGATE_SYSTEM,
 };
 #[cfg(feature = "gltf-import")]
-pub use crate::asset::{load_gltf_async, GltfSceneAssets};
+pub use crate::asset::{load_gltf_async, reload_gltf_async, GltfSceneAssets};
 pub use crate::asset::{
     material_descriptor_asset_system, material_descriptor_dependencies,
     poll_material_descriptor_assets, poll_native_asset_reloads, register_material_asset,
@@ -92,10 +92,11 @@ pub use crate::scene::{
 };
 #[cfg(feature = "gltf-import")]
 pub use crate::scene::{
-    gltf_scene_spawn_system, queue_gltf_scene_spawn, request_gltf_scene_spawn,
-    spawn_gltf_scene_hierarchy, spawn_gltf_scene_hierarchy_with_assets,
-    spawn_gltf_scene_hierarchy_with_meshes, take_spawned_scene_roots, GltfMaterialRef, GltfMeshRef,
-    GltfSceneImageHandles, GltfSceneMaterialHandles, GltfSceneMeshHandles, PendingGltfSceneSpawns,
+    gltf_scene_spawn_system, queue_gltf_scene_spawn, reload_changed_gltf_scenes,
+    reload_gltf_scene_path, request_gltf_scene_spawn, spawn_gltf_scene_hierarchy,
+    spawn_gltf_scene_hierarchy_with_assets, spawn_gltf_scene_hierarchy_with_meshes,
+    take_spawned_scene_roots, GltfMaterialRef, GltfMeshRef, GltfSceneImageHandles,
+    GltfSceneInstance, GltfSceneMaterialHandles, GltfSceneMeshHandles, PendingGltfSceneSpawns,
     SpawnedGltfScenes,
 };
 pub use crate::time::{Timer, TimerMode};

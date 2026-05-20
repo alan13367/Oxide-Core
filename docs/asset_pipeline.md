@@ -97,6 +97,13 @@ small material texture cache. A material albedo reference such as `#image_0`
 binds that uploaded texture for the relevant material batch, while untextured
 materials use a white fallback texture.
 
+Spawned entities from the async glTF flow receive `GltfSceneInstance` with the
+source scene handle. If the same handle is queued again after
+`reload_gltf_scene_path(...)` or `reload_changed_gltf_scenes(...)`, the spawn
+system removes the previous imported hierarchy before spawning the replacement.
+External entities parented under the imported hierarchy are detached and
+preserved.
+
 This keeps the compatibility glTF path useful for development while moving the
 runtime shape toward Oxide-owned handles and caches.
 

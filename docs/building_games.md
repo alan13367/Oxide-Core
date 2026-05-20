@@ -411,6 +411,12 @@ they do not duplicate already spawned scene instances. Queue a returned scene
 handle explicitly if the game wants to create a new instance from the refreshed
 descriptor.
 
+glTF scenes use handle-scoped replacement instead: entities spawned by
+`request_gltf_scene_spawn(...)` are tagged with `GltfSceneInstance`, and
+`reload_gltf_scene_path(...)` or `reload_changed_gltf_scenes(...)` queues the
+same handle so the spawn system removes the previous imported hierarchy before
+spawning the refreshed one.
+
 ```rust
 if let Some(audio) = world.get_resource::<Audio>() {
     audio.play_tone(AudioTone::sine(660.0, 0.08, 0.18));
