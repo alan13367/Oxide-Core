@@ -16,8 +16,9 @@ use crate::animation::AnimationPlugin;
 #[cfg(feature = "gltf-import")]
 use crate::asset::GltfSceneAssets;
 use crate::asset::{
-    material_descriptor_asset_system, publish_asset_change_events, AssetChange,
-    AssetServerResource, MaterialAssets, MaterialDescriptorAssets, MeshCache, TextureImageAssets,
+    material_descriptor_asset_system, publish_asset_change_events, register_native_asset_loaders,
+    AssetChange, AssetServerResource, MaterialAssets, MaterialDescriptorAssets, MeshCache,
+    TextureImageAssets,
 };
 use crate::diagnostics::FrameDiagnosticsPlugin;
 use crate::ecs::{
@@ -302,6 +303,10 @@ fn initialize_window_resource(world: &mut World, window: &Window) {
 fn initialize_asset_resources(world: &mut World, _window: &Window) {
     if !world.contains_resource::<AssetServerResource>() {
         world.insert_resource(AssetServerResource::default());
+    }
+    {
+        let server = world.resource_mut::<AssetServerResource>();
+        register_native_asset_loaders(&mut server.server);
     }
     if !world.contains_resource::<MaterialAssets>() {
         world.insert_resource(MaterialAssets::default());

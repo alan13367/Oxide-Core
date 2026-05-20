@@ -97,6 +97,12 @@ registered loader while preserving the existing handle. Closure-based
 `load_path_async` and `load_labeled_path_async` remain available for one-off
 loads and container importers that need labels or custom dependency handling.
 
+`DefaultPlugins` calls `register_native_asset_loaders(...)` during asset
+resource initialization, so native scene and material helpers share the generic
+loader registry for `.oxscene`, `.oxmat`, JSON, RON, and TOML descriptors. Tools
+that construct an `AssetServer` directly can call the same helper before using
+`load_registered_path` for Oxide-native assets.
+
 ## glTF Import Handles
 
 With the `gltf-import` feature enabled, `request_gltf_scene_spawn(...)` loads a

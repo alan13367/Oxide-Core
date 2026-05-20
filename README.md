@@ -539,6 +539,7 @@ Current physics runtime highlights include:
 
 ## Asset Workflow
 
+- `DefaultPlugins` registers native `.oxscene`, `.oxmat`, JSON, RON, and TOML loaders for Oxide scene/material assets
 - Register app/plugin asset loaders once with `AssetServer::register_loader::<T, _>(["ext"], loader)`
 - Request typed loads with `load_registered_path::<T>(path)` when an extension loader exists
 - Refresh known typed paths in place with `reload_registered_path::<T>(path)` so handles remain stable

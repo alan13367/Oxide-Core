@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::asset::{
-    publish_material_texture_assets, AssetServerError, AssetServerResource, Assets, Handle,
+    publish_material_texture_assets, register_native_asset_loaders, AssetServerError,
+    AssetServerResource, Assets, Handle,
 };
 use oxide_ecs::entity::Entity;
 use oxide_ecs::world::World;
@@ -50,9 +51,19 @@ pub fn request_oxscene_spawn(
 
     let handle = {
         let server = world.resource_mut::<AssetServerResource>();
-        server.server.load_path_async(path.into(), |path| {
-            load_scene_descriptor(&path).map_err(|err| AssetServerError::Message(err.to_string()))
-        })
+        register_native_asset_loaders(&mut server.server);
+        let path = path.into();
+        match server
+            .server
+            .load_registered_path::<SceneDescriptor>(path.clone())
+        {
+            Ok(handle) => handle,
+            Err(AssetServerError::NoLoader { .. }) => server.server.load_path_async(path, |path| {
+                load_scene_descriptor(&path)
+                    .map_err(|err| AssetServerError::Message(err.to_string()))
+            }),
+            Err(err) => server.server.load_async(move || Err(err)),
+        }
     };
     world.resource_mut::<PendingOxSceneSpawns>().queue(handle);
     handle
@@ -71,9 +82,21 @@ pub fn reload_oxscene_path(
 ) -> Option<Handle<SceneDescriptor>> {
     ensure_oxscene_resources(world);
     let server = world.resource_mut::<AssetServerResource>();
-    server.server.reload_path_async(path.into(), |path| {
-        load_scene_descriptor(&path).map_err(|err| AssetServerError::Message(err.to_string()))
-    })
+    register_native_asset_loaders(&mut server.server);
+    let path = path.into();
+    match server
+        .server
+        .reload_registered_path::<SceneDescriptor>(path.clone())
+    {
+        Ok(handle) => handle,
+        Err(AssetServerError::NoLoader { .. }) => server.server.reload_path_async(path, |path| {
+            load_scene_descriptor(&path).map_err(|err| AssetServerError::Message(err.to_string()))
+        }),
+        Err(err) => {
+            tracing::warn!("Failed to reload Oxide scene '{}': {err}", path.display());
+            None
+        }
+    }
 }
 
 /// Reloads loaded native scene assets affected by changed source paths.
@@ -339,6 +362,10 @@ pub fn ensure_oxscene_resources(world: &mut World) {
     if !world.contains_resource::<AssetServerResource>() {
         world.insert_resource(AssetServerResource::default());
     }
+    {
+        let server = world.resource_mut::<AssetServerResource>();
+        register_native_asset_loaders(&mut server.server);
+    }
     if !world.contains_resource::<SceneDescriptorAssets>() {
         world.insert_resource(SceneDescriptorAssets::default());
     }
@@ -418,6 +445,32 @@ mod tests {
         run_until_scene_asset_named(&mut world, handle, "Reloaded Cube");
         assert!(take_spawned_oxscene_roots(&mut world, handle).is_none());
 
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn ensure_oxscene_resources_registers_native_scene_loader() {
+        let path = temp_path("registered_scene_loader", "oxscene");
+        write_scene(&path, "Registered Loader Cube");
+
+        let mut world = World::new();
+        ensure_oxscene_resources(&mut world);
+
+        let handle = {
+            let server = world.resource_mut::<AssetServerResource>();
+            assert_eq!(
+                server
+                    .server
+                    .registered_loader_extensions::<SceneDescriptor>(),
+                vec!["json", "oxscene"]
+            );
+            server
+                .server
+                .load_registered_path::<SceneDescriptor>(&path)
+                .unwrap()
+        };
+
+        run_until_scene_asset_named(&mut world, handle, "Registered Loader Cube");
         let _ = fs::remove_file(path);
     }
 

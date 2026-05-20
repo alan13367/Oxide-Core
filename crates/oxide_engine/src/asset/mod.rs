@@ -4,7 +4,6 @@ use std::path::PathBuf;
 #[cfg(feature = "gltf-import")]
 use std::sync::Arc;
 
-#[cfg(feature = "gltf-import")]
 use oxide_asset::AssetServerError as CoreAssetServerError;
 use oxide_asset::{
     AssetChange as CoreAssetChange, AssetChangeCursor as CoreAssetChangeCursor,
@@ -176,14 +175,36 @@ pub fn register_material_asset(
     handle
 }
 
+/// Registers Oxide's built-in native asset loaders on an [`AssetServer`].
+///
+/// `DefaultPlugins` installs these automatically. Calling this manually is
+/// useful for tools or tests that construct an [`AssetServer`] directly but
+/// still want the generic `load_registered_path` workflow for native `.oxscene`
+/// and `.oxmat` assets.
+pub fn register_native_asset_loaders(server: &mut CoreAssetServer) {
+    server.register_loader::<MaterialDescriptor, _>(["oxmat", "json", "ron", "toml"], |path| {
+        load_material_descriptor(path).map_err(material_descriptor_asset_error)
+    });
+    server.register_loader::<SceneDescriptor, _>(["oxscene", "json"], |path| {
+        oxide_scene::load_scene_descriptor(path)
+            .map_err(|err| CoreAssetServerError::Message(err.to_string()))
+    });
+}
+
 /// Requests an async material descriptor load and returns a stable typed handle.
 pub fn request_material_descriptor_load(
     server: &mut CoreAssetServer,
     path: impl Into<PathBuf>,
 ) -> MaterialDescriptorHandle {
-    server.load_path_async(path.into(), |path| {
-        load_material_descriptor(&path).map_err(material_descriptor_asset_error)
-    })
+    register_native_asset_loaders(server);
+    let path = path.into();
+    match server.load_registered_path::<MaterialDescriptor>(path.clone()) {
+        Ok(handle) => handle,
+        Err(CoreAssetServerError::NoLoader { .. }) => server.load_path_async(path, |path| {
+            load_material_descriptor(&path).map_err(material_descriptor_asset_error)
+        }),
+        Err(err) => server.load_async(move || Err(err)),
+    }
 }
 
 /// Starts an in-place reload for a previously loaded material descriptor path.
@@ -191,9 +212,21 @@ pub fn reload_material_descriptor_path(
     server: &mut CoreAssetServer,
     path: impl Into<PathBuf>,
 ) -> Option<MaterialDescriptorHandle> {
-    server.reload_path_async(path.into(), |path| {
-        load_material_descriptor(&path).map_err(material_descriptor_asset_error)
-    })
+    register_native_asset_loaders(server);
+    let path = path.into();
+    match server.reload_registered_path::<MaterialDescriptor>(path.clone()) {
+        Ok(handle) => handle,
+        Err(CoreAssetServerError::NoLoader { .. }) => server.reload_path_async(path, |path| {
+            load_material_descriptor(&path).map_err(material_descriptor_asset_error)
+        }),
+        Err(err) => {
+            tracing::warn!(
+                "Failed to reload material descriptor '{}': {err}",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 /// Reloads material descriptors affected by changed source or dependency paths.
@@ -692,6 +725,30 @@ mod tests {
         assert_eq!(assets.changes().len(), 1);
         assert_eq!(assets.changes()[0].kind, AssetChangeKind::Modified);
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn native_asset_loaders_register_material_descriptor_extensions() {
+        let root = temp_dir("oxide_registered_material_loader");
+        let material_path = root.join("stone.oxmat");
+        write_material(&material_path, "Stone", "stone.wgsl");
+
+        let mut server = CoreAssetServer::new();
+        register_native_asset_loaders(&mut server);
+
+        assert_eq!(
+            server.registered_loader_extensions::<MaterialDescriptor>(),
+            vec!["json", "oxmat", "ron", "toml"]
+        );
+
+        let handle = server
+            .load_registered_path::<MaterialDescriptor>(&material_path)
+            .unwrap();
+        let mut assets = CoreAssets::<MaterialDescriptor>::new();
+        poll_until_material_named(&mut server, &mut assets, handle, "Stone");
+
+        assert_eq!(assets.revision(&handle), Some(1));
         let _ = fs::remove_dir_all(root);
     }
 
