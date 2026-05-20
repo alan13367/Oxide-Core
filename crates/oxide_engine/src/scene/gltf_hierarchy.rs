@@ -374,6 +374,12 @@ pub fn gltf_scene_spawn_system(world: &mut World) {
         for result in completed {
             match result {
                 Ok((handle, mut scene)) => {
+                    {
+                        let server = world.resource_mut::<AssetServerResource>();
+                        let _ = server
+                            .server
+                            .set_asset_dependencies(&handle, scene.dependencies.clone());
+                    }
                     let mesh_handles = register_gltf_scene_meshes(world, handle, &mut scene);
                     let image_handles = register_gltf_scene_images(world, handle, &mut scene);
                     let material_handles = register_gltf_scene_materials(world, handle, &mut scene);
@@ -643,6 +649,7 @@ mod tests {
 
     fn single_node_scene(name: &str, translation: Vec3) -> GltfScene {
         GltfScene {
+            dependencies: Vec::new(),
             meshes: Vec::new(),
             materials: Vec::new(),
             images: Vec::new(),
@@ -663,6 +670,7 @@ mod tests {
         let mut world = World::new();
 
         let scene = GltfScene {
+            dependencies: Vec::new(),
             meshes: Vec::new(),
             materials: Vec::new(),
             images: Vec::new(),
@@ -703,6 +711,7 @@ mod tests {
         let mesh_handle = Handle::new(42);
 
         let scene = GltfScene {
+            dependencies: Vec::new(),
             meshes: Vec::new(),
             materials: Vec::new(),
             images: Vec::new(),
@@ -737,6 +746,7 @@ mod tests {
         let material_handle = Handle::new(7);
 
         let scene = GltfScene {
+            dependencies: Vec::new(),
             meshes: Vec::new(),
             materials: vec![(
                 "material_0".to_string(),
@@ -794,6 +804,7 @@ mod tests {
         };
 
         let scene = GltfScene {
+            dependencies: Vec::new(),
             meshes: Vec::new(),
             materials: Vec::new(),
             images: Vec::new(),
@@ -824,6 +835,38 @@ mod tests {
                 .get::<GltfSceneInstance>(spawned_roots[0])
                 .map(|instance| instance.scene),
             Some(handle)
+        );
+    }
+
+    #[test]
+    fn resolved_gltf_scene_records_dependency_paths_for_reload_queries() {
+        let mut world = World::new();
+        world.insert_resource(AssetServerResource::default());
+        world.insert_resource(GltfSceneAssets::default());
+        world.insert_resource(PendingGltfSceneSpawns::default());
+        world.insert_resource(SpawnedGltfScenes::default());
+
+        let dependency = PathBuf::from("assets/models/level.bin");
+        let handle = {
+            let server = world.resource_mut::<AssetServerResource>();
+            let dependency = dependency.clone();
+            server
+                .server
+                .load_path_async("assets/models/level.gltf", move |_| {
+                    let mut scene = single_node_scene("level", Vec3::ZERO);
+                    scene.dependencies = vec![dependency];
+                    Ok(scene)
+                })
+        };
+        queue_gltf_scene_spawn(&mut world, handle);
+        run_gltf_spawn_until_ready(&mut world, handle);
+
+        assert_eq!(
+            world
+                .resource::<AssetServerResource>()
+                .server
+                .handles_for_changed_path::<GltfScene>("assets/models/level.bin"),
+            vec![handle]
         );
     }
 
@@ -907,6 +950,7 @@ mod tests {
                 .register_loaded_path::<GltfScene>("assets/models/level.gltf")
         };
         let mut scene = GltfScene {
+            dependencies: Vec::new(),
             meshes: Vec::new(),
             materials: vec![(
                 "material_0".to_string(),
@@ -951,6 +995,7 @@ mod tests {
                 .register_loaded_path::<GltfScene>("assets/models/level.gltf")
         };
         let mut scene = GltfScene {
+            dependencies: Vec::new(),
             meshes: Vec::new(),
             materials: Vec::new(),
             images: vec![(
@@ -980,5 +1025,22 @@ mod tests {
                 .map(|image| (image.width, image.height, image.rgba.as_slice())),
             Some((1, 1, [255, 0, 0, 255].as_slice()))
         );
+    }
+
+    fn run_gltf_spawn_until_ready(world: &mut World, handle: Handle<GltfScene>) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            gltf_scene_spawn_system(world);
+            if world
+                .resource::<SpawnedGltfScenes>()
+                .roots_by_scene
+                .contains_key(&handle.id())
+            {
+                return;
+            }
+            std::thread::yield_now();
+        }
+
+        panic!("glTF scene did not resolve and spawn");
     }
 }

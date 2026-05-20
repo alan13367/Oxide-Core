@@ -497,7 +497,9 @@ scene renderer draws `MeshFilter` entities from `MeshCache`; if the entity also
 has a `RenderMesh`, its material, tint, and labeled albedo texture are used for
 the imported mesh instead of drawing a built-in primitive. Spawned glTF entities
 are tagged with `GltfSceneInstance`, so reloading the same glTF handle replaces
-the previous imported hierarchy instead of duplicating stale entities.
+the previous imported hierarchy instead of duplicating stale entities. External
+glTF buffer and image URIs are recorded as dependencies, so sidecar `.bin` and
+texture changes can drive `reload_changed_gltf_scenes(...)`.
 
 ### 10. Physics Plugin Integration
 

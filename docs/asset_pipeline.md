@@ -68,6 +68,9 @@ the scene without app code manually updating the `AssetServer`.
 
 With the `gltf-import` feature enabled, `request_gltf_scene_spawn(...)` loads a
 glTF source through `AssetServer` path identity. When the load resolves, Oxide
+records external glTF buffer and image URIs as dependencies on the scene handle,
+so a watcher event for a sidecar `.bin` or texture file can find the owning
+scene through `handles_for_changed_path::<GltfScene>(...)`. Oxide then
 publishes each imported mesh into `MeshCache` as a labeled `Mesh3D` asset using
 the glTF source path plus the mesh label emitted by the importer. Spawned nodes
 keep the lightweight `GltfMeshRef` index and also receive `MeshFilter` when a

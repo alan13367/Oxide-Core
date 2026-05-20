@@ -1,6 +1,6 @@
 //! glTF model loader
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use glam::{Quat, Vec3};
 use gltf::buffer::Data;
@@ -29,6 +29,8 @@ pub enum GltfError {
 
 /// Result of loading a glTF file.
 pub struct GltfScene {
+    /// External files that should invalidate this scene during hot reload.
+    pub dependencies: Vec<PathBuf>,
     /// Loaded meshes with their names.
     pub meshes: Vec<(String, Mesh3D)>,
     /// Loaded material descriptors with their names.
@@ -86,6 +88,7 @@ pub fn load_gltf(
         source,
     })?;
 
+    let dependencies = gltf_document_dependencies(path, &document);
     let materials = extract_materials(&document);
     let images = extract_images(images)?;
 
@@ -110,11 +113,52 @@ pub fn load_gltf(
     let nodes = extract_nodes(&document, &meshes);
 
     Ok(GltfScene {
+        dependencies,
         meshes,
         materials,
         images,
         mesh_material_indices,
         nodes,
+    })
+}
+
+fn gltf_document_dependencies(path: &Path, document: &gltf::Document) -> Vec<PathBuf> {
+    let base = path.parent().map(PathBuf::from);
+    let mut dependencies = Vec::new();
+
+    for buffer in document.buffers() {
+        if let gltf::buffer::Source::Uri(uri) = buffer.source() {
+            if let Some(path) = resolve_gltf_uri(base.as_ref(), uri) {
+                dependencies.push(path);
+            }
+        }
+    }
+
+    for image in document.images() {
+        if let gltf::image::Source::Uri { uri, .. } = image.source() {
+            if let Some(path) = resolve_gltf_uri(base.as_ref(), uri) {
+                dependencies.push(path);
+            }
+        }
+    }
+
+    dependencies.sort();
+    dependencies.dedup();
+    dependencies
+}
+
+fn resolve_gltf_uri(base: Option<&PathBuf>, uri: &str) -> Option<PathBuf> {
+    if uri.trim().is_empty() || uri.starts_with("data:") {
+        return None;
+    }
+
+    let path = PathBuf::from(uri);
+    Some(if path.is_absolute() {
+        path
+    } else if let Some(base) = base {
+        base.join(path)
+    } else {
+        path
     })
 }
 
@@ -362,5 +406,28 @@ mod tests {
         };
 
         assert_eq!(gltf_image_to_rgba(&image), vec![255, 0, 128, 255]);
+    }
+
+    #[test]
+    fn gltf_document_dependencies_resolve_external_uris() {
+        let raw = br#"{
+            "asset": { "version": "2.0" },
+            "buffers": [
+                { "uri": "mesh.bin", "byteLength": 4 },
+                { "uri": "data:application/octet-stream;base64,AAAA", "byteLength": 4 }
+            ],
+            "images": [
+                { "uri": "textures/albedo.png" }
+            ]
+        }"#;
+        let gltf = gltf::Gltf::from_slice(raw).unwrap();
+
+        assert_eq!(
+            gltf_document_dependencies(Path::new("assets/models/level.gltf"), &gltf.document),
+            vec![
+                PathBuf::from("assets/models/mesh.bin"),
+                PathBuf::from("assets/models/textures/albedo.png"),
+            ]
+        );
     }
 }
