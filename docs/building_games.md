@@ -421,6 +421,12 @@ they do not duplicate already spawned scene instances. Queue a returned scene
 handle explicitly if the game wants to create a new instance from the refreshed
 descriptor.
 
+Built-in render asset stores also publish `Events<AssetChange<T>>` after their
+retained `Assets<T>` logs change. Use `EventCursor<AssetChange<T>>` from editor,
+renderer, or gameplay systems when a system needs to react to added, modified,
+or removed material, mesh, texture, or glTF assets without scanning the whole
+store.
+
 glTF scenes use handle-scoped replacement instead: entities spawned by
 `request_gltf_scene_spawn(...)` are tagged with `GltfSceneInstance`, and
 `poll_render_asset_reloads(...)`, `reload_gltf_scene_path(...)`, or

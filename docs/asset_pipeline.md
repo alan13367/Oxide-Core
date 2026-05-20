@@ -223,6 +223,12 @@ caches without scanning the whole asset collection every frame.
 When more than one cache needs the same records, keep an
 `AssetChangeCursor<T>` per cache and call `read(&assets)`; this advances only
 that cursor and leaves the retained change log available for other systems.
+Engine-facing systems can also publish those retained records into ECS events
+with `publish_asset_change_events::<T, Store>`. `RenderPlugin` installs this
+bridge for built-in material pipeline, mesh, material descriptor, texture image,
+and glTF scene stores, so gameplay, editor, and renderer tooling can observe
+`Events<AssetChange<T>>` with the normal `EventCursor` / `EventReader` params
+without owning the asset store's change log.
 
 When a changed path maps to a known typed asset path, use
 `reload_path_async(path, loader)` to keep the existing handle and publish the

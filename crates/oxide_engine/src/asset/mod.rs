@@ -6,7 +6,11 @@ use std::sync::Arc;
 
 #[cfg(feature = "gltf-import")]
 use oxide_asset::AssetServerError as CoreAssetServerError;
-use oxide_asset::{AssetServer as CoreAssetServer, Assets as CoreAssets, Handle as CoreHandle};
+use oxide_asset::{
+    AssetChange as CoreAssetChange, AssetChangeCursor as CoreAssetChangeCursor,
+    AssetServer as CoreAssetServer, Assets as CoreAssets, Handle as CoreHandle,
+};
+use oxide_ecs::prelude::{EventWriter, Local, Res};
 use oxide_ecs::world::World;
 use oxide_ecs::Resource;
 use oxide_renderer::descriptor::{
@@ -45,6 +49,59 @@ pub struct MaterialAssets {
     pub assets: CoreAssets<MaterialPipeline>,
 }
 
+/// Typed resource adapter for publishing asset-store changes into ECS events.
+///
+/// Implement this for Oxide-owned asset resources that wrap [`Assets<T>`]. It
+/// lets generic systems bridge retained asset change logs into
+/// `Events<AssetChange<T>>` without draining the underlying log.
+pub trait AssetStore<T>: oxide_ecs::prelude::Resource {
+    /// Returns the typed asset storage backing this resource.
+    fn assets(&self) -> &CoreAssets<T>;
+}
+
+impl AssetStore<MaterialPipeline> for MaterialAssets {
+    fn assets(&self) -> &CoreAssets<MaterialPipeline> {
+        &self.assets
+    }
+}
+
+impl AssetStore<Mesh3D> for MeshCache {
+    fn assets(&self) -> &CoreAssets<Mesh3D> {
+        self.assets()
+    }
+}
+
+impl AssetStore<MaterialDescriptor> for MaterialDescriptorAssets {
+    fn assets(&self) -> &CoreAssets<MaterialDescriptor> {
+        &self.assets
+    }
+}
+
+impl AssetStore<TextureImage> for TextureImageAssets {
+    fn assets(&self) -> &CoreAssets<TextureImage> {
+        &self.assets
+    }
+}
+
+/// Publishes unread asset changes from an [`AssetStore`] into ECS events.
+///
+/// Register this with concrete type parameters, for example:
+/// `publish_asset_change_events::<MaterialDescriptor, MaterialDescriptorAssets>`.
+/// Each registered system owns an independent local cursor, so multiple systems
+/// can publish or mirror the same asset store without consuming the store log.
+/// The matching `Events<AssetChange<T>>` resource must exist before the system
+/// runs.
+pub fn publish_asset_change_events<T, S>(
+    assets: Res<S>,
+    mut cursor: Local<CoreAssetChangeCursor<T>>,
+    mut events: EventWriter<CoreAssetChange<T>>,
+) where
+    T: 'static,
+    S: AssetStore<T> + 'static,
+{
+    events.extend(cursor.read(assets.assets()));
+}
+
 pub type MeshHandle = CoreHandle<Mesh3D>;
 pub type MaterialHandle = CoreHandle<MaterialPipeline>;
 pub type MaterialDescriptorHandle = oxide_scene::MaterialDescriptorHandle;
@@ -55,6 +112,13 @@ pub type TextureImageHandle = oxide_scene::TextureImageHandle;
 #[derive(Resource, Default)]
 pub struct GltfSceneAssets {
     pub assets: CoreAssets<GltfScene>,
+}
+
+#[cfg(feature = "gltf-import")]
+impl AssetStore<GltfScene> for GltfSceneAssets {
+    fn assets(&self) -> &CoreAssets<GltfScene> {
+        &self.assets
+    }
 }
 
 /// Result of routing changed source paths through Oxide's native reload systems.
@@ -487,8 +551,20 @@ mod tests {
         SceneDescriptorAssets,
     };
     use oxide_asset::AssetChangeKind;
+    use oxide_ecs::prelude::{Events, Schedule};
     use std::fs;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    #[derive(Resource, Default)]
+    struct TestAssetStore {
+        assets: CoreAssets<String>,
+    }
+
+    impl AssetStore<String> for TestAssetStore {
+        fn assets(&self) -> &CoreAssets<String> {
+            &self.assets
+        }
+    }
 
     #[test]
     fn material_descriptor_dependencies_resolve_relative_to_descriptor() {
@@ -535,6 +611,50 @@ mod tests {
         };
 
         assert!(material_descriptor_dependencies("assets/model.gltf", &descriptor).is_empty());
+    }
+
+    #[test]
+    fn publish_asset_change_events_forwards_unread_asset_changes() {
+        let mut allocator = oxide_asset::HandleAllocator::new();
+        let handle = allocator.allocate::<String>();
+        let mut world = World::new();
+        world.insert_resource(TestAssetStore::default());
+        world.init_resource::<Events<AssetChange<String>>>();
+
+        world
+            .resource_mut::<TestAssetStore>()
+            .assets
+            .insert(handle, "first".to_string());
+
+        let mut schedule = Schedule::new();
+        schedule.add_system(publish_asset_change_events::<String, TestAssetStore>);
+        schedule.run(&mut world);
+
+        let events = world.resource::<Events<AssetChange<String>>>();
+        assert_eq!(events.len(), 1);
+        let first = events.iter().next().unwrap();
+        assert_eq!(first.handle, handle);
+        assert_eq!(first.revision, 1);
+        assert_eq!(first.kind, AssetChangeKind::Added);
+
+        schedule.run(&mut world);
+        assert_eq!(world.resource::<Events<AssetChange<String>>>().len(), 1);
+
+        world
+            .resource_mut::<TestAssetStore>()
+            .assets
+            .insert(handle, "second".to_string());
+        schedule.run(&mut world);
+
+        let events: Vec<_> = world
+            .resource::<Events<AssetChange<String>>>()
+            .iter()
+            .copied()
+            .collect();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].handle, handle);
+        assert_eq!(events[1].revision, 2);
+        assert_eq!(events[1].kind, AssetChangeKind::Modified);
     }
 
     #[test]

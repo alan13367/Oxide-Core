@@ -16,12 +16,12 @@ use crate::animation::AnimationPlugin;
 #[cfg(feature = "gltf-import")]
 use crate::asset::GltfSceneAssets;
 use crate::asset::{
-    material_descriptor_asset_system, AssetServerResource, MaterialAssets,
-    MaterialDescriptorAssets, MeshCache, TextureImageAssets,
+    material_descriptor_asset_system, publish_asset_change_events, AssetChange,
+    AssetServerResource, MaterialAssets, MaterialDescriptorAssets, MeshCache, TextureImageAssets,
 };
 use crate::diagnostics::FrameDiagnosticsPlugin;
 use crate::ecs::{
-    AppExit, FixedTime, IntoSystem, RendererResource, Schedule, Time, WindowResource, World,
+    AppExit, Events, FixedTime, IntoSystem, RendererResource, Schedule, Time, WindowResource, World,
 };
 use crate::event::{window_event_to_engine, EngineEvent};
 use crate::input::{KeyboardInput, MouseInput};
@@ -44,7 +44,12 @@ use crate::ui::{
     EguiManager,
 };
 use crate::window::Window;
-use oxide_renderer::Renderer;
+#[cfg(feature = "gltf-import")]
+use oxide_renderer::gltf::GltfScene;
+use oxide_renderer::{
+    descriptor::MaterialDescriptor, material::MaterialPipeline, mesh::Mesh3D,
+    texture::TextureImage, Renderer,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Startup;
@@ -89,10 +94,21 @@ pub const TRANSFORM_PROPAGATE_SYSTEM: &str = "oxide.transform.propagate";
 pub const VISIBILITY_PROPAGATE_SYSTEM: &str = "oxide.visibility.propagate";
 /// Stable label for the built-in material descriptor asset polling system.
 pub const MATERIAL_DESCRIPTOR_ASSET_SYSTEM: &str = "oxide.asset.material_descriptors";
+/// Stable label for publishing material pipeline asset change events.
+pub const MATERIAL_ASSET_EVENTS_SYSTEM: &str = "oxide.asset.events.materials";
+/// Stable label for publishing mesh asset change events.
+pub const MESH_ASSET_EVENTS_SYSTEM: &str = "oxide.asset.events.meshes";
+/// Stable label for publishing material descriptor asset change events.
+pub const MATERIAL_DESCRIPTOR_ASSET_EVENTS_SYSTEM: &str = "oxide.asset.events.material_descriptors";
+/// Stable label for publishing texture image asset change events.
+pub const TEXTURE_IMAGE_ASSET_EVENTS_SYSTEM: &str = "oxide.asset.events.texture_images";
 /// Stable label for the built-in native `.oxscene` spawn system.
 pub const OXSCENE_SPAWN_SYSTEM: &str = "oxide.scene.oxscene_spawn";
 /// Stable label for the built-in glTF hierarchy spawn system.
 pub const GLTF_SCENE_SPAWN_SYSTEM: &str = "oxide.scene.gltf_spawn";
+/// Stable label for publishing glTF scene asset change events.
+#[cfg(feature = "gltf-import")]
+pub const GLTF_SCENE_ASSET_EVENTS_SYSTEM: &str = "oxide.asset.events.gltf_scenes";
 
 pub type StartupSystemFn = fn(&mut World, &Window);
 
@@ -233,7 +249,47 @@ impl<T: App> Plugin<T> for RenderPlugin {
             GLTF_SCENE_SPAWN_SYSTEM,
             gltf_scene_spawn_system,
         );
+        install_builtin_asset_event_systems(app);
     }
+}
+
+fn install_builtin_asset_event_systems<T: App>(app: &mut AppBuilder<T>) {
+    #[cfg(feature = "gltf-import")]
+    const ASSET_EVENT_ANCHOR: &str = GLTF_SCENE_SPAWN_SYSTEM;
+    #[cfg(not(feature = "gltf-import"))]
+    const ASSET_EVENT_ANCHOR: &str = OXSCENE_SPAWN_SYSTEM;
+
+    app.add_labeled_system_after_mut(
+        AppStage::PreUpdate,
+        MATERIAL_ASSET_EVENTS_SYSTEM,
+        ASSET_EVENT_ANCHOR,
+        publish_asset_change_events::<MaterialPipeline, MaterialAssets>,
+    );
+    app.add_labeled_system_after_mut(
+        AppStage::PreUpdate,
+        MESH_ASSET_EVENTS_SYSTEM,
+        ASSET_EVENT_ANCHOR,
+        publish_asset_change_events::<Mesh3D, MeshCache>,
+    );
+    app.add_labeled_system_after_mut(
+        AppStage::PreUpdate,
+        MATERIAL_DESCRIPTOR_ASSET_EVENTS_SYSTEM,
+        ASSET_EVENT_ANCHOR,
+        publish_asset_change_events::<MaterialDescriptor, MaterialDescriptorAssets>,
+    );
+    app.add_labeled_system_after_mut(
+        AppStage::PreUpdate,
+        TEXTURE_IMAGE_ASSET_EVENTS_SYSTEM,
+        ASSET_EVENT_ANCHOR,
+        publish_asset_change_events::<TextureImage, TextureImageAssets>,
+    );
+    #[cfg(feature = "gltf-import")]
+    app.add_labeled_system_after_mut(
+        AppStage::PreUpdate,
+        GLTF_SCENE_ASSET_EVENTS_SYSTEM,
+        ASSET_EVENT_ANCHOR,
+        publish_asset_change_events::<GltfScene, GltfSceneAssets>,
+    );
 }
 
 fn initialize_window_resource(world: &mut World, window: &Window) {
@@ -259,6 +315,10 @@ fn initialize_asset_resources(world: &mut World, _window: &Window) {
     if !world.contains_resource::<TextureImageAssets>() {
         world.insert_resource(TextureImageAssets::default());
     }
+    world.init_resource::<Events<AssetChange<MaterialPipeline>>>();
+    world.init_resource::<Events<AssetChange<Mesh3D>>>();
+    world.init_resource::<Events<AssetChange<MaterialDescriptor>>>();
+    world.init_resource::<Events<AssetChange<TextureImage>>>();
     if !world.contains_resource::<SceneDescriptorAssets>() {
         world.insert_resource(SceneDescriptorAssets::default());
     }
@@ -273,6 +333,7 @@ fn initialize_asset_resources(world: &mut World, _window: &Window) {
         if !world.contains_resource::<GltfSceneAssets>() {
             world.insert_resource(GltfSceneAssets::default());
         }
+        world.init_resource::<Events<AssetChange<GltfScene>>>();
         if !world.contains_resource::<PendingGltfSceneSpawns>() {
             world.insert_resource(PendingGltfSceneSpawns::default());
         }

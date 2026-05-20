@@ -4,25 +4,28 @@ pub use crate::animation::{
     transform_tween_system, AnimationPlugin, TransformTween, TweenEasing, TweenRepeat,
     TRANSFORM_TWEEN_SYSTEM,
 };
+#[cfg(feature = "gltf-import")]
+pub use crate::app::GLTF_SCENE_ASSET_EVENTS_SYSTEM;
 pub use crate::app::{
     app, create_renderer, run_app, App, AppBuilder, AppRunner, AppStage, DefaultPlugins,
     FixedUpdate, InputPlugin, Plugin, PluginGroup, PluginRegistration, PostUpdate, PreUpdate,
     Render, RenderPlugin, Startup, TransformPlugin, Update, GLTF_SCENE_SPAWN_SYSTEM,
-    MATERIAL_DESCRIPTOR_ASSET_SYSTEM, OXSCENE_SPAWN_SYSTEM, TRANSFORM_PROPAGATE_SYSTEM,
-    VISIBILITY_PROPAGATE_SYSTEM,
+    MATERIAL_ASSET_EVENTS_SYSTEM, MATERIAL_DESCRIPTOR_ASSET_EVENTS_SYSTEM,
+    MATERIAL_DESCRIPTOR_ASSET_SYSTEM, MESH_ASSET_EVENTS_SYSTEM, OXSCENE_SPAWN_SYSTEM,
+    TEXTURE_IMAGE_ASSET_EVENTS_SYSTEM, TRANSFORM_PROPAGATE_SYSTEM, VISIBILITY_PROPAGATE_SYSTEM,
 };
 #[cfg(feature = "gltf-import")]
 pub use crate::asset::{load_gltf_async, reload_gltf_async, GltfSceneAssets};
 pub use crate::asset::{
     material_descriptor_asset_system, material_descriptor_dependencies,
     poll_material_descriptor_assets, poll_native_asset_reloads, poll_render_asset_reloads,
-    register_material_asset, reload_changed_material_descriptors, reload_changed_native_assets,
-    reload_changed_render_assets, reload_material_descriptor_path,
+    publish_asset_change_events, register_material_asset, reload_changed_material_descriptors,
+    reload_changed_native_assets, reload_changed_render_assets, reload_material_descriptor_path,
     request_material_descriptor_load, AssetChange, AssetChangeCursor, AssetChangeKind,
-    AssetLoadStatus, AssetPath, AssetServer, AssetServerError, AssetServerResource, Assets, Handle,
-    HandleAllocator, MaterialAssets, MaterialDescriptorAssets, MaterialDescriptorHandle,
-    MaterialFilter, MaterialHandle, MeshCache, MeshFilter, MeshHandle, NativeAssetReloadSummary,
-    RenderAssetReloadSummary, TextureImageAssets, TextureImageHandle,
+    AssetLoadStatus, AssetPath, AssetServer, AssetServerError, AssetServerResource, AssetStore,
+    Assets, Handle, HandleAllocator, MaterialAssets, MaterialDescriptorAssets,
+    MaterialDescriptorHandle, MaterialFilter, MaterialHandle, MeshCache, MeshFilter, MeshHandle,
+    NativeAssetReloadSummary, RenderAssetReloadSummary, TextureImageAssets, TextureImageHandle,
 };
 pub use crate::audio::{
     initialize_audio, Audio, AudioClip, AudioClipError, AudioError, AudioPlugin, AudioTone,
