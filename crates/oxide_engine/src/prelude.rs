@@ -30,6 +30,8 @@ pub use crate::light::{
     MAX_POINT_LIGHTS,
 };
 pub use crate::render::RenderFrame;
+#[cfg(feature = "image-import")]
+pub use crate::scene::SpriteImageLoadError;
 pub use crate::scene::{
     attach_child, detach_child, initialize_scene_editor, initialize_scene_renderer,
     install_scene_renderer, load_scene_descriptor, mark_subtree_dirty, prepare_scene_renderer,

@@ -39,5 +39,5 @@ notify = "8.2.0"
 [features]
 default = ["gltf-import", "image-import"]
 gltf-import = ["oxide_renderer/gltf-import"]
-image-import = ["oxide_renderer/image-import"]
+image-import = ["oxide_renderer/image-import", "oxide_scene/image-import"]
 trace = ["tracing/release_max_level_trace"]

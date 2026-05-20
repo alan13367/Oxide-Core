@@ -50,6 +50,15 @@ pub enum SpriteImageError {
     UnknownPaletteChar { ch: char },
 }
 
+#[cfg(feature = "image-import")]
+#[derive(thiserror::Error, Debug)]
+pub enum SpriteImageLoadError {
+    #[error("failed to decode sprite image: {source}")]
+    Decode { source: image::ImageError },
+    #[error("decoded sprite image is invalid: {source}")]
+    Invalid { source: SpriteImageError },
+}
+
 #[derive(Clone, Debug)]
 pub struct SpriteImage {
     width: u32,
@@ -114,6 +123,21 @@ impl SpriteImage {
         }
 
         Self::from_rgba(width as u32, rows.len() as u32, rgba)
+    }
+
+    #[cfg(feature = "image-import")]
+    pub fn from_image_bytes(bytes: &[u8]) -> Result<Self, SpriteImageLoadError> {
+        let image = image::load_from_memory(bytes)
+            .map_err(|source| SpriteImageLoadError::Decode { source })?
+            .to_rgba8();
+        let (width, height) = image.dimensions();
+        Self::from_rgba(width, height, image.into_raw())
+            .map_err(|source| SpriteImageLoadError::Invalid { source })
+    }
+
+    #[cfg(feature = "image-import")]
+    pub fn from_png_bytes(bytes: &[u8]) -> Result<Self, SpriteImageLoadError> {
+        Self::from_image_bytes(bytes)
     }
 
     pub fn width(&self) -> u32 {

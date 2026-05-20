@@ -19,9 +19,10 @@ cargo run -p zombie_shooter
 - `Escape`: pause/resume
 
 The example uses the automatic scene renderer, in-house physics, character
-controller movement, raycast shooting, simple zombie chase AI, native Oxide
-sprites for the zombies and first-person weapon, and a `SceneWorldDescriptor`
-for customizable heightfield terrain plus arena blockout objects. It also uses
+controller movement, raycast shooting, simple zombie chase AI, generated PNG
+sprites registered through Oxide's native sprite system for the zombies and
+first-person weapon, and a `SceneWorldDescriptor` for customizable heightfield
+terrain plus arena blockout objects. It also uses
 `GameUi` for the start menu, pause menu, game-over panel, health bar, ammo pips,
 reserve ammo bar, wave pressure bar, text labels, and crosshair. On macOS it
 registers system TTF fonts for the title and HUD, falling back to the built-in

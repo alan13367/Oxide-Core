@@ -12,7 +12,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Focused Runtime Crates**: camera, lighting, scene, UI, editor, audio, physics, asset, input, transform, renderer, and ECS code live outside the façade crate behind Oxide-owned APIs
 - **Materials + Shaders**: built-in shader pack plus custom WGSL (inline/file) with fallback support
 - **Automatic Scene Renderer**: optional plugin that renders `RenderMesh` scene entities without app-owned pipelines
-- **Native Sprites**: engine-owned RGBA sprite assets plus billboard components for actors, props, weapons, and overlay sprites
+- **Native Sprites**: engine-owned RGBA/PNG sprite assets plus billboard and UI sprite components for actors, props, weapons, and overlays
 - **Terrain + World Authoring**: heightfield terrain and configurable world descriptors for code-first maps
 - **Game UI + Text**: camera-locked panels, buttons, bars, counters, reticles, native styled text widgets, and custom TrueType/OpenType font registration
 - **Scene Editor Model**: hierarchy/inspector resource with spawn, select, duplicate, delete, transform, and tint editing APIs
@@ -112,18 +112,18 @@ renderer batches those sprites as world billboards or overlay sprites.
 register_sprite(
     &mut world,
     "player.weapon",
-    SpriteImage::solid(32, 16, [255, 255, 255, 255])?,
+    SpriteImage::from_png_bytes(include_bytes!("../assets/sprites/weapon.png"))?,
 );
 
-world.spawn((
-    Name("Weapon".to_string()),
-    // Overlay sprites use clip-space X/Y. (-1, -1) is bottom-left.
-    TransformComponent::from_position(Vec3::new(0.5, -0.58, 0.0)),
-    GlobalTransform::default(),
-    SpriteBillboard::new("player.weapon", Vec2::new(0.64, 0.38))
-        .with_facing(SpriteFacing::Camera)
-        .with_depth(SpriteDepthMode::Overlay),
-));
+let ui = world.resource_mut::<GameUi>();
+ui.sprite(
+    "weapon",
+    "player.weapon",
+    GameUiAnchor::BottomRight,
+    [-0.16, 0.31],
+    [0.32, 0.26],
+    [1.0, 1.0, 1.0, 1.0],
+);
 ```
 
 Use `TerrainDescriptor` and `SceneWorldDescriptor` for data-driven terrain and

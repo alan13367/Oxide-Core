@@ -21,6 +21,8 @@ the engine prelude for normal game code.
   gameplay components.
 - Use `SpriteAssets` and `SpriteBillboard` for native custom sprites such as
   2D enemies, pickups, muzzle flashes, first-person weapons, and overlay props.
+- Use `SpriteImage::from_png_bytes` when project sprites are authored as PNGs
+  and registered into the engine at startup.
 - Use `Terrain`, `TerrainDescriptor`, and `SceneWorldDescriptor` for
   configurable heightfield terrain plus reusable world blockout data.
 - Use `SceneRendererPlugin` directly if you only want automatic rendering.
@@ -62,10 +64,14 @@ if let Some(audio) = world
 ```
 
 Native sprites are registered once and referenced by stable IDs from gameplay
-components:
+components or UI widgets:
 
 ```rust
-register_sprite(&mut world, "zombie.walker", zombie_sprite_image()?);
+register_sprite(
+    &mut world,
+    "zombie.walker",
+    SpriteImage::from_png_bytes(include_bytes!("../assets/sprites/zombie.png"))?,
+);
 
 world.spawn((
     Name("Zombie".to_string()),
@@ -74,6 +80,15 @@ world.spawn((
     SpriteBillboard::new("zombie.walker", Vec2::new(1.25, 1.85))
         .with_facing(SpriteFacing::YBillboard),
 ));
+
+world.resource_mut::<GameUi>().sprite(
+    "weapon",
+    "player.shotgun",
+    GameUiAnchor::BottomRight,
+    [-0.16, 0.31],
+    [0.32, 0.26],
+    [1.0, 1.0, 1.0, 1.0],
+);
 ```
 
 Worlds can be authored as data and then given physics colliders by the game:

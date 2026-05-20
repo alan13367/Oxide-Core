@@ -8,7 +8,10 @@ use oxide_ecs::entity::Entity;
 use oxide_ecs::world::World;
 use oxide_ecs::Resource;
 use oxide_math::transform::Transform;
-use oxide_scene::{GlobalTransform, MeshPrimitive, Name, RenderMaterial, RenderMesh};
+use oxide_scene::{
+    GlobalTransform, MeshPrimitive, Name, RenderMaterial, RenderMesh, SpriteBillboard,
+    SpriteDepthMode, SpriteFacing, SpriteId,
+};
 use oxide_transform::TransformComponent;
 
 use super::text::{GameTextStyle, GameUiText};
@@ -31,6 +34,7 @@ pub enum GameUiWidget {
     Bar(GameUiBar),
     Counter(GameUiCounter),
     Reticle(GameUiReticle),
+    Sprite(GameUiSprite),
     Text(GameUiText),
 }
 
@@ -84,6 +88,16 @@ pub struct GameUiReticle {
     pub size: f32,
     pub thickness: f32,
     pub color: [f32; 4],
+}
+
+#[derive(Clone, Debug)]
+pub struct GameUiSprite {
+    pub id: String,
+    pub sprite: SpriteId,
+    pub anchor: GameUiAnchor,
+    pub offset: [f32; 2],
+    pub size: [f32; 2],
+    pub tint: [f32; 4],
 }
 
 #[derive(Resource)]
@@ -199,6 +213,25 @@ impl GameUi {
         }));
     }
 
+    pub fn sprite(
+        &mut self,
+        id: impl Into<String>,
+        sprite: impl Into<SpriteId>,
+        anchor: GameUiAnchor,
+        offset: [f32; 2],
+        size: [f32; 2],
+        tint: [f32; 4],
+    ) {
+        self.widgets.push(GameUiWidget::Sprite(GameUiSprite {
+            id: id.into(),
+            sprite: sprite.into(),
+            anchor,
+            offset,
+            size,
+            tint,
+        }));
+    }
+
     pub fn text(
         &mut self,
         id: impl Into<String>,
@@ -289,6 +322,10 @@ fn sync_game_ui(world: &mut World, game_ui: &mut GameUi, aspect_ratio: f32) {
                 sync_parts(world, game_ui, &camera, &reticle.id, 2, |index| {
                     reticle_part(&reticle, index)
                 });
+            }
+            GameUiWidget::Sprite(sprite) => {
+                active_ids.insert(sprite.id.clone());
+                sync_sprite_part(world, game_ui, &camera, &sprite);
             }
             GameUiWidget::Text(_) => {}
         }
@@ -383,6 +420,46 @@ fn spawn_ui_entity(world: &mut World, id: &str) -> Entity {
         .id()
 }
 
+fn sync_sprite_part(
+    world: &mut World,
+    game_ui: &mut GameUi,
+    camera: &UiCamera,
+    sprite: &GameUiSprite,
+) {
+    let existing = game_ui.entities.entry(sprite.id.clone()).or_default();
+
+    while existing.is_empty() {
+        existing.push(spawn_ui_sprite_entity(
+            world,
+            &sprite.id,
+            sprite.sprite.clone(),
+        ));
+    }
+
+    while existing.len() > 1 {
+        if let Some(entity) = existing.pop() {
+            let _ = world.despawn(entity);
+        }
+    }
+
+    if let Some(entity) = existing.first().copied() {
+        apply_ui_sprite_part(world, entity, camera, game_ui.distance, sprite);
+    }
+}
+
+fn spawn_ui_sprite_entity(world: &mut World, id: &str, sprite: SpriteId) -> Entity {
+    world
+        .spawn((
+            Name(format!("Game UI Sprite {id}")),
+            TransformComponent::default(),
+            GlobalTransform::default(),
+            SpriteBillboard::new(sprite, glam::Vec2::ONE)
+                .with_facing(SpriteFacing::Camera)
+                .with_depth(SpriteDepthMode::World),
+        ))
+        .id()
+}
+
 fn apply_ui_part(
     world: &mut World,
     entity: Entity,
@@ -402,6 +479,49 @@ fn apply_ui_part(
 
     if let Some(render_mesh) = world.get_mut::<RenderMesh>(entity) {
         render_mesh.tint = part.color;
+    }
+}
+
+fn apply_ui_sprite_part(
+    world: &mut World,
+    entity: Entity,
+    camera: &UiCamera,
+    distance: f32,
+    sprite: &GameUiSprite,
+) {
+    let part = UiPart {
+        anchor: sprite.anchor,
+        offset: sprite.offset,
+        size: sprite.size,
+        color: sprite.tint,
+        depth_bias: -0.06,
+    };
+    let (position, scale) = ui_transform(camera, distance + part.depth_bias, part);
+
+    if let Some(transform) = world.get_mut::<TransformComponent>(entity) {
+        transform.set_transform(Transform {
+            position,
+            rotation: camera.rotation,
+            scale,
+        });
+    }
+
+    if world.get::<RenderMesh>(entity).is_some() {
+        world.entity_mut(entity).remove::<RenderMesh>();
+    }
+
+    if let Some(sprite_billboard) = world.get_mut::<SpriteBillboard>(entity) {
+        sprite_billboard.sprite = sprite.sprite.clone();
+        sprite_billboard.tint = sprite.tint;
+        sprite_billboard.facing = SpriteFacing::Camera;
+        sprite_billboard.depth = SpriteDepthMode::World;
+    } else {
+        world.entity_mut(entity).insert(
+            SpriteBillboard::new(sprite.sprite.clone(), glam::Vec2::ONE)
+                .with_tint(sprite.tint)
+                .with_facing(SpriteFacing::Camera)
+                .with_depth(SpriteDepthMode::World),
+        );
     }
 }
 

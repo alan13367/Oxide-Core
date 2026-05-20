@@ -45,7 +45,7 @@ app::<MyGame>()
 
 - `SceneDescriptor` is the data format for small native scenes and prefabs.
 - `RenderMesh` describes a primitive, material intent, and tint.
-- `SpriteAssets` stores engine-native RGBA sprite images by `SpriteId`.
+- `SpriteAssets` stores engine-native RGBA/PNG sprite images by `SpriteId`.
 - `SpriteBillboard` attaches a registered sprite to an entity as a world
   billboard, fixed-orientation sprite, or overlay weapon/HUD sprite.
 - `Terrain` stores a heightfield mesh with tint/material intent.
@@ -77,6 +77,28 @@ world.spawn((
         .with_facing(SpriteFacing::YBillboard)
         .with_depth(SpriteDepthMode::World),
 ));
+```
+
+With the `image-import` feature enabled, games can load PNG/JPEG bytes directly
+into a `SpriteImage`:
+
+```rust
+let zombie = SpriteImage::from_png_bytes(include_bytes!("../assets/sprites/zombie.png"))?;
+register_sprite(world, "enemy.zombie", zombie);
+```
+
+`GameUi` can also place a registered sprite in the same camera-locked layer as
+HUD bars, counters, and text:
+
+```rust
+ui.sprite(
+    "weapon",
+    "player.shotgun",
+    GameUiAnchor::BottomRight,
+    [-0.16, 0.31],
+    [0.32, 0.26],
+    [1.0, 1.0, 1.0, 1.0],
+);
 ```
 
 Use `SpriteDepthMode::Overlay` for first-person weapons or screen-space props

@@ -230,12 +230,21 @@ fn install_zombie_fonts(world: &mut World) {
 }
 
 fn install_zombie_sprites(world: &mut World) {
-    for (id, image) in [
-        (GUN_SPRITE, gun_sprite(false)),
-        (GUN_FIRE_SPRITE, gun_sprite(true)),
-        (ZOMBIE_SPRITE, zombie_sprite()),
+    for (id, bytes) in [
+        (
+            GUN_SPRITE,
+            include_bytes!("../assets/sprites/shotgun.png").as_slice(),
+        ),
+        (
+            GUN_FIRE_SPRITE,
+            include_bytes!("../assets/sprites/shotgun.png").as_slice(),
+        ),
+        (
+            ZOMBIE_SPRITE,
+            include_bytes!("../assets/sprites/zombie.png").as_slice(),
+        ),
     ] {
-        match image {
+        match SpriteImage::from_png_bytes(bytes) {
             Ok(image) => {
                 register_sprite(world, id, image);
             }
@@ -244,76 +253,6 @@ fn install_zombie_sprites(world: &mut World) {
             }
         }
     }
-}
-
-fn zombie_sprite() -> Result<SpriteImage, SpriteImageError> {
-    SpriteImage::from_ascii(
-        &[
-            "      gggg      ",
-            "     gGGGGg     ",
-            "    gGEEGGg     ",
-            "    gGGGGGg     ",
-            "     gDDg       ",
-            "   gggGGggg     ",
-            "  gGgGGGGgGg    ",
-            " gGggGGGGggGg   ",
-            " gGgGGGGGGgGg   ",
-            "  ggGGGGGGgg    ",
-            "    gGggGg      ",
-            "   gGg  gGg     ",
-            "  gGg    gGg    ",
-            "  gg      gg    ",
-            " gG        Gg   ",
-            "                ",
-        ],
-        &[
-            (' ', [0, 0, 0, 0]),
-            ('g', [45, 128, 42, 255]),
-            ('G', [82, 191, 70, 255]),
-            ('E', [234, 244, 196, 255]),
-            ('D', [73, 46, 42, 255]),
-        ],
-    )
-}
-
-fn gun_sprite(firing: bool) -> Result<SpriteImage, SpriteImageError> {
-    let muzzle = if firing { 'F' } else { ' ' };
-    let rows = [
-        "                                ",
-        "                                ",
-        "                                ",
-        "                    bbbb        ",
-        "                 bbbbbbbbbb     ",
-        "              bbbbbbbbbbbbbb    ",
-        "          dddddddddbbbbbbbbb    ",
-        "      dddddddddddddddddbbb      ",
-        "   DDDDDDDDDDDDDDDDDDDDD       ",
-        "  DDDDDDDDDDDDDDDDDDDDD        ",
-        "      DDDDDDDDDDDD             ",
-        "          DDDDDDD              ",
-        "             DDDD              ",
-        "              DD               ",
-        "                                ",
-        "                                ",
-    ];
-    let mut rows: Vec<String> = rows.iter().map(|row| row.to_string()).collect();
-    if firing {
-        rows[6].replace_range(29..30, &muzzle.to_string());
-        rows[7].replace_range(28..29, &muzzle.to_string());
-        rows[8].replace_range(27..28, &muzzle.to_string());
-    }
-    let row_refs: Vec<&str> = rows.iter().map(String::as_str).collect();
-
-    SpriteImage::from_ascii(
-        &row_refs,
-        &[
-            (' ', [0, 0, 0, 0]),
-            ('D', [16, 18, 21, 255]),
-            ('d', [39, 43, 48, 255]),
-            ('b', [74, 78, 82, 255]),
-            ('F', [255, 218, 80, 255]),
-        ],
-    )
 }
 
 fn play_menu_sound(world: &World) {
@@ -1112,87 +1051,18 @@ fn update_game_ui(world: &mut World) {
 }
 
 fn draw_weapon_sprite(ui: &mut GameUi, firing: bool) {
-    let rows = weapon_ui_rows(firing);
-    let width = rows[0].chars().count() as f32;
-    let height = rows.len() as f32;
-    let pixel = [0.01, 0.016];
-    let center = [0.22, 0.19];
-
-    for (row, pixels) in rows.iter().enumerate() {
-        for (column, ch) in pixels.chars().enumerate() {
-            let Some(color) = weapon_pixel_color(ch) else {
-                continue;
-            };
-            let x = center[0] + (column as f32 + 0.5 - width * 0.5) * pixel[0];
-            let y = center[1] + (height * 0.5 - row as f32 - 0.5) * pixel[1];
-            ui.panel(
-                format!("weapon_pixel_{row}_{column}"),
-                GameUiAnchor::BottomCenter,
-                [x, y],
-                pixel,
-                color,
-            );
-        }
-    }
-}
-
-fn weapon_ui_rows(firing: bool) -> Vec<String> {
-    let mut rows = vec![vec![' '; 34]; 24];
-
-    weapon_span(&mut rows, 4, 12, 22, 'm');
-    weapon_span(&mut rows, 5, 9, 25, 'M');
-    weapon_span(&mut rows, 6, 6, 29, 'K');
-    weapon_span(&mut rows, 7, 5, 32, 'K');
-    weapon_span(&mut rows, 8, 8, 32, 'K');
-    weapon_span(&mut rows, 9, 10, 32, 'K');
-    weapon_span(&mut rows, 10, 13, 33, 'k');
-    weapon_span(&mut rows, 11, 15, 33, 'k');
-    weapon_span(&mut rows, 12, 17, 33, 'K');
-    weapon_span(&mut rows, 13, 19, 33, 'K');
-    weapon_span(&mut rows, 14, 20, 33, 'K');
-    weapon_span(&mut rows, 15, 21, 33, 'K');
-    weapon_span(&mut rows, 16, 22, 33, 'K');
-    weapon_span(&mut rows, 17, 22, 31, 'K');
-    weapon_span(&mut rows, 18, 21, 29, 'k');
-    weapon_span(&mut rows, 19, 21, 28, 'k');
-    weapon_span(&mut rows, 20, 22, 28, 'K');
-    weapon_span(&mut rows, 21, 23, 28, 'K');
-    weapon_span(&mut rows, 22, 24, 28, 'K');
-
-    if firing {
-        weapon_span(&mut rows, 6, 2, 5, 'F');
-        weapon_span(&mut rows, 7, 1, 4, 'f');
-        weapon_span(&mut rows, 8, 3, 6, 'F');
-    }
-
-    rows.into_iter()
-        .map(|row| row.into_iter().collect())
-        .collect()
-}
-
-fn weapon_span(rows: &mut [Vec<char>], row: usize, start: usize, end: usize, ch: char) {
-    let Some(row) = rows.get_mut(row) else {
-        return;
-    };
-    let width = row.len();
-    for pixel in row.iter_mut().take(end.min(width)).skip(start.min(width)) {
-        *pixel = ch;
-    }
-}
-
-fn weapon_pixel_color(ch: char) -> Option<[f32; 4]> {
-    match ch {
-        'K' => Some([0.035, 0.04, 0.045, 1.0]),
-        'k' => Some([0.02, 0.024, 0.028, 1.0]),
-        'M' => Some([0.28, 0.29, 0.3, 1.0]),
-        'm' => Some([0.43, 0.44, 0.45, 1.0]),
-        'D' => Some([0.035, 0.04, 0.045, 1.0]),
-        'd' => Some([0.16, 0.17, 0.18, 1.0]),
-        'b' => Some([0.34, 0.35, 0.36, 1.0]),
-        'F' => Some([1.0, 0.82, 0.16, 1.0]),
-        'f' => Some([1.0, 0.35, 0.08, 1.0]),
-        _ => None,
-    }
+    ui.sprite(
+        "weapon_sprite",
+        if firing { GUN_FIRE_SPRITE } else { GUN_SPRITE },
+        GameUiAnchor::BottomRight,
+        [-0.16, 0.31],
+        [0.32, 0.26],
+        if firing {
+            [1.0, 0.9, 0.68, 1.0]
+        } else {
+            [1.0, 1.0, 1.0, 1.0]
+        },
+    );
 }
 
 fn menu_title_style() -> GameTextStyle {
@@ -1430,9 +1300,6 @@ fn spawn_gun(world: &mut World) -> Entity {
                 ..Default::default()
             }),
             GlobalTransform::default(),
-            SpriteBillboard::new(GUN_SPRITE, Vec2::new(0.52, 0.3))
-                .with_facing(SpriteFacing::Camera)
-                .with_depth(SpriteDepthMode::World),
         ))
         .id()
 }

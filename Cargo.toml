@@ -59,6 +59,7 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [profile.dev]
 opt-level = 1
