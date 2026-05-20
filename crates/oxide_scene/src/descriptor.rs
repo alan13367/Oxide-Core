@@ -72,6 +72,22 @@ impl SceneEntityPath {
     }
 }
 
+/// Stable identifier assigned to all entities created by one scene or prefab spawn.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SceneInstanceId(u64);
+
+impl SceneInstanceId {
+    /// Returns the raw monotonically assigned instance ID.
+    pub fn raw(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Resource, Default)]
+struct SceneInstanceCounter {
+    next: u64,
+}
+
 /// Stable authored labels for gameplay queries, editor filters, and tooling.
 #[derive(Component, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tags(Vec<String>);
@@ -122,7 +138,8 @@ pub fn entity_has_tag(world: &World, entity: Entity, tag: &str) -> bool {
 ///
 /// Results follow the ECS world's query iteration order. Use stable authored
 /// names or hierarchy relationships when gameplay requires deterministic
-/// ordering among multiple matching entities.
+/// ordering among multiple matching entities. Use
+/// [`entities_with_tag_in_instance`] for repeated scene instances.
 pub fn entities_with_tag(world: &mut World, tag: &str) -> Vec<Entity> {
     let mut query = world.query::<(Entity, &Tags)>();
     query
@@ -131,15 +148,45 @@ pub fn entities_with_tag(world: &mut World, tag: &str) -> Vec<Entity> {
         .collect()
 }
 
+/// Returns every entity with `tag` inside `instance_id`.
+pub fn entities_with_tag_in_instance(
+    world: &mut World,
+    instance_id: SceneInstanceId,
+    tag: &str,
+) -> Vec<Entity> {
+    let mut query = world.query::<(Entity, &Tags)>();
+    query
+        .iter(world)
+        .filter_map(|(entity, tags)| {
+            (tags.contains(tag) && scene_instance_id(world, entity) == Some(instance_id))
+                .then_some(entity)
+        })
+        .collect()
+}
+
 /// Returns the first entity with a [`Tags`] component containing `tag`.
 ///
 /// This is a convenience for singleton markers such as `player_spawn`. Prefer
-/// [`entities_with_tag`] when multiple authored entities may share the tag.
+/// [`entities_with_tag`] when multiple authored entities may share the tag. Use
+/// [`first_entity_with_tag_in_instance`] for repeated scene instances.
 pub fn first_entity_with_tag(world: &mut World, tag: &str) -> Option<Entity> {
     let mut query = world.query::<(Entity, &Tags)>();
     query
         .iter(world)
         .find_map(|(entity, tags)| tags.contains(tag).then_some(entity))
+}
+
+/// Returns the first entity with `tag` inside `instance_id`.
+pub fn first_entity_with_tag_in_instance(
+    world: &mut World,
+    instance_id: SceneInstanceId,
+    tag: &str,
+) -> Option<Entity> {
+    let mut query = world.query::<(Entity, &Tags)>();
+    query.iter(world).find_map(|(entity, tags)| {
+        (tags.contains(tag) && scene_instance_id(world, entity) == Some(instance_id))
+            .then_some(entity)
+    })
 }
 
 /// Returns the authored scene path for `entity`, if it was spawned from a scene descriptor.
@@ -149,7 +196,16 @@ pub fn scene_entity_path(world: &World, entity: Entity) -> Option<&str> {
         .map(SceneEntityPath::as_str)
 }
 
+/// Returns the scene instance ID for `entity`, if it was spawned from a scene descriptor.
+pub fn scene_instance_id(world: &World, entity: Entity) -> Option<SceneInstanceId> {
+    world.get::<SceneInstanceId>(entity).copied()
+}
+
 /// Returns the entity with the exact authored scene `path`.
+///
+/// If multiple scene instances contain the same path, the first match in ECS
+/// query order is returned. Use [`entity_by_scene_path_in_instance`] when code
+/// has a specific loaded scene or prefab instance.
 pub fn entity_by_scene_path(world: &mut World, path: &str) -> Option<Entity> {
     let path = normalize_scene_entity_path(path);
     let mut query = world.query::<(Entity, &SceneEntityPath)>();
@@ -158,10 +214,28 @@ pub fn entity_by_scene_path(world: &mut World, path: &str) -> Option<Entity> {
         .find_map(|(entity, entity_path)| (entity_path.as_str() == path).then_some(entity))
 }
 
+/// Returns the entity with the exact authored scene `path` inside `instance_id`.
+pub fn entity_by_scene_path_in_instance(
+    world: &mut World,
+    instance_id: SceneInstanceId,
+    path: &str,
+) -> Option<Entity> {
+    let path = normalize_scene_entity_path(path);
+    let mut query = world.query::<(Entity, &SceneEntityPath)>();
+    query.iter(world).find_map(|(entity, entity_path)| {
+        (entity_path.as_str() == path && scene_instance_id(world, entity) == Some(instance_id))
+            .then_some(entity)
+    })
+}
+
 /// Returns every entity at or below the authored scene `path`.
 ///
 /// This is useful for attaching gameplay state to a loaded prefab or scene
 /// subtree without manually traversing `Children`.
+///
+/// If multiple scene instances contain the same path, entities from each
+/// matching instance are returned. Use [`entities_under_scene_path_in_instance`]
+/// when code has a specific loaded scene or prefab instance.
 pub fn entities_under_scene_path(world: &mut World, path: &str) -> Vec<Entity> {
     let path = normalize_scene_entity_path(path);
     if path.is_empty() {
@@ -174,6 +248,29 @@ pub fn entities_under_scene_path(world: &mut World, path: &str) -> Vec<Entity> {
         .filter_map(|(entity, entity_path)| {
             let entity_path = entity_path.as_str();
             (entity_path == path || entity_path.starts_with(prefix.as_str())).then_some(entity)
+        })
+        .collect()
+}
+
+/// Returns every entity at or below `path` inside `instance_id`.
+pub fn entities_under_scene_path_in_instance(
+    world: &mut World,
+    instance_id: SceneInstanceId,
+    path: &str,
+) -> Vec<Entity> {
+    let path = normalize_scene_entity_path(path);
+    if path.is_empty() {
+        return Vec::new();
+    }
+    let prefix = format!("{path}/");
+    let mut query = world.query::<(Entity, &SceneEntityPath)>();
+    query
+        .iter(world)
+        .filter_map(|(entity, entity_path)| {
+            let entity_path = entity_path.as_str();
+            let path_matches = entity_path == path || entity_path.starts_with(prefix.as_str());
+            (path_matches && scene_instance_id(world, entity) == Some(instance_id))
+                .then_some(entity)
         })
         .collect()
 }
@@ -850,16 +947,30 @@ pub fn spawn_scene_descriptor(world: &mut World, scene: &SceneDescriptor) -> Vec
 
 fn spawn_scene_descriptor_unchecked(world: &mut World, scene: &SceneDescriptor) -> Vec<Entity> {
     register_scene_materials(world, scene);
+    let instance_id = allocate_scene_instance_id(world);
     let prefabs = scene.prefab_lookup();
     let mut prefab_stack = Vec::new();
+    let mut context = SceneSpawnContext {
+        instance_id,
+        prefabs: &prefabs,
+        prefab_stack: &mut prefab_stack,
+    };
     scene
         .entities
         .iter()
         .enumerate()
-        .map(|(index, entity)| {
-            spawn_scene_entity(world, entity, index, "", &prefabs, None, &mut prefab_stack)
-        })
+        .map(|(index, entity)| spawn_scene_entity(world, entity, index, "", None, &mut context))
         .collect()
+}
+
+fn allocate_scene_instance_id(world: &mut World) -> SceneInstanceId {
+    if !world.contains_resource::<SceneInstanceCounter>() {
+        world.insert_resource(SceneInstanceCounter::default());
+    }
+    let counter = world.resource_mut::<SceneInstanceCounter>();
+    let instance_id = SceneInstanceId(counter.next);
+    counter.next = counter.next.saturating_add(1);
+    instance_id
 }
 
 fn register_scene_materials(world: &mut World, scene: &SceneDescriptor) {
@@ -923,8 +1034,14 @@ fn spawn_scene_prefab_unchecked(
     let prefab_id = prefab_id.into();
     scene.prefab(&prefab_id)?;
 
+    let instance_id = allocate_scene_instance_id(world);
     let prefabs = scene.prefab_lookup();
     let mut prefab_stack = Vec::new();
+    let mut context = SceneSpawnContext {
+        instance_id,
+        prefabs: &prefabs,
+        prefab_stack: &mut prefab_stack,
+    };
     let descriptor = SceneEntityDescriptor {
         name: Some(prefab_id.clone()),
         transform,
@@ -940,10 +1057,15 @@ fn spawn_scene_prefab_unchecked(
         &descriptor,
         0,
         "",
-        &prefabs,
         None,
-        &mut prefab_stack,
+        &mut context,
     ))
+}
+
+struct SceneSpawnContext<'a> {
+    instance_id: SceneInstanceId,
+    prefabs: &'a HashMap<&'a str, &'a ScenePrefabDescriptor>,
+    prefab_stack: &'a mut Vec<String>,
 }
 
 fn spawn_scene_entity(
@@ -951,9 +1073,8 @@ fn spawn_scene_entity(
     descriptor: &SceneEntityDescriptor,
     index: usize,
     parent_path: &str,
-    prefabs: &HashMap<&str, &ScenePrefabDescriptor>,
     parent: Option<Entity>,
-    prefab_stack: &mut Vec<String>,
+    context: &mut SceneSpawnContext<'_>,
 ) -> Entity {
     let transform = Transform::from(descriptor.transform);
     let path = scene_entity_descriptor_path(descriptor, index, parent_path);
@@ -961,6 +1082,7 @@ fn spawn_scene_entity(
         TransformComponent::new(transform),
         GlobalTransform::default(),
         SceneEntityPath(path.clone()),
+        context.instance_id,
     ));
 
     if let Some(name) = &descriptor.name {
@@ -1051,9 +1173,9 @@ fn spawn_scene_entity(
                 .insert(SpriteBillboard::from(sprite.clone()));
         }
         SceneEntityKind::Prefab { id, overrides } => {
-            if !prefab_stack.iter().any(|active| active == id) {
-                if let Some(prefab) = prefabs.get(id.as_str()) {
-                    prefab_stack.push(id.clone());
+            if !context.prefab_stack.iter().any(|active| active == id) {
+                if let Some(prefab) = context.prefabs.get(id.as_str()) {
+                    context.prefab_stack.push(id.clone());
                     for (index, child) in prefab.entities.iter().enumerate() {
                         let child = descriptor_with_prefab_overrides(
                             child,
@@ -1066,27 +1188,18 @@ fn spawn_scene_entity(
                             &child,
                             index,
                             path.as_str(),
-                            prefabs,
                             Some(entity),
-                            prefab_stack,
+                            context,
                         );
                     }
-                    let _ = prefab_stack.pop();
+                    let _ = context.prefab_stack.pop();
                 }
             }
         }
     }
 
     for (index, child) in descriptor.children.iter().enumerate() {
-        spawn_scene_entity(
-            world,
-            child,
-            index,
-            path.as_str(),
-            prefabs,
-            Some(entity),
-            prefab_stack,
-        );
+        spawn_scene_entity(world, child, index, path.as_str(), Some(entity), context);
     }
 
     entity
@@ -1609,6 +1722,37 @@ mod tests {
     }
 
     #[test]
+    fn scene_instance_ids_scope_tag_lookup() {
+        let scene = SceneDescriptor {
+            dependencies: Vec::new(),
+            materials: Vec::new(),
+            prefabs: Vec::new(),
+            entities: vec![SceneEntityDescriptor {
+                name: Some("Marker".to_string()),
+                tags: vec!["marker".to_string()],
+                kind: SceneEntityKind::Empty,
+                ..Default::default()
+            }],
+        };
+        let mut world = World::new();
+
+        let first_roots = spawn_scene_descriptor(&mut world, &scene);
+        let second_roots = spawn_scene_descriptor(&mut world, &scene);
+        let first_instance = scene_instance_id(&world, first_roots[0]).unwrap();
+        let second_instance = scene_instance_id(&world, second_roots[0]).unwrap();
+
+        assert_eq!(entities_with_tag(&mut world, "marker").len(), 2);
+        assert_eq!(
+            first_entity_with_tag_in_instance(&mut world, first_instance, "marker"),
+            Some(first_roots[0])
+        );
+        assert_eq!(
+            entities_with_tag_in_instance(&mut world, second_instance, "marker"),
+            vec![second_roots[0]]
+        );
+    }
+
+    #[test]
     fn scene_entities_spawn_authored_paths_for_hierarchies_and_prefabs() {
         let scene = prefab_test_scene();
         let mut world = World::new();
@@ -1626,6 +1770,10 @@ mod tests {
             Some("Crate Pair Instance")
         );
         assert_eq!(
+            scene_instance_id(&world, base),
+            scene_instance_id(&world, instance)
+        );
+        assert_eq!(
             scene_entity_path(&world, top),
             Some("Crate Pair Instance/Crate Base/Crate Top")
         );
@@ -1640,6 +1788,55 @@ mod tests {
         assert_eq!(
             world.get::<oxide_transform::Parent>(marker).unwrap().0,
             instance
+        );
+    }
+
+    #[test]
+    fn scene_instance_ids_scope_authored_path_lookup() {
+        let scene = prefab_test_scene();
+        let mut world = World::new();
+
+        let first_roots = spawn_scene_descriptor(&mut world, &scene);
+        let second_roots = spawn_scene_descriptor(&mut world, &scene);
+        let first_instance = scene_instance_id(&world, first_roots[0]).unwrap();
+        let second_instance = scene_instance_id(&world, second_roots[0]).unwrap();
+
+        assert_ne!(first_instance, second_instance);
+
+        let first_base = entity_by_scene_path_in_instance(
+            &mut world,
+            first_instance,
+            "Crate Pair Instance/Crate Base",
+        )
+        .unwrap();
+        let second_base = entity_by_scene_path_in_instance(
+            &mut world,
+            second_instance,
+            "Crate Pair Instance/Crate Base",
+        )
+        .unwrap();
+
+        assert_ne!(first_base, second_base);
+        assert_eq!(
+            world.get::<oxide_transform::Parent>(first_base).unwrap().0,
+            first_roots[0]
+        );
+        assert_eq!(
+            world.get::<oxide_transform::Parent>(second_base).unwrap().0,
+            second_roots[0]
+        );
+        assert_eq!(
+            entities_under_scene_path(&mut world, "Crate Pair Instance/Crate Base").len(),
+            4
+        );
+        assert_eq!(
+            entities_under_scene_path_in_instance(
+                &mut world,
+                first_instance,
+                "Crate Pair Instance/Crate Base"
+            )
+            .len(),
+            2
         );
     }
 

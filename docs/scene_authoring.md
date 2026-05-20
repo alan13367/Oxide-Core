@@ -74,13 +74,15 @@ The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
 - `RenderLayers` filters meshes, terrain, and sprites against the active
   camera's layer mask. Cameras and renderables default to layer `0`.
 - `SceneEntityPath` stores the slash-separated authored path assigned during
-  scene and prefab spawning. Use `entity_by_scene_path`,
-  `entities_under_scene_path`, and `scene_entity_path` when code or tools need
-  stable child lookup such as `Level/Player Spawn`.
+  scene and prefab spawning. `SceneInstanceId` scopes those paths and tags to
+  one spawned copy. Use `entity_by_scene_path_in_instance`,
+  `entities_under_scene_path_in_instance`, and `scene_entity_path` when code or
+  tools need stable child lookup such as `Level/Player Spawn`.
 - `Tags` stores stable authored labels such as `enemy`, `spawn_point`, or
   `pickup` for gameplay queries and editor/tooling filters. Use
-  `entities_with_tag`, `first_entity_with_tag`, and `entity_has_tag` when code
-  needs authored scene markers without depending on display names.
+  `entities_with_tag_in_instance`, `first_entity_with_tag_in_instance`, and
+  `entity_has_tag` when code needs authored scene markers without depending on
+  display names.
 - `CameraRenderView` renders active cameras deterministically by `order`,
   supports disabled cameras, normalized viewports, and scene clear overrides.
 - `TerrainDescriptor` and `SceneWorldDescriptor` describe terrain and blockout
@@ -194,10 +196,13 @@ Use entity `tags` for stable gameplay labels independent of display names.
 Systems can query `Tags` directly or use `first_entity_with_tag(&mut world,
 "spawn_point")` / `entities_with_tag(&mut world, "enemy")` instead of parsing
 names.
-Spawned entities also receive `SceneEntityPath` components. Named path segments
-use authored names, while unnamed siblings use `#index`, so code can call
-`entity_by_scene_path(&mut world, "Crate Pair/Crate Base")` or
-`entities_under_scene_path(&mut world, "Encounter A")` after a scene loads.
+Spawned entities also receive `SceneInstanceId` and `SceneEntityPath`
+components. Named path segments use authored names, while unnamed siblings use
+`#index`. When one scene can be spawned more than once, get the instance from a
+root with `scene_instance_id(&world, root)`, then call
+`entity_by_scene_path_in_instance(&mut world, instance, "Crate Pair/Crate Base")`
+or `entities_under_scene_path_in_instance(&mut world, instance, "Encounter A")`
+after a scene loads.
 Prefab override paths use slash-separated entity names, such as
 `"Crate Base/Crate Top"`. Unnamed prefab entities can be addressed by sibling
 index segments such as `"#0/#1"`.

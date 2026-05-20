@@ -99,11 +99,22 @@ impl App for MinimalGame {
     fn update(&mut self) {
         if !self.scene_loaded {
             if let Some(roots) = take_spawned_oxscene_roots(&mut self.world, self.scene_handle) {
-                if let Some(crate_pair) = entity_by_scene_path(&mut self.world, "Crate Pair") {
-                    add_y_pulse(&mut self.world, crate_pair, 0.25, Duration::from_secs(2));
-                }
-                if let Some(marker) = first_entity_with_tag(&mut self.world, "marker") {
-                    add_y_pulse(&mut self.world, marker, 0.15, Duration::from_millis(900));
+                let scene_instance = roots
+                    .first()
+                    .and_then(|root| scene_instance_id(&self.world, *root));
+                if let Some(scene_instance) = scene_instance {
+                    if let Some(crate_pair) = entity_by_scene_path_in_instance(
+                        &mut self.world,
+                        scene_instance,
+                        "Crate Pair",
+                    ) {
+                        add_y_pulse(&mut self.world, crate_pair, 0.25, Duration::from_secs(2));
+                    }
+                    if let Some(marker) =
+                        first_entity_with_tag_in_instance(&mut self.world, scene_instance, "marker")
+                    {
+                        add_y_pulse(&mut self.world, marker, 0.15, Duration::from_millis(900));
+                    }
                 }
                 self.world
                     .resource_mut::<PendingSceneRoots>()

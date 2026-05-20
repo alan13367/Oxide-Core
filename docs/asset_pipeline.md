@@ -40,6 +40,9 @@ Use `request_oxscene_spawn(world, path)` to asynchronously load a native scene
 document and spawn it once ready. Spawned root entities are available through
 `take_spawned_oxscene_roots(world, handle)`. The system is installed by
 `DefaultPlugins`, so it does not require glTF importer features.
+Use `scene_instance_id(world, root)` on a returned root when the same descriptor
+may be spawned more than once; scoped scene path and tag helpers can then target
+entities inside that loaded copy.
 
 Use `reload_oxscene_path(world, path)` to reload a known scene path into its
 existing handle, or `reload_changed_oxscenes(world, changed_paths)` to reload
