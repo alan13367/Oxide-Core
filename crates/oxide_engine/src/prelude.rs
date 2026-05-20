@@ -49,9 +49,10 @@ pub use crate::ecs::{
 pub use crate::ecs::{AppExit, FixedTime, RendererResource, Time, WindowResource};
 pub use crate::event::{window_event_to_engine, EngineEvent};
 pub use crate::input::{
-    sync_action_input_system, sync_axis_input_system, ActionBindings, ActionInput, AxisBindings,
-    AxisInput, AxisTrigger, ButtonState, InputTrigger, KeyboardInput, MouseButton, MouseDelta,
-    MouseInput,
+    sync_action_input_system, sync_axis_input_system, sync_contextual_action_input_system,
+    sync_contextual_axis_input_system, ActionBindings, ActionInput, AxisBindings, AxisInput,
+    AxisTrigger, ButtonState, ContextualActionBindings, ContextualAxisBindings, InputContexts,
+    InputTrigger, KeyboardInput, MouseButton, MouseDelta, MouseInput,
 };
 pub use crate::light::{
     AmbientLight, DirectionalLight, LightBuffer, LightUniform, PointLight, MAX_DIRECTIONAL_LIGHTS,

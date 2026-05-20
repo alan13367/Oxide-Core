@@ -19,3 +19,8 @@ Bindings can be edited at runtime for settings menus or editor tools:
 `set_triggers` replaces one action/axis, `unbind` removes one physical input,
 `unbind_trigger` clears a physical input everywhere, and
 `conflicting_triggers` reports overlaps.
+
+Use `InputContexts<T>` plus `ContextualActionBindings` and
+`ContextualAxisBindings` when controls should change by mode. The contextual
+sync systems merge global bindings with the active context stack so menus,
+gameplay, editor tools, and overlays can share one action/axis state resource.

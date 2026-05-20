@@ -304,6 +304,13 @@ Both action and axis bindings support runtime rebinding with `set_triggers`,
 single-trigger removal with `unbind` / `unbind_trigger`, and conflict checks
 with `has_conflict` or `conflicting_triggers`.
 
+For games with separate menus, gameplay, editor tools, or overlays, store the
+active layers in `InputContexts<T>` and use `ContextualActionBindings` /
+`ContextualAxisBindings` with `sync_contextual_action_input_system` and
+`sync_contextual_axis_input_system`. Global bindings stay active in every
+context, while context-specific bindings only contribute when that context is
+active.
+
 Scene descriptors can keep reusable object templates next to the level data:
 
 ```rust

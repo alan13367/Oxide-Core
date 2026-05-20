@@ -327,6 +327,281 @@ where
     }
 }
 
+/// Active input context stack for mode-specific action and axis maps.
+///
+/// Contexts are game-defined values such as `Gameplay`, `Menu`, or `Editor`.
+/// The first active context is treated as the lowest-priority layer and the
+/// last active context as the highest-priority layer. Contextual bindings merge
+/// all active layers with global bindings when synchronized.
+pub struct InputContexts<C> {
+    active: Vec<C>,
+}
+
+impl<C: 'static> Resource for InputContexts<C> {}
+
+impl<C> Default for InputContexts<C> {
+    fn default() -> Self {
+        Self { active: Vec::new() }
+    }
+}
+
+impl<C> InputContexts<C>
+where
+    C: Eq,
+{
+    /// Creates an empty context stack.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates a context stack with one active context.
+    pub fn with_context(context: C) -> Self {
+        Self {
+            active: vec![context],
+        }
+    }
+
+    /// Replaces the stack with one active context.
+    pub fn set(&mut self, context: C) -> &mut Self {
+        self.active.clear();
+        self.active.push(context);
+        self
+    }
+
+    /// Pushes a context above the current active contexts.
+    ///
+    /// Existing copies of the same context are removed first so each context
+    /// appears at most once in the stack.
+    pub fn push(&mut self, context: C) -> &mut Self {
+        self.active.retain(|candidate| *candidate != context);
+        self.active.push(context);
+        self
+    }
+
+    /// Removes one context from the stack and returns whether it was active.
+    pub fn remove(&mut self, context: &C) -> bool {
+        let previous_len = self.active.len();
+        self.active.retain(|candidate| candidate != context);
+        self.active.len() != previous_len
+    }
+
+    /// Pops the highest-priority context.
+    pub fn pop(&mut self) -> Option<C> {
+        self.active.pop()
+    }
+
+    /// Clears all active contexts.
+    pub fn clear(&mut self) {
+        self.active.clear();
+    }
+
+    /// Returns true when `context` is active.
+    pub fn is_active(&self, context: &C) -> bool {
+        self.active.contains(context)
+    }
+
+    /// Iterates active contexts from lowest to highest priority.
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &C> {
+        self.active.iter()
+    }
+
+    /// Returns the highest-priority active context.
+    pub fn current(&self) -> Option<&C> {
+        self.active.last()
+    }
+
+    /// Returns true when no contexts are active.
+    pub fn is_empty(&self) -> bool {
+        self.active.is_empty()
+    }
+}
+
+/// Action bindings split into global and context-specific maps.
+pub struct ContextualActionBindings<A, C> {
+    global: ActionBindings<A>,
+    contexts: HashMap<C, ActionBindings<A>>,
+}
+
+impl<A: 'static, C: 'static> Resource for ContextualActionBindings<A, C> {}
+
+impl<A, C> Default for ContextualActionBindings<A, C> {
+    fn default() -> Self {
+        Self {
+            global: ActionBindings::default(),
+            contexts: HashMap::new(),
+        }
+    }
+}
+
+impl<A, C> ContextualActionBindings<A, C>
+where
+    A: Eq + Hash,
+    C: Eq + Hash,
+{
+    /// Creates an empty contextual action binding map.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns bindings that are active in every context.
+    pub fn global(&self) -> &ActionBindings<A> {
+        &self.global
+    }
+
+    /// Returns mutable bindings that are active in every context.
+    pub fn global_mut(&mut self) -> &mut ActionBindings<A> {
+        &mut self.global
+    }
+
+    /// Returns bindings for one context, if any are registered.
+    pub fn context(&self, context: &C) -> Option<&ActionBindings<A>> {
+        self.contexts.get(context)
+    }
+
+    /// Returns mutable bindings for one context, creating it if needed.
+    pub fn context_mut(&mut self, context: C) -> &mut ActionBindings<A> {
+        self.contexts.entry(context).or_default()
+    }
+
+    /// Adds a global trigger for an action.
+    pub fn bind_global(&mut self, action: A, trigger: InputTrigger) -> &mut Self {
+        self.global.bind(action, trigger);
+        self
+    }
+
+    /// Adds a global keyboard trigger for an action.
+    pub fn bind_global_key(&mut self, action: A, key: KeyCode) -> &mut Self {
+        self.bind_global(action, key.into())
+    }
+
+    /// Adds a global mouse trigger for an action.
+    pub fn bind_global_mouse(&mut self, action: A, button: MouseButton) -> &mut Self {
+        self.bind_global(action, button.into())
+    }
+
+    /// Adds a context-specific trigger for an action.
+    pub fn bind(&mut self, context: C, action: A, trigger: InputTrigger) -> &mut Self {
+        self.context_mut(context).bind(action, trigger);
+        self
+    }
+
+    /// Adds a context-specific keyboard trigger for an action.
+    pub fn bind_key(&mut self, context: C, action: A, key: KeyCode) -> &mut Self {
+        self.bind(context, action, key.into())
+    }
+
+    /// Adds a context-specific mouse trigger for an action.
+    pub fn bind_mouse(&mut self, context: C, action: A, button: MouseButton) -> &mut Self {
+        self.bind(context, action, button.into())
+    }
+
+    /// Removes all bindings for one context.
+    pub fn clear_context(&mut self, context: &C) -> Option<ActionBindings<A>> {
+        self.contexts.remove(context)
+    }
+
+    /// Iterates registered context binding maps.
+    pub fn iter_contexts(&self) -> impl Iterator<Item = (&C, &ActionBindings<A>)> {
+        self.contexts.iter()
+    }
+}
+
+/// Axis bindings split into global and context-specific maps.
+pub struct ContextualAxisBindings<A, C> {
+    global: AxisBindings<A>,
+    contexts: HashMap<C, AxisBindings<A>>,
+}
+
+impl<A: 'static, C: 'static> Resource for ContextualAxisBindings<A, C> {}
+
+impl<A, C> Default for ContextualAxisBindings<A, C> {
+    fn default() -> Self {
+        Self {
+            global: AxisBindings::default(),
+            contexts: HashMap::new(),
+        }
+    }
+}
+
+impl<A, C> ContextualAxisBindings<A, C>
+where
+    A: Eq + Hash,
+    C: Eq + Hash,
+{
+    /// Creates an empty contextual axis binding map.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns bindings that are active in every context.
+    pub fn global(&self) -> &AxisBindings<A> {
+        &self.global
+    }
+
+    /// Returns mutable bindings that are active in every context.
+    pub fn global_mut(&mut self) -> &mut AxisBindings<A> {
+        &mut self.global
+    }
+
+    /// Returns bindings for one context, if any are registered.
+    pub fn context(&self, context: &C) -> Option<&AxisBindings<A>> {
+        self.contexts.get(context)
+    }
+
+    /// Returns mutable bindings for one context, creating it if needed.
+    pub fn context_mut(&mut self, context: C) -> &mut AxisBindings<A> {
+        self.contexts.entry(context).or_default()
+    }
+
+    /// Adds a global scaled trigger for an axis.
+    pub fn bind_global(&mut self, axis: A, trigger: AxisTrigger) -> &mut Self {
+        self.global.bind(axis, trigger);
+        self
+    }
+
+    /// Adds a global keyboard contribution for an axis.
+    pub fn bind_global_key(&mut self, axis: A, key: KeyCode, scale: f32) -> &mut Self {
+        self.bind_global(axis, AxisTrigger::new(key, scale))
+    }
+
+    /// Adds a context-specific scaled trigger for an axis.
+    pub fn bind(&mut self, context: C, axis: A, trigger: AxisTrigger) -> &mut Self {
+        self.context_mut(context).bind(axis, trigger);
+        self
+    }
+
+    /// Adds a context-specific keyboard contribution for an axis.
+    pub fn bind_key(&mut self, context: C, axis: A, key: KeyCode, scale: f32) -> &mut Self {
+        self.bind(context, axis, AxisTrigger::new(key, scale))
+    }
+
+    /// Adds context-specific negative and positive keyboard bindings for an axis.
+    pub fn bind_key_pair(
+        &mut self,
+        context: C,
+        axis: A,
+        negative: KeyCode,
+        positive: KeyCode,
+    ) -> &mut Self
+    where
+        A: Clone,
+        C: Clone,
+    {
+        self.bind_key(context.clone(), axis.clone(), negative, -1.0)
+            .bind_key(context, axis, positive, 1.0)
+    }
+
+    /// Removes all bindings for one context.
+    pub fn clear_context(&mut self, context: &C) -> Option<AxisBindings<A>> {
+        self.contexts.remove(context)
+    }
+
+    /// Iterates registered context binding maps.
+    pub fn iter_contexts(&self) -> impl Iterator<Item = (&C, &AxisBindings<A>)> {
+        self.contexts.iter()
+    }
+}
+
 /// Per-frame state for semantic gameplay actions.
 pub struct ActionInput<A> {
     pressed: HashSet<A>,
@@ -372,6 +647,30 @@ where
             })
             .map(|(action, _)| action.clone())
             .collect();
+
+        self.just_pressed = current.difference(&previous).cloned().collect();
+        self.just_released = previous.difference(&current).cloned().collect();
+        self.pressed = current;
+    }
+
+    /// Recomputes action state from global plus active context bindings.
+    pub fn sync_contextual<C>(
+        &mut self,
+        bindings: &ContextualActionBindings<A, C>,
+        contexts: &InputContexts<C>,
+        keyboard: &KeyboardInput,
+        mouse: &MouseInput,
+    ) where
+        C: Eq + Hash,
+    {
+        let previous = std::mem::take(&mut self.pressed);
+        let mut current = HashSet::new();
+        collect_pressed_actions(&bindings.global, keyboard, mouse, &mut current);
+        for context in contexts.iter() {
+            if let Some(context_bindings) = bindings.context(context) {
+                collect_pressed_actions(context_bindings, keyboard, mouse, &mut current);
+            }
+        }
 
         self.just_pressed = current.difference(&previous).cloned().collect();
         self.just_released = previous.difference(&current).cloned().collect();
@@ -462,6 +761,28 @@ where
         }
     }
 
+    /// Recomputes axis values from global plus active context bindings.
+    pub fn sync_contextual<C>(
+        &mut self,
+        bindings: &ContextualAxisBindings<A, C>,
+        contexts: &InputContexts<C>,
+        keyboard: &KeyboardInput,
+        mouse: &MouseInput,
+    ) where
+        C: Eq + Hash,
+    {
+        self.values.clear();
+        accumulate_axis_values(&bindings.global, keyboard, mouse, &mut self.values);
+        for context in contexts.iter() {
+            if let Some(context_bindings) = bindings.context(context) {
+                accumulate_axis_values(context_bindings, keyboard, mouse, &mut self.values);
+            }
+        }
+        for value in self.values.values_mut() {
+            *value = value.clamp(-1.0, 1.0);
+        }
+    }
+
     /// Clears all axis state.
     pub fn clear(&mut self) {
         self.values.clear();
@@ -507,6 +828,76 @@ pub fn sync_axis_input_system<A>(
     axes.sync(&bindings, &keyboard, &mouse);
 }
 
+/// ECS system that updates [`ActionInput`] from contextual action bindings.
+pub fn sync_contextual_action_input_system<A, C>(
+    keyboard: Res<KeyboardInput>,
+    mouse: Res<MouseInput>,
+    bindings: Res<ContextualActionBindings<A, C>>,
+    contexts: Res<InputContexts<C>>,
+    mut actions: ResMut<ActionInput<A>>,
+) where
+    A: Clone + Eq + Hash + 'static,
+    C: Clone + Eq + Hash + 'static,
+{
+    actions.sync_contextual(&bindings, &contexts, &keyboard, &mouse);
+}
+
+/// ECS system that updates [`AxisInput`] from contextual axis bindings.
+pub fn sync_contextual_axis_input_system<A, C>(
+    keyboard: Res<KeyboardInput>,
+    mouse: Res<MouseInput>,
+    bindings: Res<ContextualAxisBindings<A, C>>,
+    contexts: Res<InputContexts<C>>,
+    mut axes: ResMut<AxisInput<A>>,
+) where
+    A: Clone + Eq + Hash + 'static,
+    C: Clone + Eq + Hash + 'static,
+{
+    axes.sync_contextual(&bindings, &contexts, &keyboard, &mouse);
+}
+
+fn collect_pressed_actions<A>(
+    bindings: &ActionBindings<A>,
+    keyboard: &KeyboardInput,
+    mouse: &MouseInput,
+    current: &mut HashSet<A>,
+) where
+    A: Clone + Eq + Hash,
+{
+    current.extend(
+        bindings
+            .iter()
+            .filter(|(_, triggers)| {
+                triggers
+                    .iter()
+                    .any(|trigger| trigger_pressed(*trigger, keyboard, mouse))
+            })
+            .map(|(action, _)| action.clone()),
+    );
+}
+
+fn accumulate_axis_values<A>(
+    bindings: &AxisBindings<A>,
+    keyboard: &KeyboardInput,
+    mouse: &MouseInput,
+    values: &mut HashMap<A, f32>,
+) where
+    A: Clone + Eq + Hash,
+{
+    for (axis, triggers) in bindings.iter() {
+        let value = triggers
+            .iter()
+            .filter(|trigger| trigger_pressed(trigger.trigger, keyboard, mouse))
+            .map(|trigger| trigger.scale)
+            .sum::<f32>();
+        if value != 0.0 {
+            *values.entry(axis.clone()).or_insert(0.0) += value;
+        } else {
+            values.entry(axis.clone()).or_insert(0.0);
+        }
+    }
+}
+
 fn trigger_pressed(trigger: InputTrigger, keyboard: &KeyboardInput, mouse: &MouseInput) -> bool {
     match trigger {
         InputTrigger::Key(key) => keyboard.pressed(key),
@@ -529,6 +920,12 @@ mod tests {
     enum GameAxis {
         MoveX,
         Throttle,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    enum InputMode {
+        Gameplay,
+        Menu,
     }
 
     #[test]
@@ -605,6 +1002,39 @@ mod tests {
         assert!(bindings.triggers(&GameAction::Jump).is_empty());
         assert_eq!(bindings.unbind_trigger(MouseButton::Left.into()), 1);
         assert!(bindings.is_empty());
+    }
+
+    #[test]
+    fn contextual_action_bindings_follow_active_contexts() {
+        let mut keyboard = KeyboardInput::default();
+        let mouse = MouseInput::default();
+        let mut contexts = InputContexts::with_context(InputMode::Gameplay);
+        let mut bindings = ContextualActionBindings::new();
+        bindings
+            .bind_global_key(GameAction::Fire, KeyCode::F12)
+            .bind_key(InputMode::Gameplay, GameAction::Jump, KeyCode::Space)
+            .bind_key(InputMode::Menu, GameAction::Fire, KeyCode::Enter);
+
+        keyboard.process_event(PhysicalKey::Code(KeyCode::Space), true);
+        keyboard.process_event(PhysicalKey::Code(KeyCode::Enter), true);
+        keyboard.process_event(PhysicalKey::Code(KeyCode::F12), true);
+
+        let mut actions = ActionInput::new();
+        actions.sync_contextual(&bindings, &contexts, &keyboard, &mouse);
+        assert!(actions.pressed(&GameAction::Jump));
+        assert!(actions.pressed(&GameAction::Fire));
+        assert!(actions.just_pressed(&GameAction::Jump));
+
+        contexts.set(InputMode::Menu);
+        actions.sync_contextual(&bindings, &contexts, &keyboard, &mouse);
+        assert!(!actions.pressed(&GameAction::Jump));
+        assert!(actions.just_released(&GameAction::Jump));
+        assert!(actions.pressed(&GameAction::Fire));
+
+        contexts.push(InputMode::Gameplay);
+        assert_eq!(contexts.current(), Some(&InputMode::Gameplay));
+        actions.sync_contextual(&bindings, &contexts, &keyboard, &mouse);
+        assert!(actions.pressed(&GameAction::Jump));
     }
 
     #[test]
@@ -689,5 +1119,36 @@ mod tests {
         assert!(bindings.triggers(&GameAxis::MoveX).is_empty());
         assert_eq!(bindings.unbind_trigger(MouseButton::Right.into()), 1);
         assert!(bindings.is_empty());
+    }
+
+    #[test]
+    fn contextual_axis_bindings_merge_global_and_active_context_axes() {
+        let mut keyboard = KeyboardInput::default();
+        let mouse = MouseInput::default();
+        let mut contexts = InputContexts::with_context(InputMode::Gameplay);
+        let mut bindings = ContextualAxisBindings::new();
+        bindings
+            .bind_global_key(GameAxis::Throttle, KeyCode::ShiftLeft, 0.25)
+            .bind_key_pair(
+                InputMode::Gameplay,
+                GameAxis::MoveX,
+                KeyCode::KeyA,
+                KeyCode::KeyD,
+            )
+            .bind_key(InputMode::Menu, GameAxis::Throttle, KeyCode::ArrowUp, 1.0);
+
+        keyboard.process_event(PhysicalKey::Code(KeyCode::KeyD), true);
+        keyboard.process_event(PhysicalKey::Code(KeyCode::ArrowUp), true);
+        keyboard.process_event(PhysicalKey::Code(KeyCode::ShiftLeft), true);
+
+        let mut axes = AxisInput::new();
+        axes.sync_contextual(&bindings, &contexts, &keyboard, &mouse);
+        assert_eq!(axes.value(&GameAxis::MoveX), 1.0);
+        assert_eq!(axes.value(&GameAxis::Throttle), 0.25);
+
+        contexts.set(InputMode::Menu);
+        axes.sync_contextual(&bindings, &contexts, &keyboard, &mouse);
+        assert_eq!(axes.value(&GameAxis::MoveX), 0.0);
+        assert_eq!(axes.value(&GameAxis::Throttle), 1.0);
     }
 }
