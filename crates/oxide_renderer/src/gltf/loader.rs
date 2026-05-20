@@ -90,7 +90,7 @@ pub fn load_gltf(
 
     let dependencies = gltf_document_dependencies(path, &document);
     let materials = extract_materials(&document);
-    let images = extract_images(images)?;
+    let images = extract_images(&document, images)?;
 
     // Extract meshes
     let mut meshes = Vec::new();
@@ -175,6 +175,9 @@ fn extract_materials(document: &gltf::Document) -> Vec<(String, MaterialDescript
             let normal_texture = material
                 .normal_texture()
                 .map(|texture| format!("#image_{}", texture.texture().source().index()));
+            let roughness_texture = pbr
+                .metallic_roughness_texture()
+                .map(|texture| format!("#image_{}_roughness", texture.texture().source().index()));
             let alpha_mode = match material.alpha_mode() {
                 gltf::material::AlphaMode::Opaque => AlphaMode::Opaque,
                 gltf::material::AlphaMode::Mask => AlphaMode::Mask,
@@ -194,7 +197,7 @@ fn extract_materials(document: &gltf::Document) -> Vec<(String, MaterialDescript
                 alpha_mode,
                 albedo_texture,
                 normal_texture,
-                roughness_texture: None,
+                roughness_texture,
             };
             (name, descriptor)
         })
@@ -202,14 +205,26 @@ fn extract_materials(document: &gltf::Document) -> Vec<(String, MaterialDescript
 }
 
 fn extract_images(
+    document: &gltf::Document,
     images: Vec<gltf::image::Data>,
 ) -> Result<Vec<(String, TextureImage)>, GltfError> {
+    let roughness_sources = gltf_roughness_image_sources(document);
     images
         .into_iter()
         .enumerate()
-        .map(|(idx, image)| {
+        .try_fold(Vec::new(), |mut images, (idx, image)| {
             let label = format!("image_{idx}");
             let rgba = gltf_image_to_rgba(&image);
+            if roughness_sources.contains(&idx) {
+                let roughness_label = format!("image_{idx}_roughness");
+                let roughness_rgba = roughness_rgba_from_metallic_roughness_rgba(&rgba);
+                let roughness = TextureImage::from_rgba(image.width, image.height, roughness_rgba)
+                    .map_err(|source| GltfError::TextureImage {
+                        label: roughness_label.clone(),
+                        source,
+                    })?;
+                images.push((roughness_label, roughness));
+            }
             let texture =
                 TextureImage::from_rgba(image.width, image.height, rgba).map_err(|source| {
                     GltfError::TextureImage {
@@ -217,9 +232,33 @@ fn extract_images(
                         source,
                     }
                 })?;
-            Ok((label, texture))
+            images.push((label, texture));
+            Ok(images)
         })
-        .collect()
+}
+
+fn gltf_roughness_image_sources(document: &gltf::Document) -> Vec<usize> {
+    let mut sources: Vec<_> = document
+        .materials()
+        .filter_map(|material| {
+            material
+                .pbr_metallic_roughness()
+                .metallic_roughness_texture()
+                .map(|texture| texture.texture().source().index())
+        })
+        .collect();
+    sources.sort_unstable();
+    sources.dedup();
+    sources
+}
+
+fn roughness_rgba_from_metallic_roughness_rgba(rgba: &[u8]) -> Vec<u8> {
+    let mut roughness = Vec::with_capacity(rgba.len());
+    for pixel in rgba.chunks_exact(4) {
+        let value = pixel[1];
+        roughness.extend_from_slice(&[value, value, value, 255]);
+    }
+    roughness
 }
 
 fn gltf_image_to_rgba(image: &gltf::image::Data) -> Vec<u8> {
@@ -449,11 +488,13 @@ mod tests {
             "asset": { "version": "2.0" },
             "images": [
                 { "uri": "albedo.png" },
-                { "uri": "normal.png" }
+                { "uri": "normal.png" },
+                { "uri": "metallic_roughness.png" }
             ],
             "textures": [
                 { "source": 0 },
-                { "source": 1 }
+                { "source": 1 },
+                { "source": 2 }
             ],
             "materials": [
                 {
@@ -461,7 +502,8 @@ mod tests {
                         "baseColorFactor": [0.8, 0.7, 0.6, 1.0],
                         "metallicFactor": 0.35,
                         "roughnessFactor": 0.85,
-                        "baseColorTexture": { "index": 0 }
+                        "baseColorTexture": { "index": 0 },
+                        "metallicRoughnessTexture": { "index": 2 }
                     },
                     "normalTexture": { "index": 1 },
                     "emissiveFactor": [0.1, 0.2, 0.3],
@@ -482,6 +524,43 @@ mod tests {
         assert_eq!(descriptor.alpha_mode, AlphaMode::Blend);
         assert_eq!(descriptor.albedo_texture.as_deref(), Some("#image_0"));
         assert_eq!(descriptor.normal_texture.as_deref(), Some("#image_1"));
-        assert_eq!(descriptor.roughness_texture, None);
+        assert_eq!(
+            descriptor.roughness_texture.as_deref(),
+            Some("#image_2_roughness")
+        );
+    }
+
+    #[test]
+    fn gltf_images_publish_roughness_texture_from_packed_metallic_roughness() {
+        let raw = br#"{
+            "asset": { "version": "2.0" },
+            "images": [
+                { "uri": "metallic_roughness.png" }
+            ],
+            "textures": [
+                { "source": 0 }
+            ],
+            "materials": [
+                {
+                    "pbrMetallicRoughness": {
+                        "metallicRoughnessTexture": { "index": 0 }
+                    }
+                }
+            ]
+        }"#;
+        let gltf = gltf::Gltf::from_slice(raw).unwrap();
+        let images = vec![gltf::image::Data {
+            pixels: vec![7, 64, 128, 255, 11, 200, 220, 255],
+            format: Format::R8G8B8A8,
+            width: 2,
+            height: 1,
+        }];
+
+        let images = extract_images(&gltf.document, images).unwrap();
+
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].0, "image_0_roughness");
+        assert_eq!(images[0].1.rgba, vec![64, 64, 64, 255, 200, 200, 200, 255]);
+        assert_eq!(images[1].0, "image_0");
     }
 }
