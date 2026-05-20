@@ -60,9 +60,15 @@ var<uniform> lights: LightUniform;
 var<storage, read> point_lights: array<PointLight>;
 
 @group(2) @binding(0)
-var material_texture: texture_2d<f32>;
+var albedo_texture: texture_2d<f32>;
 
 @group(2) @binding(1)
+var normal_texture: texture_2d<f32>;
+
+@group(2) @binding(2)
+var roughness_texture: texture_2d<f32>;
+
+@group(2) @binding(3)
 var material_sampler: sampler;
 
 struct VertexInput {
@@ -76,6 +82,7 @@ struct VertexInput {
     @location(7) tint: vec4<f32>,
     @location(8) material: vec4<f32>,
     @location(9) material_factors: vec4<f32>,
+    @location(10) texture_flags: vec4<f32>,
 };
 
 struct VertexOutput {
@@ -85,11 +92,11 @@ struct VertexOutput {
     @location(2) tint: vec4<f32>,
     @location(3) material_mode: f32,
     @location(4) uv: vec2<f32>,
-    @location(5) texture_weight: f32,
     @location(6) alpha_mode: f32,
     @location(7) roughness_factor: f32,
     @location(8) metallic_factor: f32,
     @location(9) emissive_color: vec3<f32>,
+    @location(10) texture_flags: vec3<f32>,
 };
 
 @vertex
@@ -104,18 +111,29 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.tint = input.tint;
     output.material_mode = input.material.x;
     output.uv = input.uv;
-    output.texture_weight = input.material.y;
     output.alpha_mode = input.material.z;
     output.roughness_factor = input.material.w;
     output.metallic_factor = input.material_factors.x;
     output.emissive_color = input.material_factors.yzw;
+    output.texture_flags = input.texture_flags.xyz;
     return output;
+}
+
+fn normal_from_map(base_normal: vec3<f32>, world_position: vec3<f32>, uv: vec2<f32>, sample: vec3<f32>) -> vec3<f32> {
+    let mapped = sample * 2.0 - vec3<f32>(1.0);
+    let dp1 = dpdx(world_position);
+    let dp2 = dpdy(world_position);
+    let duv1 = dpdx(uv);
+    let duv2 = dpdy(uv);
+    let tangent = normalize(dp1 * duv2.y - dp2 * duv1.y);
+    let bitangent = normalize(-dp1 * duv2.x + dp2 * duv1.x);
+    return normalize(tangent * mapped.x + bitangent * mapped.y + base_normal * mapped.z);
 }
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let sampled = textureSample(material_texture, material_sampler, input.uv);
-    let texture_color = mix(vec4<f32>(1.0, 1.0, 1.0, 1.0), sampled, input.texture_weight);
+    let sampled = textureSample(albedo_texture, material_sampler, input.uv);
+    let texture_color = mix(vec4<f32>(1.0, 1.0, 1.0, 1.0), sampled, input.texture_flags.x);
     let surface_color = input.tint * texture_color;
     if (input.alpha_mode > 0.5 && input.alpha_mode < 1.5 && surface_color.a < 0.5) {
         discard;
@@ -125,9 +143,12 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         return surface_color;
     }
 
-    let normal = normalize(input.normal);
+    let base_normal = normalize(input.normal);
+    let normal_sample = textureSample(normal_texture, material_sampler, input.uv).xyz;
+    let normal = select(base_normal, normal_from_map(base_normal, input.world_position, input.uv, normal_sample), input.texture_flags.y > 0.5);
     let view_dir = normalize(camera.position.xyz - input.world_position);
-    let roughness = clamp(input.roughness_factor, 0.04, 1.0);
+    let roughness_sample = textureSample(roughness_texture, material_sampler, input.uv).r;
+    let roughness = clamp(input.roughness_factor * mix(1.0, roughness_sample, input.texture_flags.z), 0.04, 1.0);
     let metallic = clamp(input.metallic_factor, 0.0, 1.0);
     var lighting = lights.ambient_color_intensity.rgb * lights.ambient_color_intensity.a;
     var specular_lighting = vec3<f32>(0.0);
@@ -183,14 +204,15 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
-const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
+const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
     3 => Float32x4,
     4 => Float32x4,
     5 => Float32x4,
     6 => Float32x4,
     7 => Float32x4,
     8 => Float32x4,
-    9 => Float32x4
+    9 => Float32x4,
+    10 => Float32x4
 ];
 
 const SPRITE_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
@@ -302,6 +324,7 @@ struct SceneInstanceRaw {
     tint: [f32; 4],
     material: [f32; 4],
     material_factors: [f32; 4],
+    texture_flags: [f32; 4],
 }
 
 impl SceneInstanceRaw {
@@ -322,6 +345,12 @@ impl SceneInstanceRaw {
                 f32::from_bits(material.emissive_color[1]),
                 f32::from_bits(material.emissive_color[2]),
             ],
+            texture_flags: [
+                f32::from(material.albedo_texture.is_some()),
+                f32::from(material.normal_texture.is_some()),
+                f32::from(material.roughness_texture.is_some()),
+                0.0,
+            ],
         }
     }
 }
@@ -335,6 +364,8 @@ struct MaterialBatchKey {
     emissive_color: [u32; 3],
     identity: String,
     albedo_texture: Option<String>,
+    normal_texture: Option<String>,
+    roughness_texture: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -398,6 +429,8 @@ impl MaterialBatchKey {
                 emissive_color,
                 alpha_mode,
                 albedo_texture,
+                normal_texture,
+                roughness_texture,
             } => Self {
                 mode: material_mode(*shader, *material_type),
                 alpha_mode: *alpha_mode,
@@ -405,9 +438,11 @@ impl MaterialBatchKey {
                 roughness_factor: material_factor_key(*roughness_factor),
                 emissive_color: emissive_color.map(material_factor_key),
                 identity: format!(
-                    "builtin:{shader:?}:{material_type:?}:{name}:{base_color:?}:{metallic_factor:?}:{roughness_factor:?}:{emissive_color:?}:{alpha_mode:?}:{albedo_texture:?}"
+                    "builtin:{shader:?}:{material_type:?}:{name}:{base_color:?}:{metallic_factor:?}:{roughness_factor:?}:{emissive_color:?}:{alpha_mode:?}:{albedo_texture:?}:{normal_texture:?}:{roughness_texture:?}"
                 ),
                 albedo_texture: albedo_texture.clone(),
+                normal_texture: normal_texture.clone(),
+                roughness_texture: roughness_texture.clone(),
             },
             RenderMaterial::Named(name) => Self {
                 mode: MaterialMode::Lit,
@@ -417,6 +452,8 @@ impl MaterialBatchKey {
                 emissive_color: [0.0, 0.0, 0.0].map(material_factor_key),
                 identity: format!("named:{name}"),
                 albedo_texture: None,
+                normal_texture: None,
+                roughness_texture: None,
             },
         }
     }
@@ -536,8 +573,47 @@ struct SpriteTexture {
 #[derive(Debug)]
 struct MaterialTexture {
     _texture: Texture,
-    bind_group: wgpu::BindGroup,
     revision: u64,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+struct MaterialTextureSetKey {
+    albedo: Option<String>,
+    normal: Option<String>,
+    roughness: Option<String>,
+}
+
+#[derive(Debug)]
+struct MaterialTextureSet {
+    bind_group: wgpu::BindGroup,
+    revisions: [u64; 3],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MaterialFallback {
+    White,
+    Normal,
+}
+
+impl MaterialTextureSetKey {
+    fn from_material(material: &MaterialBatchKey) -> Self {
+        Self {
+            albedo: material_texture_label(material.albedo_texture.as_deref()),
+            normal: material_texture_label(material.normal_texture.as_deref()),
+            roughness: material_texture_label(material.roughness_texture.as_deref()),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.albedo.is_none() && self.normal.is_none() && self.roughness.is_none()
+    }
+}
+
+fn material_texture_label(label: Option<&str>) -> Option<String> {
+    label
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .map(|label| label.trim_start_matches('#').to_string())
 }
 
 #[derive(Debug)]
@@ -630,6 +706,8 @@ pub struct SceneRenderer {
     sprite_texture_layout: wgpu::BindGroupLayout,
     material_texture_layout: wgpu::BindGroupLayout,
     fallback_material_texture: MaterialTexture,
+    fallback_normal_texture: MaterialTexture,
+    fallback_material_bind_group: wgpu::BindGroup,
     depth_texture: DepthTexture,
     cube_mesh: Mesh3D,
     sphere_meshes: HashMap<(u32, u32), Mesh3D>,
@@ -640,6 +718,7 @@ pub struct SceneRenderer {
     sprite_index_count: u32,
     sprite_textures: HashMap<SpriteId, SpriteTexture>,
     material_textures: HashMap<String, MaterialTexture>,
+    material_texture_sets: HashMap<MaterialTextureSetKey, MaterialTextureSet>,
     target_width: u32,
     target_height: u32,
     gizmo_pipeline: wgpu::RenderPipeline,
@@ -661,7 +740,7 @@ impl SceneRenderer {
         let light_buffer = LightBuffer::new(device);
         let shader = create_shader(device, SCENE_RENDERER_SHADER, Some("Scene Renderer Shader"));
         let material_texture_layout =
-            create_texture_bind_group_layout(device, "Scene Material Texture Layout");
+            create_material_texture_bind_group_layout(device, "Scene Material Texture Layout");
         let pipeline = create_scene_pipeline(
             device,
             &shader,
@@ -693,10 +772,24 @@ impl SceneRenderer {
         let fallback_material_texture = create_material_texture(
             device,
             queue,
-            &material_texture_layout,
             &[255, 255, 255, 255],
             (1, 1),
             "Scene Fallback Material Texture",
+        );
+        let fallback_normal_texture = create_material_texture(
+            device,
+            queue,
+            &[128, 128, 255, 255],
+            (1, 1),
+            "Scene Fallback Normal Texture",
+        );
+        let fallback_material_bind_group = create_material_texture_set_bind_group(
+            device,
+            &material_texture_layout,
+            &fallback_material_texture,
+            &fallback_normal_texture,
+            &fallback_material_texture,
+            "Scene Fallback Material Texture Set",
         );
         let sprite_shader = create_shader(device, SPRITE_SHADER, Some("Scene Sprite Shader"));
         let sprite_world_pipeline = create_sprite_pipeline(
@@ -757,6 +850,8 @@ impl SceneRenderer {
             sprite_texture_layout,
             material_texture_layout,
             fallback_material_texture,
+            fallback_normal_texture,
+            fallback_material_bind_group,
             depth_texture: DepthTexture::new(device, width, height, Some("Scene Renderer Depth")),
             cube_mesh: Mesh3D::new_cube(device),
             sphere_meshes: HashMap::new(),
@@ -767,6 +862,7 @@ impl SceneRenderer {
             sprite_index_count,
             sprite_textures: HashMap::new(),
             material_textures: HashMap::new(),
+            material_texture_sets: HashMap::new(),
             target_width: width,
             target_height: height,
             gizmo_pipeline,
@@ -909,11 +1005,7 @@ impl SceneRenderer {
             if instances.alpha_mode != alpha_mode {
                 continue;
             }
-            set_material_texture(
-                render_pass,
-                &self.fallback_material_texture.bind_group,
-                instances,
-            );
+            set_material_texture(render_pass, &self.fallback_material_bind_group, instances);
             draw_mesh_batch(render_pass, &self.cube_mesh, instances);
         }
 
@@ -924,7 +1016,7 @@ impl SceneRenderer {
             if let Some(mesh) = self.sphere_meshes.get(&(batch.segments, batch.rings)) {
                 set_material_texture(
                     render_pass,
-                    &self.fallback_material_texture.bind_group,
+                    &self.fallback_material_bind_group,
                     &batch.instances,
                 );
                 draw_mesh_batch(render_pass, mesh, &batch.instances);
@@ -937,7 +1029,7 @@ impl SceneRenderer {
             }
             set_material_texture(
                 render_pass,
-                &self.fallback_material_texture.bind_group,
+                &self.fallback_material_bind_group,
                 &draw.instances,
             );
             draw_prepared_mesh_batch(render_pass, draw);
@@ -950,7 +1042,7 @@ impl SceneRenderer {
             if let Some(entry) = self.terrain_meshes.get(&terrain.entity) {
                 set_material_texture(
                     render_pass,
-                    &self.fallback_material_texture.bind_group,
+                    &self.fallback_material_bind_group,
                     &terrain.instances,
                 );
                 draw_mesh_batch(render_pass, &entry.mesh, &terrain.instances);
@@ -1010,7 +1102,7 @@ impl SceneRenderer {
                 TransparentDraw::Cube(instances) => {
                     set_material_texture(
                         render_pass,
-                        &self.fallback_material_texture.bind_group,
+                        &self.fallback_material_bind_group,
                         instances,
                     );
                     draw_mesh_batch(render_pass, &self.cube_mesh, instances);
@@ -1018,7 +1110,7 @@ impl SceneRenderer {
                 TransparentDraw::Sphere { instances, mesh } => {
                     set_material_texture(
                         render_pass,
-                        &self.fallback_material_texture.bind_group,
+                        &self.fallback_material_bind_group,
                         instances,
                     );
                     draw_mesh_batch(render_pass, mesh, instances);
@@ -1026,7 +1118,7 @@ impl SceneRenderer {
                 TransparentDraw::Mesh(draw) => {
                     set_material_texture(
                         render_pass,
-                        &self.fallback_material_texture.bind_group,
+                        &self.fallback_material_bind_group,
                         &draw.instances,
                     );
                     draw_prepared_mesh_batch(render_pass, draw);
@@ -1034,7 +1126,7 @@ impl SceneRenderer {
                 TransparentDraw::Terrain { instances, mesh } => {
                     set_material_texture(
                         render_pass,
-                        &self.fallback_material_texture.bind_group,
+                        &self.fallback_material_bind_group,
                         instances,
                     );
                     draw_mesh_batch(render_pass, mesh, instances);
@@ -1141,7 +1233,7 @@ impl SceneRenderer {
                     instances,
                     material.alpha_mode,
                     batch_sort_depth(instances, camera_position),
-                    self.material_bind_group_for(material),
+                    self.material_bind_group_for(device, material),
                 )
             })
             .collect();
@@ -1157,7 +1249,7 @@ impl SceneRenderer {
                 &instances,
                 material.alpha_mode,
                 batch_sort_depth(&instances, camera_position),
-                self.material_bind_group_for(&material),
+                self.material_bind_group_for(device, &material),
             ) {
                 sphere_batches.push(SphereInstanceBatch {
                     segments,
@@ -1220,7 +1312,7 @@ impl SceneRenderer {
                 &instances,
                 material.alpha_mode,
                 batch_sort_depth(&instances, camera_position),
-                self.material_bind_group_for(&material),
+                self.material_bind_group_for(device, &material),
             ) {
                 draws.push(MeshHandleDraw {
                     vertex_buffer: mesh.vertex_buffer.clone(),
@@ -1270,7 +1362,7 @@ impl SceneRenderer {
             let base_color = terrain
                 .material
                 .base_color_with_library(material_library.as_ref());
-            let material_texture = self.material_bind_group_for(&material);
+            let material_texture = self.material_bind_group_for(device, &material);
             let alpha_mode = material.alpha_mode;
             let instance =
                 SceneInstanceRaw::new(model, multiply_color(terrain.tint, base_color), material);
@@ -1289,11 +1381,72 @@ impl SceneRenderer {
         draws
     }
 
-    fn material_bind_group_for(&self, material: &MaterialBatchKey) -> Option<wgpu::BindGroup> {
-        let label = material.albedo_texture.as_deref()?.trim_start_matches('#');
-        self.material_textures
-            .get(label)
-            .map(|texture| texture.bind_group.clone())
+    fn material_bind_group_for(
+        &mut self,
+        device: &wgpu::Device,
+        material: &MaterialBatchKey,
+    ) -> Option<wgpu::BindGroup> {
+        let key = MaterialTextureSetKey::from_material(material);
+        if key.is_empty() {
+            return None;
+        }
+
+        let revisions = self.material_texture_set_revisions(&key);
+        if let Some(cached) = self.material_texture_sets.get(&key) {
+            if cached.revisions == revisions {
+                return Some(cached.bind_group.clone());
+            }
+        }
+
+        let bind_group = {
+            let albedo =
+                self.material_texture_or_fallback(key.albedo.as_deref(), MaterialFallback::White);
+            let normal =
+                self.material_texture_or_fallback(key.normal.as_deref(), MaterialFallback::Normal);
+            let roughness = self
+                .material_texture_or_fallback(key.roughness.as_deref(), MaterialFallback::White);
+            create_material_texture_set_bind_group(
+                device,
+                &self.material_texture_layout,
+                albedo,
+                normal,
+                roughness,
+                "Scene Material Texture Set",
+            )
+        };
+        self.material_texture_sets.insert(
+            key,
+            MaterialTextureSet {
+                bind_group: bind_group.clone(),
+                revisions,
+            },
+        );
+        Some(bind_group)
+    }
+
+    fn material_texture_or_fallback(
+        &self,
+        label: Option<&str>,
+        fallback: MaterialFallback,
+    ) -> &MaterialTexture {
+        if let Some(texture) = label.and_then(|label| self.material_textures.get(label)) {
+            return texture;
+        }
+        match fallback {
+            MaterialFallback::White => &self.fallback_material_texture,
+            MaterialFallback::Normal => &self.fallback_normal_texture,
+        }
+    }
+
+    fn material_texture_set_revisions(&self, key: &MaterialTextureSetKey) -> [u64; 3] {
+        [
+            self.material_texture_or_fallback(key.albedo.as_deref(), MaterialFallback::White)
+                .revision,
+            self.material_texture_or_fallback(key.normal.as_deref(), MaterialFallback::Normal)
+                .revision,
+            self.material_texture_or_fallback(key.roughness.as_deref(), MaterialFallback::White)
+                .revision,
+        ]
     }
 
     fn prepare_sprites(
@@ -1424,6 +1577,7 @@ impl SceneRenderer {
     ) {
         let Some(assets) = world.get_resource::<TextureImageAssets>() else {
             self.material_textures.clear();
+            self.material_texture_sets.clear();
             return;
         };
 
@@ -1431,8 +1585,10 @@ impl SceneRenderer {
             .iter_labeled()
             .map(|(label, _, _)| label.to_string())
             .collect();
+        let previous_len = self.material_textures.len();
         self.material_textures
             .retain(|label, _| active_labels.contains(label));
+        let mut changed = previous_len != self.material_textures.len();
 
         for (label, handle, image) in assets.iter_labeled() {
             let revision = assets.assets.revision(&handle).unwrap_or(0);
@@ -1445,16 +1601,18 @@ impl SceneRenderer {
             }
 
             let texture = Texture::from_image(device, queue, image, Some(label));
-            let bind_group =
-                create_texture_bind_group(device, &self.material_texture_layout, &texture, label);
             self.material_textures.insert(
                 label.to_string(),
                 MaterialTexture {
                     _texture: texture,
-                    bind_group,
                     revision,
                 },
             );
+            changed = true;
+        }
+
+        if changed {
+            self.material_texture_sets.clear();
         }
     }
 
@@ -1628,6 +1786,53 @@ fn create_texture_bind_group_layout(device: &wgpu::Device, label: &str) -> wgpu:
     })
 }
 
+fn create_material_texture_bind_group_layout(
+    device: &wgpu::Device,
+    label: &str,
+) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some(label),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    })
+}
+
 fn create_texture_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -1650,19 +1855,48 @@ fn create_texture_bind_group(
     })
 }
 
+fn create_material_texture_set_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    albedo: &MaterialTexture,
+    normal: &MaterialTexture,
+    roughness: &MaterialTexture,
+    label: &str,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(label),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&albedo._texture.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&normal._texture.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&roughness._texture.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::Sampler(&albedo._texture.sampler),
+            },
+        ],
+    })
+}
+
 fn create_material_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    layout: &wgpu::BindGroupLayout,
     rgba: &[u8],
     dimensions: (u32, u32),
     label: &str,
 ) -> MaterialTexture {
     let texture = Texture::from_bytes(device, queue, rgba, dimensions, Some(label));
-    let bind_group = create_texture_bind_group(device, layout, &texture, label);
     MaterialTexture {
         _texture: texture,
-        bind_group,
         revision: 0,
     }
 }
@@ -2284,6 +2518,8 @@ mod tests {
             emissive_color: [0.0, 0.0, 0.0],
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: None,
+            normal_texture: None,
+            roughness_texture: None,
         };
 
         let key = MaterialBatchKey::from_material(&material);
@@ -2304,6 +2540,8 @@ mod tests {
             emissive_color: [0.0, 0.0, 0.0],
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: None,
+            normal_texture: None,
+            roughness_texture: None,
         };
 
         let key = MaterialBatchKey::from_material(&material);
@@ -2332,6 +2570,8 @@ mod tests {
             emissive_color: [0.0, 0.0, 0.0],
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: Some("#image_0".to_string()),
+            normal_texture: Some("#normal_0".to_string()),
+            roughness_texture: Some("#roughness_0".to_string()),
         });
         let second = MaterialBatchKey::from_material(&RenderMaterial::Builtin {
             shader: BuiltinShader::Lit,
@@ -2343,12 +2583,15 @@ mod tests {
             emissive_color: [0.0, 0.0, 0.0],
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: Some("#image_1".to_string()),
+            normal_texture: Some("#normal_1".to_string()),
+            roughness_texture: Some("#roughness_1".to_string()),
         });
 
         assert_ne!(first, second);
         assert_eq!(first.albedo_texture.as_deref(), Some("#image_0"));
         let instance = SceneInstanceRaw::new(Mat4::IDENTITY, [1.0; 4], first);
         assert_eq!(instance.material[1], 1.0);
+        assert_eq!(instance.texture_flags, [1.0, 1.0, 1.0, 0.0]);
     }
 
     #[test]
@@ -2366,6 +2609,8 @@ mod tests {
                 emissive_color: [0.0, 0.0, 0.0],
                 alpha_mode: AlphaMode::Opaque,
                 albedo_texture: None,
+                normal_texture: None,
+                roughness_texture: None,
             },
         );
 
@@ -2380,7 +2625,7 @@ mod tests {
         assert_eq!(resolved.mode, MaterialMode::Unlit);
         assert_eq!(
             resolved.identity,
-            "builtin:Unlit:Unlit:matte:[0.5, 0.75, 1.0, 1.0]:0.0:0.5:[0.0, 0.0, 0.0]:Opaque:None"
+            "builtin:Unlit:Unlit:matte:[0.5, 0.75, 1.0, 1.0]:0.0:0.5:[0.0, 0.0, 0.0]:Opaque:None:None:None"
         );
     }
 
@@ -2396,6 +2641,8 @@ mod tests {
             emissive_color: [0.0, 0.0, 0.0],
             alpha_mode: AlphaMode::Mask,
             albedo_texture: None,
+            normal_texture: None,
+            roughness_texture: None,
         };
 
         let key = MaterialBatchKey::from_material(&material);
@@ -2420,6 +2667,8 @@ mod tests {
             emissive_color: [0.1, 0.2, 0.3],
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: None,
+            normal_texture: None,
+            roughness_texture: None,
         };
 
         let key = MaterialBatchKey::from_material(&material);
@@ -2461,6 +2710,8 @@ mod tests {
                 emissive_color: [0.0, 0.0, 0.0],
                 alpha_mode: AlphaMode::Opaque,
                 albedo_texture: None,
+                normal_texture: None,
+                roughness_texture: None,
             },
         );
         let material = RenderMaterial::Named("bronze".to_string());
@@ -2494,8 +2745,8 @@ mod tests {
                 emissive_color: [0.01, 0.02, 0.03],
                 alpha_mode: AlphaMode::Blend,
                 albedo_texture: Some("#image_0".to_string()),
-                normal_texture: None,
-                roughness_texture: None,
+                normal_texture: Some("#normal_0".to_string()),
+                roughness_texture: Some("#roughness_0".to_string()),
             },
         );
         world.insert_resource(material_assets);
@@ -2514,6 +2765,8 @@ mod tests {
                         emissive_color: [0.0, 0.0, 0.0],
                         alpha_mode: AlphaMode::Opaque,
                         albedo_texture: None,
+                        normal_texture: None,
+                        roughness_texture: None,
                     },
                 ),
             ))
@@ -2526,6 +2779,14 @@ mod tests {
             [0.25, 0.5, 0.75, 1.0]
         );
         assert_eq!(material.albedo_texture_with_library(None), Some("#image_0"));
+        assert_eq!(
+            material.normal_texture_with_library(None),
+            Some("#normal_0")
+        );
+        assert_eq!(
+            material.roughness_texture_with_library(None),
+            Some("#roughness_0")
+        );
         assert_eq!(material.alpha_mode_with_library(None), AlphaMode::Blend);
         assert_eq!(
             material.factors_with_library(None),

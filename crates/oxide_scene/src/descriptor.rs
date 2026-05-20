@@ -943,6 +943,17 @@ pub struct SceneMaterialDescriptor {
     /// project tooling before the scene renderer prepares the frame.
     #[serde(default)]
     pub albedo_texture: Option<String>,
+    /// Optional label or path-like reference for the material's normal texture.
+    ///
+    /// The automatic renderer samples this map in tangent space derived from
+    /// world position and UV derivatives.
+    #[serde(default)]
+    pub normal_texture: Option<String>,
+    /// Optional label or path-like reference for the material's roughness texture.
+    ///
+    /// The sampled red channel is multiplied with `roughness_factor`.
+    #[serde(default)]
+    pub roughness_texture: Option<String>,
 }
 
 impl Default for SceneMaterialDescriptor {
@@ -957,6 +968,8 @@ impl Default for SceneMaterialDescriptor {
             emissive_color: [0.0, 0.0, 0.0],
             alpha_mode: SceneAlphaMode::Opaque,
             albedo_texture: None,
+            normal_texture: None,
+            roughness_texture: None,
         }
     }
 }
@@ -976,6 +989,8 @@ impl From<SceneMaterialDescriptor> for RenderMaterial {
             emissive_color: value.emissive_color,
             alpha_mode: value.alpha_mode.into(),
             albedo_texture: value.albedo_texture,
+            normal_texture: value.normal_texture,
+            roughness_texture: value.roughness_texture,
         }
     }
 }
@@ -1442,6 +1457,8 @@ fn scene_material_descriptor_from_render_material(
             emissive_color,
             alpha_mode,
             albedo_texture,
+            normal_texture,
+            roughness_texture,
             ..
         } => {
             let shader = match shader {
@@ -1464,6 +1481,8 @@ fn scene_material_descriptor_from_render_material(
                 emissive_color: *emissive_color,
                 alpha_mode: (*alpha_mode).into(),
                 albedo_texture: albedo_texture.clone(),
+                normal_texture: normal_texture.clone(),
+                roughness_texture: roughness_texture.clone(),
             })
         }
     }
@@ -2018,6 +2037,18 @@ fn validate_scene_material(
             "material albedo textures must not be empty",
         ));
     }
+    if matches!(material.normal_texture.as_deref(), Some(texture) if texture.trim().is_empty()) {
+        diagnostics.push(SceneValidationDiagnostic::new(
+            format!("{path}.normal_texture"),
+            "material normal textures must not be empty",
+        ));
+    }
+    if matches!(material.roughness_texture.as_deref(), Some(texture) if texture.trim().is_empty()) {
+        diagnostics.push(SceneValidationDiagnostic::new(
+            format!("{path}.roughness_texture"),
+            "material roughness textures must not be empty",
+        ));
+    }
 }
 
 fn validate_entity_tags(
@@ -2353,6 +2384,8 @@ mod tests {
                         emissive_color: [0.0, 0.0, 0.0],
                         alpha_mode: oxide_renderer::descriptor::AlphaMode::Opaque,
                         albedo_texture: None,
+                        normal_texture: None,
+                        roughness_texture: None,
                     },
                 ),
             ))
@@ -2387,6 +2420,8 @@ mod tests {
                         emissive_color: [0.02, 0.01, 0.0],
                         alpha_mode: oxide_renderer::descriptor::AlphaMode::Mask,
                         albedo_texture: Some("#crate_albedo".to_string()),
+                        normal_texture: Some("#crate_normal".to_string()),
+                        roughness_texture: Some("#crate_roughness".to_string()),
                     },
                 )
                 .with_tint([0.5, 1.0, 1.0, 1.0]),
@@ -2406,6 +2441,11 @@ mod tests {
         assert_eq!(material.emissive_color, [0.02, 0.01, 0.0]);
         assert_eq!(material.alpha_mode, SceneAlphaMode::Mask);
         assert_eq!(material.albedo_texture.as_deref(), Some("#crate_albedo"));
+        assert_eq!(material.normal_texture.as_deref(), Some("#crate_normal"));
+        assert_eq!(
+            material.roughness_texture.as_deref(),
+            Some("#crate_roughness")
+        );
     }
 
     #[test]
@@ -3301,7 +3341,9 @@ mod tests {
                             "metallic_factor": 0.3,
                             "roughness_factor": 0.8,
                             "emissive_color": [0.04, 0.02, 0.0],
-                            "albedo_texture": "#crate_albedo"
+                            "albedo_texture": "#crate_albedo",
+                            "normal_texture": "#crate_normal",
+                            "roughness_texture": "#crate_roughness"
                         }
                     ],
                     "entities": [
@@ -3321,7 +3363,9 @@ mod tests {
                             "material": {
                                 "name": "inline_unlit",
                                 "shader": "unlit",
-                                "albedo_texture": "#inline_albedo"
+                                "albedo_texture": "#inline_albedo",
+                                "normal_texture": "#inline_normal",
+                                "roughness_texture": "#inline_roughness"
                             }
                         }
                     ]
@@ -3336,6 +3380,14 @@ mod tests {
             scene.materials[0].albedo_texture.as_deref(),
             Some("#crate_albedo")
         );
+        assert_eq!(
+            scene.materials[0].normal_texture.as_deref(),
+            Some("#crate_normal")
+        );
+        assert_eq!(
+            scene.materials[0].roughness_texture.as_deref(),
+            Some("#crate_roughness")
+        );
         assert_eq!(scene.materials[0].alpha_mode, SceneAlphaMode::Mask);
         assert_eq!(scene.materials[0].metallic_factor, 0.3);
         assert_eq!(scene.materials[0].roughness_factor, 0.8);
@@ -3344,10 +3396,23 @@ mod tests {
             panic!("expected mesh entity");
         };
         assert_eq!(material.albedo_texture.as_deref(), Some("#inline_albedo"));
+        assert_eq!(material.normal_texture.as_deref(), Some("#inline_normal"));
+        assert_eq!(
+            material.roughness_texture.as_deref(),
+            Some("#inline_roughness")
+        );
         let render_material = RenderMaterial::from(material.clone());
         assert_eq!(
             render_material.albedo_texture_with_library(None),
             Some("#inline_albedo")
+        );
+        assert_eq!(
+            render_material.normal_texture_with_library(None),
+            Some("#inline_normal")
+        );
+        assert_eq!(
+            render_material.roughness_texture_with_library(None),
+            Some("#inline_roughness")
         );
         let _ = fs::remove_file(path);
     }
@@ -3623,6 +3688,8 @@ mod tests {
                 SceneMaterialDescriptor {
                     name: "blank_texture".to_string(),
                     albedo_texture: Some("   ".to_string()),
+                    normal_texture: Some("   ".to_string()),
+                    roughness_texture: Some("   ".to_string()),
                     ..Default::default()
                 },
             ],
@@ -3652,6 +3719,14 @@ mod tests {
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.path == "materials[3].albedo_texture"
                 && diagnostic.message == "material albedo textures must not be empty"
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "materials[3].normal_texture"
+                && diagnostic.message == "material normal textures must not be empty"
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "materials[3].roughness_texture"
+                && diagnostic.message == "material roughness textures must not be empty"
         }));
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.path == "entities[0].material.ref"

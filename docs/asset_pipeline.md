@@ -65,11 +65,12 @@ Scene documents can declare relative or absolute dependency paths in
 `scene.dependencies`; the runtime records them against the loaded scene handle
 so changes to referenced material, sprite, or imported data files can invalidate
 the scene without app code manually updating the `AssetServer`.
-The native scene loader also records non-virtual `albedo_texture` paths from
-top-level scene materials, inline mesh materials, prefab materials, and prefab
-material overrides. Those image files are loaded into `TextureImageAssets` with
-their authored labels, so a scene material can use `"albedo_texture":
-"textures/crate.png"` without a separate `.oxmat` descriptor.
+The native scene loader also records non-virtual `albedo_texture`,
+`normal_texture`, and `roughness_texture` paths from top-level scene materials,
+inline mesh materials, prefab materials, and prefab material overrides. Those
+image files are loaded into `TextureImageAssets` with their authored labels, so
+a scene material can use `"albedo_texture": "textures/crate.png"` without a
+separate `.oxmat` descriptor.
 
 `examples/minimal_game` demonstrates this path with
 `assets/scenes/starter.oxscene`.
@@ -139,8 +140,9 @@ materials and reloaded `.oxmat` descriptors influence already spawned handle
 meshes without duplicating geometry. `TextureImageAssets` also
 maintains a label lookup, and the scene renderer uploads labeled images into a
 small material texture cache. A material albedo reference such as `#image_0`
-binds that uploaded texture for the relevant material batch, while untextured
-materials use a white fallback texture.
+binds that uploaded texture for the relevant material batch; normal and
+roughness references are bound into the same material texture set when present,
+while missing slots use a neutral normal map or white fallback texture.
 
 Spawned entities from the async glTF flow receive `GltfSceneInstance` with the
 source scene handle. If the same handle is queued again after
@@ -161,7 +163,9 @@ Use `request_material_descriptor_load(server, path)` to asynchronously load a
 records dependencies for file shaders and texture paths. Non-virtual
 albedo/normal/roughness texture paths are loaded into `TextureImageAssets` using
 the authored texture path as a label, which lets renderer systems bind them
-through the same material texture cache used for glTF image labels. Loaded descriptors are
+through the same material texture cache used for glTF image labels. The automatic
+scene renderer binds albedo, normal, and roughness slots together and falls back
+to a neutral normal map or white texture for missing slots. Loaded descriptors are
 also registered into `SceneMaterialLibrary` by `MaterialDescriptor::name`, so
 `RenderMaterial::Named("stone".to_string())` can resolve through the automatic
 scene renderer. Entities can also store `MaterialFilter` to render directly from

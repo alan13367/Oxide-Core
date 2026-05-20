@@ -92,7 +92,7 @@ The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
 - `TerrainDescriptor` and `SceneWorldDescriptor` describe terrain and blockout
   objects for code-first maps.
 - `SceneMaterialDescriptor` includes `color`, `alpha_mode`, and optional
-  `albedo_texture` fields used by the automatic renderer.
+  albedo/normal/roughness texture fields used by the automatic renderer.
 - `Name`, `Parent`, `Children`, `TransformComponent`, and `GlobalTransform`
   provide scene identity and hierarchy.
 
@@ -201,9 +201,9 @@ Native scene loads validate authored data before publishing the descriptor.
 Use top-level `dependencies` for material, sprite, import, or sidecar data files
 that should trigger scene reloads when they change. Relative paths are resolved
 from the `.oxscene` file location when the scene is loaded through the runtime
-asset path. Non-virtual scene material `albedo_texture` paths are also recorded
-as dependencies automatically and published into `TextureImageAssets` during
-native scene loading.
+asset path. Non-virtual scene material `albedo_texture`, `normal_texture`, and
+`roughness_texture` paths are also recorded as dependencies automatically and
+published into `TextureImageAssets` during native scene loading.
 Use entity `tags` for stable gameplay labels independent of display names.
 Systems can query `Tags` directly or use `first_entity_with_tag(&mut world,
 "spawn_point")` / `entities_with_tag(&mut world, "enemy")` instead of parsing
@@ -338,12 +338,15 @@ loaded `.oxmat` materials through the material `ref` field:
 For top-level scene material declarations, `color` becomes the reusable
 material base color, `alpha_mode` controls opaque, alpha-masked, or
 alpha-blended scene geometry, `metallic_factor`/`roughness_factor` tune the
-lit response, `emissive_color` adds unlit contribution, and `albedo_texture`
-stores the material texture label or path-like reference. For mesh entities and
-prefab overrides, `color` remains the per-entity tint even when material shader
-data is resolved from the library. Alpha-masked geometry uses depth writes with
-a fixed 0.5 cutoff, while alpha-blended scene geometry is drawn after opaque
-geometry and sorted back-to-front by camera distance per material batch.
+lit response, `emissive_color` adds unlit contribution, and
+`albedo_texture`/`normal_texture`/`roughness_texture` store material texture
+labels or path-like references. The renderer multiplies the red channel from a
+roughness texture with `roughness_factor` and derives tangent-space normal
+mapping from mesh UV derivatives. For mesh entities and prefab overrides,
+`color` remains the per-entity tint even when material shader data is resolved
+from the library. Alpha-masked geometry uses depth writes with a fixed 0.5
+cutoff, while alpha-blended scene geometry is drawn after opaque geometry and
+sorted back-to-front by camera distance per material batch.
 Texture labels such as `#image_0` or `#crate_albedo` resolve against
 `TextureImageAssets`; file paths such as `textures/crate.png` are loaded by the
 native scene asset pipeline and tracked as scene dependencies. Loaded `.oxmat`

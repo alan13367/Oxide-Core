@@ -244,6 +244,8 @@ pub enum RenderMaterial {
         emissive_color: [f32; 3],
         alpha_mode: AlphaMode,
         albedo_texture: Option<String>,
+        normal_texture: Option<String>,
+        roughness_texture: Option<String>,
     },
     Named(String),
 }
@@ -260,6 +262,8 @@ impl Default for RenderMaterial {
             emissive_color: [0.0, 0.0, 0.0],
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: None,
+            normal_texture: None,
+            roughness_texture: None,
         }
     }
 }
@@ -282,6 +286,8 @@ impl RenderMaterial {
             emissive_color: descriptor.emissive_color,
             alpha_mode: descriptor.alpha_mode,
             albedo_texture: descriptor.albedo_texture.clone(),
+            normal_texture: descriptor.normal_texture.clone(),
+            roughness_texture: descriptor.roughness_texture.clone(),
         }
     }
 
@@ -309,6 +315,42 @@ impl RenderMaterial {
 
         match self {
             Self::Builtin { albedo_texture, .. } => albedo_texture.as_deref(),
+            Self::Named(_) => None,
+        }
+    }
+
+    /// Returns the optional normal texture reference resolved through a material library.
+    pub fn normal_texture_with_library<'a>(
+        &'a self,
+        library: Option<&'a SceneMaterialLibrary>,
+    ) -> Option<&'a str> {
+        if let Self::Named(name) = self {
+            if let Some(resolved) = library.and_then(|library| library.get(name)) {
+                return resolved.normal_texture_with_library(None);
+            }
+        }
+
+        match self {
+            Self::Builtin { normal_texture, .. } => normal_texture.as_deref(),
+            Self::Named(_) => None,
+        }
+    }
+
+    /// Returns the optional roughness texture reference resolved through a material library.
+    pub fn roughness_texture_with_library<'a>(
+        &'a self,
+        library: Option<&'a SceneMaterialLibrary>,
+    ) -> Option<&'a str> {
+        if let Self::Named(name) = self {
+            if let Some(resolved) = library.and_then(|library| library.get(name)) {
+                return resolved.roughness_texture_with_library(None);
+            }
+        }
+
+        match self {
+            Self::Builtin {
+                roughness_texture, ..
+            } => roughness_texture.as_deref(),
             Self::Named(_) => None,
         }
     }
