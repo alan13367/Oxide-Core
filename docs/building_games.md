@@ -400,9 +400,9 @@ let removed_entities = despawn_scene_instance(&mut world, instance);
 During development, native scene descriptors can be reloaded in place:
 
 ```rust
-let reloads = poll_native_asset_reloads(&mut world);
+let reloads = poll_render_asset_reloads(&mut world);
 if !reloads.is_empty() {
-    tracing::info!("Reloading native assets: {:?}", reloads.changed_paths);
+    tracing::info!("Reloading assets: {:?}", reloads.native.changed_paths);
 }
 ```
 
@@ -413,9 +413,9 @@ descriptor.
 
 glTF scenes use handle-scoped replacement instead: entities spawned by
 `request_gltf_scene_spawn(...)` are tagged with `GltfSceneInstance`, and
-`reload_gltf_scene_path(...)` or `reload_changed_gltf_scenes(...)` queues the
-same handle so the spawn system removes the previous imported hierarchy before
-spawning the refreshed one.
+`poll_render_asset_reloads(...)`, `reload_gltf_scene_path(...)`, or
+`reload_changed_gltf_scenes(...)` queues the same handle so the spawn system
+removes the previous imported hierarchy before spawning the refreshed one.
 
 ```rust
 if let Some(audio) = world.get_resource::<Audio>() {

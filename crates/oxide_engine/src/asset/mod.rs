@@ -20,6 +20,10 @@ use oxide_renderer::texture::TextureImage;
 #[cfg(feature = "gltf-import")]
 use wgpu::{Device, Queue};
 
+#[cfg(feature = "gltf-import")]
+use crate::ecs::RendererResource;
+#[cfg(feature = "gltf-import")]
+use crate::scene::reload_changed_gltf_scenes;
 use crate::scene::{reload_changed_oxscenes, SceneDescriptor, SceneMaterialLibrary};
 use crate::watcher::AssetWatcher;
 
@@ -68,6 +72,32 @@ impl NativeAssetReloadSummary {
     /// Returns true when no changed paths produced native asset reloads.
     pub fn is_empty(&self) -> bool {
         self.oxscenes.is_empty() && self.material_descriptors.is_empty()
+    }
+}
+
+/// Result of routing changed source paths through renderer-facing asset reload systems.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RenderAssetReloadSummary {
+    /// Native Oxide scene and material descriptor reloads.
+    pub native: NativeAssetReloadSummary,
+    /// glTF scenes that started reloading.
+    #[cfg(feature = "gltf-import")]
+    pub gltf_scenes: Vec<CoreHandle<GltfScene>>,
+}
+
+impl RenderAssetReloadSummary {
+    /// Returns true when no changed paths produced renderer-facing asset reloads.
+    pub fn is_empty(&self) -> bool {
+        self.native.is_empty() && {
+            #[cfg(feature = "gltf-import")]
+            {
+                self.gltf_scenes.is_empty()
+            }
+            #[cfg(not(feature = "gltf-import"))]
+            {
+                true
+            }
+        }
     }
 }
 
@@ -173,6 +203,48 @@ pub fn poll_native_asset_reloads(world: &mut World) -> NativeAssetReloadSummary 
     };
     let changed_paths = watcher.poll_changed_files().to_vec();
     reload_changed_native_assets(world, changed_paths)
+}
+
+/// Reloads renderer-facing assets affected by changed source paths.
+///
+/// This includes native `.oxscene`/`.oxmat` assets plus glTF scenes when the
+/// `gltf-import` feature and [`RendererResource`] are available.
+pub fn reload_changed_render_assets<I, P>(
+    world: &mut World,
+    changed_paths: I,
+) -> RenderAssetReloadSummary
+where
+    I: IntoIterator<Item = P>,
+    P: Into<PathBuf>,
+{
+    let changed_paths: Vec<PathBuf> = changed_paths.into_iter().map(Into::into).collect();
+    let native = reload_changed_native_assets(world, changed_paths.iter().cloned());
+
+    #[cfg(feature = "gltf-import")]
+    let gltf_scenes = if world.contains_resource::<RendererResource>() {
+        let (device, queue) = {
+            let renderer = &world.resource::<RendererResource>().renderer;
+            (renderer.device.clone(), renderer.queue.clone())
+        };
+        reload_changed_gltf_scenes(world, device, queue, changed_paths.iter().cloned())
+    } else {
+        Vec::new()
+    };
+
+    RenderAssetReloadSummary {
+        native,
+        #[cfg(feature = "gltf-import")]
+        gltf_scenes,
+    }
+}
+
+/// Polls the installed [`AssetWatcher`] and reloads affected renderer-facing assets.
+pub fn poll_render_asset_reloads(world: &mut World) -> RenderAssetReloadSummary {
+    let Some(watcher) = world.get_non_send_resource_mut::<AssetWatcher>() else {
+        return RenderAssetReloadSummary::default();
+    };
+    let changed_paths = watcher.poll_changed_files().to_vec();
+    reload_changed_render_assets(world, changed_paths)
 }
 
 /// Publishes completed material descriptor loads and records source dependencies.
@@ -632,9 +704,45 @@ mod tests {
     }
 
     #[test]
+    fn render_asset_reload_summary_includes_native_fanout_without_renderer() {
+        let root = temp_dir("oxide_render_asset_reload");
+        let material_path = root.join("stone.oxmat");
+        let shader_path = root.join("stone.wgsl");
+        fs::write(&shader_path, "// shader").unwrap();
+        write_material(&material_path, "Stone", "stone.wgsl");
+
+        let mut world = World::new();
+        world.insert_resource(AssetServerResource::default());
+        world.insert_resource(MaterialDescriptorAssets::default());
+        let material_handle = {
+            let server = world.resource_mut::<AssetServerResource>();
+            request_material_descriptor_load(&mut server.server, &material_path)
+        };
+        poll_material_descriptor_asset_system_until_named(&mut world, material_handle, "Stone");
+
+        write_material(&material_path, "Reloaded Stone", "stone.wgsl");
+        let summary = reload_changed_render_assets(&mut world, [shader_path.clone()]);
+
+        assert_eq!(summary.native.changed_paths, vec![shader_path]);
+        assert_eq!(summary.native.material_descriptors, vec![material_handle]);
+        assert!(summary.native.oxscenes.is_empty());
+        assert!(!summary.is_empty());
+        #[cfg(feature = "gltf-import")]
+        assert!(summary.gltf_scenes.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn poll_native_asset_reloads_is_empty_without_watcher() {
         let mut world = World::new();
         assert!(poll_native_asset_reloads(&mut world).is_empty());
+    }
+
+    #[test]
+    fn poll_render_asset_reloads_is_empty_without_watcher() {
+        let mut world = World::new();
+        assert!(poll_render_asset_reloads(&mut world).is_empty());
     }
 
     fn poll_until_material_named(
@@ -688,6 +796,29 @@ mod tests {
         panic!(
             "native assets did not load material '{expected_material_name}' and scene '{expected_scene_name}'"
         );
+    }
+
+    fn poll_material_descriptor_asset_system_until_named(
+        world: &mut World,
+        handle: MaterialDescriptorHandle,
+        expected_name: &str,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            material_descriptor_asset_system(world);
+            if world
+                .resource::<MaterialDescriptorAssets>()
+                .assets
+                .get(&handle)
+                .map(|material| material.name.as_str())
+                == Some(expected_name)
+            {
+                return;
+            }
+            std::thread::yield_now();
+        }
+
+        panic!("material descriptor was not loaded with expected name '{expected_name}'");
     }
 
     fn write_material(path: &std::path::Path, name: &str, shader: &str) {

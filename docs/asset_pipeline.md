@@ -51,11 +51,15 @@ scene assets whose source path or dependency paths match file watcher output.
 Reloading updates `SceneDescriptorAssets` and preserves the handle; it does not
 spawn duplicate roots. Queue the returned handle with `queue_oxscene_spawn` only
 when the app intentionally wants a fresh instance of the reloaded descriptor.
-For normal development hot reload, prefer
+For normal development hot reload in apps using the automatic renderer, prefer
+`reload_changed_render_assets(world, changed_paths)` or
+`poll_render_asset_reloads(world)`. These helpers route one changed-path list
+through Oxide's native `.oxscene`/`.oxmat` reload systems and, when renderer
+resources are available, glTF scene reloads. Use the narrower
 `reload_changed_native_assets(world, changed_paths)` or
-`poll_native_asset_reloads(world)`. These helpers route one changed-path list
-through Oxide's native `.oxscene` and `.oxmat` reload systems and return a
-`NativeAssetReloadSummary` containing affected scene and material handles.
+`poll_native_asset_reloads(world)` when an app only wants native documents. The
+native helpers return `NativeAssetReloadSummary`; the renderer-facing helpers
+wrap that summary in `RenderAssetReloadSummary`.
 Scene documents can declare relative or absolute dependency paths in
 `scene.dependencies`; the runtime records them against the loaded scene handle
 so changes to referenced material, sprite, or imported data files can invalidate

@@ -15,13 +15,14 @@ pub use crate::app::{
 pub use crate::asset::{load_gltf_async, reload_gltf_async, GltfSceneAssets};
 pub use crate::asset::{
     material_descriptor_asset_system, material_descriptor_dependencies,
-    poll_material_descriptor_assets, poll_native_asset_reloads, register_material_asset,
-    reload_changed_material_descriptors, reload_changed_native_assets,
-    reload_material_descriptor_path, request_material_descriptor_load, AssetChange,
-    AssetChangeCursor, AssetChangeKind, AssetLoadStatus, AssetPath, AssetServer, AssetServerError,
-    AssetServerResource, Assets, Handle, HandleAllocator, MaterialAssets, MaterialDescriptorAssets,
-    MaterialDescriptorHandle, MaterialFilter, MaterialHandle, MeshCache, MeshFilter, MeshHandle,
-    NativeAssetReloadSummary, TextureImageAssets, TextureImageHandle,
+    poll_material_descriptor_assets, poll_native_asset_reloads, poll_render_asset_reloads,
+    register_material_asset, reload_changed_material_descriptors, reload_changed_native_assets,
+    reload_changed_render_assets, reload_material_descriptor_path,
+    request_material_descriptor_load, AssetChange, AssetChangeCursor, AssetChangeKind,
+    AssetLoadStatus, AssetPath, AssetServer, AssetServerError, AssetServerResource, Assets, Handle,
+    HandleAllocator, MaterialAssets, MaterialDescriptorAssets, MaterialDescriptorHandle,
+    MaterialFilter, MaterialHandle, MeshCache, MeshFilter, MeshHandle, NativeAssetReloadSummary,
+    RenderAssetReloadSummary, TextureImageAssets, TextureImageHandle,
 };
 pub use crate::audio::{
     initialize_audio, Audio, AudioClip, AudioClipError, AudioError, AudioPlugin, AudioTone,
