@@ -20,8 +20,9 @@ use oxide_renderer::wgpu;
 use oxide_transform::{is_visible, GlobalTransform, TransformComponent};
 
 use crate::{
-    MeshPrimitive, RenderLayers, RenderMaterial, RenderMesh, SceneGizmoLines, SceneMaterialLibrary,
-    SpriteAssets, SpriteBillboard, SpriteDepthMode, SpriteFacing, SpriteId, Terrain,
+    MeshCache, MeshFilter, MeshPrimitive, RenderLayers, RenderMaterial, RenderMesh,
+    SceneGizmoLines, SceneMaterialLibrary, SpriteAssets, SpriteBillboard, SpriteDepthMode,
+    SpriteFacing, SpriteId, Terrain,
 };
 
 const SCENE_RENDERER_SHADER: &str = r#"
@@ -351,6 +352,7 @@ struct SphereInstanceBatch {
 pub struct SceneRendererStats {
     pub cube_instances: u32,
     pub sphere_instances: u32,
+    pub mesh_handle_instances: u32,
     pub terrain_instances: u32,
     pub sprite_instances: u32,
     pub draw_calls: u32,
@@ -435,6 +437,14 @@ struct TerrainDraw {
     instances: InstanceBatch,
 }
 
+#[derive(Debug)]
+struct MeshHandleDraw {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+    instances: InstanceBatch,
+}
+
 struct ViewCameraBinding {
     _buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
@@ -446,6 +456,7 @@ struct SceneViewDraw {
     clear_color: wgpu::Color,
     cube_instances: Vec<InstanceBatch>,
     sphere_instances: Vec<SphereInstanceBatch>,
+    mesh_handle_draws: Vec<MeshHandleDraw>,
     terrain_draws: Vec<TerrainDraw>,
     sprite_batches: Vec<SpriteBatch>,
 }
@@ -612,6 +623,11 @@ impl SceneRenderer {
                 .iter()
                 .map(|batch| batch.instances.count)
                 .sum::<u32>();
+            stats.mesh_handle_instances += view
+                .mesh_handle_draws
+                .iter()
+                .map(|draw| draw.instances.count)
+                .sum::<u32>();
             stats.terrain_instances += view.terrain_draws.len() as u32;
             stats.sprite_instances += view
                 .sprite_batches
@@ -620,6 +636,7 @@ impl SceneRenderer {
                 .sum::<u32>();
             stats.draw_calls += view.cube_instances.len() as u32
                 + view.sphere_instances.len() as u32
+                + view.mesh_handle_draws.len() as u32
                 + view.terrain_draws.len() as u32
                 + view.sprite_batches.len() as u32
                 + u32::from(self.gizmo_vertex_count > 0);
@@ -683,6 +700,10 @@ impl SceneRenderer {
                 }
             }
 
+            for draw in &scene_view.mesh_handle_draws {
+                draw_prepared_mesh_batch(&mut render_pass, draw);
+            }
+
             for terrain in &scene_view.terrain_draws {
                 if let Some(entry) = self.terrain_meshes.get(&terrain.entity) {
                     draw_mesh_batch(&mut render_pass, &entry.mesh, &terrain.instances);
@@ -724,6 +745,7 @@ impl SceneRenderer {
         );
         let (cube_instances, sphere_instances) =
             self.prepare_instances(device, world, camera.layers);
+        let mesh_handle_draws = self.prepare_mesh_handle_draws(device, world, camera.layers);
         let terrain_draws = self.prepare_terrain(device, world, camera.layers);
         let sprite_batches = self.prepare_sprites(device, world, camera);
 
@@ -733,6 +755,7 @@ impl SceneRenderer {
             clear_color: camera.clear_color.unwrap_or(self.clear_color),
             cube_instances,
             sphere_instances,
+            mesh_handle_draws,
             terrain_draws,
             sprite_batches,
         }
@@ -802,6 +825,77 @@ impl SceneRenderer {
         }
 
         (cube_batches, sphere_batches)
+    }
+
+    fn prepare_mesh_handle_draws(
+        &mut self,
+        device: &wgpu::Device,
+        world: &mut World,
+        camera_layers: RenderLayers,
+    ) -> Vec<MeshHandleDraw> {
+        let material_library = world.get_resource::<SceneMaterialLibrary>().cloned();
+        let renderables = collect_mesh_filter_renderables(world, camera_layers);
+        let mut batches = BTreeMap::<(u64, MaterialBatchKey), Vec<SceneInstanceRaw>>::new();
+
+        for (entity, mesh_filter) in renderables {
+            let render_mesh = world.get::<RenderMesh>(entity).cloned();
+            let material = render_mesh
+                .as_ref()
+                .map(|render_mesh| {
+                    MaterialBatchKey::from_material_with_library(
+                        &render_mesh.material,
+                        material_library.as_ref(),
+                    )
+                })
+                .unwrap_or_else(|| {
+                    MaterialBatchKey::from_material_with_library(&RenderMaterial::default(), None)
+                });
+            let base_color = render_mesh
+                .as_ref()
+                .map(|render_mesh| {
+                    render_mesh
+                        .material
+                        .base_color_with_library(material_library.as_ref())
+                })
+                .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+            let tint = render_mesh
+                .as_ref()
+                .map(|render_mesh| render_mesh.tint)
+                .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+            let instance = SceneInstanceRaw::new(
+                entity_model_matrix(world, entity),
+                multiply_color(tint, base_color),
+                material.clone(),
+            );
+            batches
+                .entry((mesh_filter.mesh.id(), material))
+                .or_default()
+                .push(instance);
+        }
+
+        let Some(mesh_cache) = world.get_resource::<MeshCache>() else {
+            return Vec::new();
+        };
+
+        let mut draws = Vec::new();
+        for ((mesh_id, _material), instances) in batches {
+            let mesh_handle = oxide_asset::Handle::new(mesh_id);
+            let Some(mesh) = mesh_cache.get(mesh_handle) else {
+                continue;
+            };
+            if let Some(instances) =
+                create_instance_batch(device, "Scene Mesh Handle Instances", &instances)
+            {
+                draws.push(MeshHandleDraw {
+                    vertex_buffer: mesh.vertex_buffer.clone(),
+                    index_buffer: mesh.index_buffer.clone(),
+                    index_count: mesh.index_count,
+                    instances,
+                });
+            }
+        }
+
+        draws
     }
 
     fn prepare_terrain(
@@ -1371,7 +1465,21 @@ fn collect_renderables(
         .iter(world)
         .filter(|(entity, _)| is_visible(world, *entity))
         .filter(|(entity, _)| render_layers(world, *entity).intersects(camera_layers))
+        .filter(|(entity, _)| world.get::<MeshFilter>(*entity).is_none())
         .map(|(entity, render_mesh)| (entity, render_mesh.clone()))
+        .collect()
+}
+
+fn collect_mesh_filter_renderables(
+    world: &mut World,
+    camera_layers: RenderLayers,
+) -> Vec<(Entity, MeshFilter)> {
+    let mut query = world.query::<(Entity, &MeshFilter)>();
+    query
+        .iter(world)
+        .filter(|(entity, _)| is_visible(world, *entity))
+        .filter(|(entity, _)| render_layers(world, *entity).intersects(camera_layers))
+        .map(|(entity, mesh_filter)| (entity, mesh_filter.clone()))
         .collect()
 }
 
@@ -1645,6 +1753,16 @@ fn draw_mesh_batch<'pass>(
     render_pass.draw_indexed(0..mesh.index_count, 0, 0..instances.count);
 }
 
+fn draw_prepared_mesh_batch<'pass>(
+    render_pass: &mut wgpu::RenderPass<'pass>,
+    draw: &'pass MeshHandleDraw,
+) {
+    render_pass.set_vertex_buffer(0, draw.vertex_buffer.slice(..));
+    render_pass.set_vertex_buffer(1, draw.instances.buffer.slice(..));
+    render_pass.set_index_buffer(draw.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+    render_pass.draw_indexed(0..draw.index_count, 0, 0..draw.instances.count);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1793,6 +1911,30 @@ mod tests {
         assert!(weapon_renderables
             .iter()
             .any(|(entity, _)| *entity == weapon_entity));
+    }
+
+    #[test]
+    fn mesh_filter_entities_use_handle_renderable_path() {
+        let mut world = World::new();
+        let mesh_handle = oxide_asset::Handle::new(99);
+        let imported = world
+            .spawn((
+                MeshFilter::new(mesh_handle),
+                RenderMesh::new(MeshPrimitive::Cube, RenderMaterial::default()),
+            ))
+            .id();
+
+        let primitive_renderables = collect_renderables(&mut world, RenderLayers::default());
+        let handle_renderables =
+            collect_mesh_filter_renderables(&mut world, RenderLayers::default());
+
+        assert!(!primitive_renderables
+            .iter()
+            .any(|(entity, _)| *entity == imported));
+        assert_eq!(
+            handle_renderables,
+            vec![(imported, MeshFilter::new(mesh_handle))]
+        );
     }
 
     #[test]

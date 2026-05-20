@@ -80,6 +80,12 @@ into `MaterialDescriptorAssets` as labeled sub-assets and registered in
 `GltfMaterialRef` and receive `MaterialFilter` when a stable material descriptor
 handle is available.
 
+The automatic scene renderer can draw `MeshFilter` entities directly from
+`MeshCache`. When a handle-based mesh entity also carries `RenderMesh`, the
+renderer uses that component's material and tint for the imported mesh and skips
+the built-in primitive path, which lets imported glTF materials influence the
+rendered handle mesh without duplicating geometry.
+
 This keeps the compatibility glTF path useful for development while moving the
 runtime shape toward Oxide-owned handles and caches.
 

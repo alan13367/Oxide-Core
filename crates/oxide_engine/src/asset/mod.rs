@@ -8,7 +8,7 @@ use std::sync::Arc;
 use oxide_asset::AssetServerError as CoreAssetServerError;
 use oxide_asset::{AssetServer as CoreAssetServer, Assets as CoreAssets, Handle as CoreHandle};
 use oxide_ecs::world::World;
-use oxide_ecs::{Component, Resource};
+use oxide_ecs::Resource;
 use oxide_renderer::descriptor::{
     load_material_descriptor, MaterialDescriptor, MaterialDescriptorError, ShaderDescriptor,
 };
@@ -23,6 +23,7 @@ use crate::scene::{reload_changed_oxscenes, SceneDescriptor, SceneMaterialLibrar
 use crate::watcher::AssetWatcher;
 
 pub use oxide_asset::*;
+pub use oxide_scene::{MaterialFilter, MeshCache, MeshFilter};
 
 /// ECS resource wrapper for the engine asset server.
 #[derive(Resource, Default)]
@@ -70,80 +71,6 @@ impl NativeAssetReloadSummary {
 #[derive(Resource, Default)]
 pub struct GltfSceneAssets {
     pub assets: CoreAssets<GltfScene>,
-}
-
-/// Resource that caches GPU meshes by handle.
-#[derive(Resource)]
-pub struct MeshCache {
-    meshes: CoreAssets<Mesh3D>,
-}
-
-impl MeshCache {
-    pub fn new() -> Self {
-        Self {
-            meshes: CoreAssets::new(),
-        }
-    }
-
-    pub fn insert(&mut self, handle: CoreHandle<Mesh3D>, mesh: Mesh3D) {
-        self.meshes.insert(handle, mesh);
-    }
-
-    /// Returns the typed mesh asset storage backing this cache.
-    pub fn assets(&self) -> &CoreAssets<Mesh3D> {
-        &self.meshes
-    }
-
-    /// Returns mutable access to the typed mesh asset storage backing this cache.
-    pub fn assets_mut(&mut self) -> &mut CoreAssets<Mesh3D> {
-        &mut self.meshes
-    }
-
-    pub fn get(&self, handle: CoreHandle<Mesh3D>) -> Option<&Mesh3D> {
-        self.meshes.get(&handle)
-    }
-
-    pub fn remove(&mut self, handle: CoreHandle<Mesh3D>) -> Option<Mesh3D> {
-        self.meshes.remove(&handle)
-    }
-
-    pub fn len(&self) -> usize {
-        self.meshes.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.meshes.is_empty()
-    }
-}
-
-impl Default for MeshCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Component that references a mesh for rendering.
-#[derive(Component, Clone, Debug)]
-pub struct MeshFilter {
-    pub mesh: MeshHandle,
-}
-
-impl MeshFilter {
-    pub fn new(mesh: MeshHandle) -> Self {
-        Self { mesh }
-    }
-}
-
-/// Component that references a CPU-side material descriptor for rendering.
-#[derive(Component, Clone, Debug)]
-pub struct MaterialFilter {
-    pub material: MaterialDescriptorHandle,
-}
-
-impl MaterialFilter {
-    pub fn new(material: MaterialDescriptorHandle) -> Self {
-        Self { material }
-    }
 }
 
 /// Registers a material pipeline under a stable handle.

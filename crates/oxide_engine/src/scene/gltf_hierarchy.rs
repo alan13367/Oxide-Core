@@ -8,7 +8,7 @@ use crate::asset::{
     load_gltf_async, AssetServerResource, GltfSceneAssets, Handle, MaterialDescriptorAssets,
     MaterialDescriptorHandle, MaterialFilter, MeshCache, MeshFilter, MeshHandle,
 };
-use crate::scene::SceneMaterialLibrary;
+use crate::scene::{MeshPrimitive, RenderMaterial, RenderMesh, SceneMaterialLibrary};
 use oxide_ecs::entity::Entity;
 use oxide_ecs::world::World;
 use oxide_ecs::{Component, Resource};
@@ -125,6 +125,13 @@ fn spawn_gltf_node(
                 material_handles.and_then(|handles| handles.get(material_index))
             {
                 entity_builder.insert(MaterialFilter::new(*material_handle));
+            }
+            if let Some((_, descriptor)) = scene.materials.get(material_index) {
+                entity_builder.insert(RenderMesh {
+                    primitive: MeshPrimitive::Cube,
+                    material: RenderMaterial::from_descriptor(descriptor),
+                    tint: [1.0, 1.0, 1.0, 1.0],
+                });
             }
         }
     }
@@ -368,7 +375,7 @@ fn register_gltf_scene_materials(
     {
         let server = world.resource_mut::<AssetServerResource>();
         let scene_source = server.server.asset_source(&handle);
-        for (material_name, descriptor) in std::mem::take(&mut scene.materials) {
+        for (material_name, descriptor) in scene.materials.iter().cloned() {
             let material_handle = if let Some(source) = &scene_source {
                 server.server.insert_loaded_labeled_path(
                     &mut material_assets.assets,
@@ -498,7 +505,10 @@ mod tests {
 
         let scene = GltfScene {
             meshes: Vec::new(),
-            materials: Vec::new(),
+            materials: vec![(
+                "material_0".to_string(),
+                test_material("imported_blue", [0.0, 0.0, 1.0, 1.0]),
+            )],
             mesh_material_indices: vec![Some(0)],
             nodes: vec![GltfNode {
                 name: Some("material_node".to_string()),
@@ -527,6 +537,12 @@ mod tests {
                 .get::<MaterialFilter>(roots[0])
                 .map(|filter| filter.material),
             Some(material_handle)
+        );
+        assert_eq!(
+            world
+                .get::<RenderMesh>(roots[0])
+                .map(|mesh| mesh.material.base_color_with_library(None)),
+            Some([0.0, 0.0, 1.0, 1.0])
         );
     }
 
@@ -596,7 +612,7 @@ mod tests {
         let handles = register_gltf_scene_materials(&mut world, handle, &mut scene);
 
         assert_eq!(handles.len(), 1);
-        assert!(scene.materials.is_empty());
+        assert_eq!(scene.materials.len(), 1);
         assert_eq!(
             world
                 .resource::<AssetServerResource>()

@@ -2,15 +2,93 @@
 
 use std::collections::HashMap;
 
+use oxide_asset::Handle;
 use oxide_ecs::{Component, Resource};
 
 use oxide_renderer::descriptor::{MaterialDescriptor, MaterialType};
 use oxide_renderer::mesh::Mesh3D;
 use oxide_renderer::shader::BuiltinShader;
 
+pub type MeshHandle = Handle<Mesh3D>;
+pub type MaterialDescriptorHandle = Handle<MaterialDescriptor>;
+
+/// Resource that caches GPU meshes by typed asset handle.
+#[derive(Resource)]
+pub struct MeshCache {
+    meshes: oxide_asset::Assets<Mesh3D>,
+}
+
+impl MeshCache {
+    pub fn new() -> Self {
+        Self {
+            meshes: oxide_asset::Assets::new(),
+        }
+    }
+
+    pub fn insert(&mut self, handle: MeshHandle, mesh: Mesh3D) {
+        self.meshes.insert(handle, mesh);
+    }
+
+    /// Returns the typed mesh asset storage backing this cache.
+    pub fn assets(&self) -> &oxide_asset::Assets<Mesh3D> {
+        &self.meshes
+    }
+
+    /// Returns mutable access to the typed mesh asset storage backing this cache.
+    pub fn assets_mut(&mut self) -> &mut oxide_asset::Assets<Mesh3D> {
+        &mut self.meshes
+    }
+
+    pub fn get(&self, handle: MeshHandle) -> Option<&Mesh3D> {
+        self.meshes.get(&handle)
+    }
+
+    pub fn remove(&mut self, handle: MeshHandle) -> Option<Mesh3D> {
+        self.meshes.remove(&handle)
+    }
+
+    pub fn len(&self) -> usize {
+        self.meshes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.meshes.is_empty()
+    }
+}
+
+impl Default for MeshCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Component)]
 pub struct MeshRenderer {
     pub mesh: Mesh3D,
+}
+
+/// Component that references a cached mesh asset for rendering.
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub struct MeshFilter {
+    pub mesh: MeshHandle,
+}
+
+impl MeshFilter {
+    pub fn new(mesh: MeshHandle) -> Self {
+        Self { mesh }
+    }
+}
+
+/// Component that references a CPU-side material descriptor for rendering.
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub struct MaterialFilter {
+    pub material: MaterialDescriptorHandle,
+}
+
+impl MaterialFilter {
+    pub fn new(material: MaterialDescriptorHandle) -> Self {
+        Self { material }
+    }
 }
 
 /// Camera/renderable layer mask used by the automatic scene renderer.
