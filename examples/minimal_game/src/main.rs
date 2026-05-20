@@ -99,6 +99,20 @@ impl App for MinimalGame {
     fn update(&mut self) {
         if !self.scene_loaded {
             if let Some(roots) = take_spawned_oxscene_roots(&mut self.world, self.scene_handle) {
+                for root in &roots {
+                    if let Some(from) = self
+                        .world
+                        .get::<TransformComponent>(*root)
+                        .map(|transform| transform.transform)
+                    {
+                        let mut to = from;
+                        to.position.y += 0.25;
+                        self.world.entity_mut(*root).insert(
+                            TransformTween::ping_pong(from, to, Duration::from_secs(2))
+                                .with_easing(TweenEasing::SmoothStep),
+                        );
+                    }
+                }
                 self.world
                     .resource_mut::<PendingSceneRoots>()
                     .entities
@@ -157,7 +171,10 @@ impl App for MinimalGame {
             ui.label("fixed", format!("Fixed ticks: {fixed_ticks}"));
             ui.label("pulses", format!("Pulses handled: {pulse_count}"));
             ui.label("axis", format!("Move axis: {move_x:.1}"));
-            ui.label("controls", "A/D axis, Space or button: spawn cube");
+            ui.label(
+                "controls",
+                "A/D axis, Space or button: spawn cube; scene root tweens",
+            );
             ui.separator();
             ui.button("spawn", "Spawn Cube");
         }

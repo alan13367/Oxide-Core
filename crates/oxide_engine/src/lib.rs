@@ -3,6 +3,7 @@
 //! Oxide Core is built from scratch using wgpu for rendering,
 //! Oxide ECS abstractions for entity-component-system architecture, and glam for math.
 
+pub mod animation;
 pub mod app;
 pub mod asset;
 pub mod audio;

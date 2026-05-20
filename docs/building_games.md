@@ -21,6 +21,8 @@ the engine prelude for normal game code.
   shutdown after save, menu, or fatal-error handling.
 - Use `AppStage::FixedUpdate` and `FixedTime` for deterministic gameplay
   systems that should advance at a stable tick rate independent of rendering.
+- Use `TransformTween` for lightweight transform animation with one-shot,
+  looping, or ping-pong playback. `DefaultPlugins` installs `AnimationPlugin`.
 - Use `ActionBindings<T>`, `ActionInput<T>`, and
   `sync_action_input_system::<T>` for semantic keyboard/mouse controls such as
   jump, fire, interact, or pause.
@@ -164,6 +166,21 @@ fn quit_from_menu(mut exit: ResMut<AppExit>, input: Res<ActionInput<MenuAction>>
 `FixedUpdate` runs after `PreUpdate` and before normal `Update` work. Read
 `FixedTime::timestep_secs()` inside fixed systems when integrating simulation
 state.
+
+`TransformTween` animates local `TransformComponent` data before transform
+propagation:
+
+```rust
+commands.spawn((
+    TransformComponent::from_position(Vec3::ZERO),
+    TransformTween::ping_pong(
+        Transform::from_position(Vec3::ZERO),
+        Transform::from_position(Vec3::new(0.0, 1.0, 0.0)),
+        Duration::from_secs(2),
+    )
+    .with_easing(TweenEasing::SmoothStep),
+));
+```
 
 Use `add_labeled_system`, `add_system_to_set`, `add_system_before`, and
 `add_system_after` when plugins or gameplay systems need stable ordering inside

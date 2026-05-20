@@ -12,6 +12,7 @@ use winit::{
     window::WindowId,
 };
 
+use crate::animation::AnimationPlugin;
 #[cfg(feature = "gltf-import")]
 use crate::asset::GltfSceneAssets;
 use crate::asset::{
@@ -336,6 +337,7 @@ impl<T: App> PluginGroup<T> for DefaultPlugins {
     fn build(self, app: &mut AppBuilder<T>) {
         app.add_plugin_mut(InputPlugin);
         app.add_plugin_mut(TransformPlugin);
+        app.add_plugin_mut(AnimationPlugin);
         app.add_plugin_mut(RenderPlugin);
         app.add_plugin_mut(FrameDiagnosticsPlugin);
     }

@@ -1,5 +1,9 @@
 //! Oxide Core engine prelude
 
+pub use crate::animation::{
+    transform_tween_system, AnimationPlugin, TransformTween, TweenEasing, TweenRepeat,
+    TRANSFORM_TWEEN_SYSTEM,
+};
 pub use crate::app::{
     app, create_renderer, run_app, App, AppBuilder, AppRunner, AppStage, DefaultPlugins,
     FixedUpdate, InputPlugin, Plugin, PluginGroup, PluginRegistration, PostUpdate, PreUpdate,
