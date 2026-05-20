@@ -58,6 +58,44 @@ impl OxSceneDocument {
 #[derive(Component, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Name(pub String);
 
+/// Stable authored labels for gameplay queries, editor filters, and tooling.
+#[derive(Component, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tags(Vec<String>);
+
+impl Tags {
+    /// Creates a tag set, trimming whitespace and removing duplicate labels.
+    pub fn new(tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        let mut values = Vec::new();
+        for tag in tags {
+            let tag = tag.into().trim().to_string();
+            if !tag.is_empty() && !values.contains(&tag) {
+                values.push(tag);
+            }
+        }
+        Self(values)
+    }
+
+    /// Returns true if this entity has `tag`.
+    pub fn contains(&self, tag: &str) -> bool {
+        self.0.iter().any(|candidate| candidate == tag)
+    }
+
+    /// Returns all authored tags in insertion order.
+    pub fn iter(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().map(String::as_str)
+    }
+
+    /// Returns the number of tags.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns true when no tags are present.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SceneDescriptor {
     /// Extra source paths that should invalidate this scene during hot reload.
@@ -258,6 +296,9 @@ pub struct ScenePrefabDescriptor {
 pub struct SceneEntityDescriptor {
     #[serde(default)]
     pub name: Option<String>,
+    /// Stable authored labels inserted as a `Tags` component.
+    #[serde(default)]
+    pub tags: Vec<String>,
     #[serde(default)]
     pub transform: SceneTransform,
     #[serde(default = "default_visible")]
@@ -276,6 +317,7 @@ impl Default for SceneEntityDescriptor {
     fn default() -> Self {
         Self {
             name: None,
+            tags: Vec::new(),
             transform: SceneTransform::default(),
             visible: true,
             render_layers: None,
@@ -833,6 +875,9 @@ fn spawn_scene_entity(
     if let Some(name) = &descriptor.name {
         entity_mut.insert(Name(name.clone()));
     }
+    if !descriptor.tags.is_empty() {
+        entity_mut.insert(Tags::new(descriptor.tags.clone()));
+    }
     if !descriptor.visible {
         entity_mut.insert(Visibility::Hidden);
     }
@@ -1018,6 +1063,8 @@ fn validate_scene_entity(
     prefab_stack: &mut Vec<String>,
     diagnostics: &mut Vec<SceneValidationDiagnostic>,
 ) {
+    validate_entity_tags(descriptor, path.as_str(), diagnostics);
+
     match &descriptor.kind {
         SceneEntityKind::Prefab { id, overrides } => {
             if id.trim().is_empty() {
@@ -1072,6 +1119,31 @@ fn validate_scene_entity(
             prefab_stack,
             diagnostics,
         );
+    }
+}
+
+fn validate_entity_tags(
+    descriptor: &SceneEntityDescriptor,
+    path: &str,
+    diagnostics: &mut Vec<SceneValidationDiagnostic>,
+) {
+    let mut seen = HashSet::new();
+    for (index, tag) in descriptor.tags.iter().enumerate() {
+        let tag = tag.trim();
+        let diagnostic_path = format!("{path}.tags[{index}]");
+        if tag.is_empty() {
+            diagnostics.push(SceneValidationDiagnostic::new(
+                diagnostic_path,
+                "entity tags must not be empty",
+            ));
+            continue;
+        }
+        if !seen.insert(tag) {
+            diagnostics.push(SceneValidationDiagnostic::new(
+                diagnostic_path,
+                format!("duplicate entity tag '{tag}'"),
+            ));
+        }
     }
 }
 
@@ -1347,6 +1419,32 @@ mod tests {
             SceneTransform::default()
         )
         .is_none());
+    }
+
+    #[test]
+    fn scene_entities_spawn_authored_tags() {
+        let scene = SceneDescriptor {
+            dependencies: Vec::new(),
+            materials: Vec::new(),
+            prefabs: Vec::new(),
+            entities: vec![SceneEntityDescriptor {
+                name: Some("Enemy Spawn".to_string()),
+                tags: vec!["enemy".to_string(), "spawn_point".to_string()],
+                kind: SceneEntityKind::Empty,
+                ..Default::default()
+            }],
+        };
+
+        let mut world = World::new();
+        let roots = spawn_scene_descriptor(&mut world, &scene);
+        let tags = world.get::<Tags>(roots[0]).unwrap();
+
+        assert!(tags.contains("enemy"));
+        assert!(tags.contains("spawn_point"));
+        assert_eq!(
+            tags.iter().collect::<Vec<_>>(),
+            vec!["enemy", "spawn_point"]
+        );
     }
 
     #[test]
@@ -1708,6 +1806,35 @@ mod tests {
     }
 
     #[test]
+    fn load_scene_descriptor_accepts_entity_tags() {
+        let path = temp_path("tagged_scene", "oxscene");
+        fs::write(
+            &path,
+            r#"{
+                "format": "oxide.oxscene",
+                "version": 1,
+                "scene": {
+                    "entities": [
+                        {
+                            "name": "Tagged Spawn",
+                            "tags": ["enemy", "spawn_point"],
+                            "type": "empty"
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let scene = load_scene_descriptor(&path).unwrap();
+        assert_eq!(
+            scene.entities[0].tags,
+            vec!["enemy".to_string(), "spawn_point".to_string()]
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn scene_validation_reports_prefab_authoring_errors() {
         let scene = SceneDescriptor {
             dependencies: Vec::new(),
@@ -1769,6 +1896,40 @@ mod tests {
         assert!(messages
             .iter()
             .any(|message| message.contains("sprite IDs must not be empty")));
+    }
+
+    #[test]
+    fn scene_validation_reports_entity_tag_authoring_errors() {
+        let scene = SceneDescriptor {
+            dependencies: Vec::new(),
+            materials: Vec::new(),
+            prefabs: vec![ScenePrefabDescriptor {
+                id: "tagged_prefab".to_string(),
+                entities: vec![SceneEntityDescriptor {
+                    tags: vec!["spawn".to_string(), " spawn ".to_string(), String::new()],
+                    ..Default::default()
+                }],
+            }],
+            entities: vec![SceneEntityDescriptor {
+                tags: vec!["enemy".to_string(), "enemy".to_string(), "   ".to_string()],
+                ..Default::default()
+            }],
+        };
+
+        let err = scene.validate().unwrap_err();
+        let diagnostics = err.diagnostics();
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "entities[0].tags[1]"
+                && diagnostic.message.contains("duplicate entity tag")
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "entities[0].tags[2]"
+                && diagnostic.message == "entity tags must not be empty"
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "prefabs['tagged_prefab'].entities[0].tags[1]"
+                && diagnostic.message.contains("duplicate entity tag")
+        }));
     }
 
     #[test]

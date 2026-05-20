@@ -73,6 +73,8 @@ The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
   children via `InheritedVisibility`.
 - `RenderLayers` filters meshes, terrain, and sprites against the active
   camera's layer mask. Cameras and renderables default to layer `0`.
+- `Tags` stores stable authored labels such as `enemy`, `spawn_point`, or
+  `pickup` for gameplay queries and editor/tooling filters.
 - `CameraRenderView` renders active cameras deterministically by `order`,
   supports disabled cameras, normalized viewports, and scene clear overrides.
 - `TerrainDescriptor` and `SceneWorldDescriptor` describe terrain and blockout
@@ -121,6 +123,7 @@ existing color target so viewports can be composited.
         "entities": [
           {
             "name": "Crate Base",
+            "tags": ["prop", "crate"],
             "type": "mesh",
             "primitive": "cube",
             "render_layers": 1,
@@ -181,14 +184,17 @@ Use top-level `dependencies` for material, sprite, import, or sidecar data files
 that should trigger scene reloads when they change. Relative paths are resolved
 from the `.oxscene` file location when the scene is loaded through the runtime
 asset path.
+Use entity `tags` for stable gameplay labels independent of display names.
+Systems can query `Tags` and call `contains("spawn_point")` instead of parsing
+names.
 Prefab override paths use slash-separated entity names, such as
 `"Crate Base/Crate Top"`. Unnamed prefab entities can be addressed by sibling
 index segments such as `"#0/#1"`.
 
 Validation reports duplicate or empty dependency paths, duplicate material
 names, empty material names, duplicate prefab IDs, missing prefab references,
-recursive prefab graphs, invalid prefab override paths, and empty sprite IDs
-with descriptor paths such as
+recursive prefab graphs, invalid prefab override paths, duplicate/empty entity
+tags, and empty sprite IDs with descriptor paths such as
 `entities[0].children[1].id`. Use `SceneDescriptor::validate()` in editor tools
 and `try_spawn_scene_descriptor` / `try_spawn_scene_prefab` when code wants
 structured `SceneValidationError` diagnostics before mutating the world.

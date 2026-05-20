@@ -42,7 +42,9 @@ the engine prelude for normal game code.
   scene editor resource, runtime UI model, and debug overlay.
 - Use `SceneDescriptor` for small data-driven scenes, child hierarchies,
   registered sprite billboards, and reusable prefabs that can be instantiated
-  from `.oxscene` data or Rust with per-instance child overrides.
+  from `.oxscene` data or Rust with per-instance child overrides. Use authored
+  entity `tags` when gameplay systems need stable labels independent of display
+  names.
 - Use `reload_oxscene_path` or `reload_changed_oxscenes` when development tools
   should refresh native scene descriptors while preserving handles. Declare
   `.oxscene` `dependencies` when sidecar material, sprite, or import files

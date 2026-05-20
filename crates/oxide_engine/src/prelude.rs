@@ -77,7 +77,7 @@ pub use crate::scene::{
     SceneSpriteDescriptor, SceneSpriteFacing, SceneTransform, SceneValidationDiagnostic,
     SceneValidationError, SceneWorldDescriptor, SceneWorldSpawnResult, SpawnedOxScenes,
     SpriteAssets, SpriteBillboard, SpriteDepthMode, SpriteFacing, SpriteId, SpriteImage,
-    SpriteImageError, Terrain, TerrainDescriptor, TerrainWaveDescriptor, TransformComponent,
+    SpriteImageError, Tags, Terrain, TerrainDescriptor, TerrainWaveDescriptor, TransformComponent,
     Visibility, WorldObjectDescriptor, OXSCENE_FORMAT, OXSCENE_VERSION,
 };
 #[cfg(feature = "gltf-import")]
