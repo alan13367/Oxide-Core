@@ -20,6 +20,46 @@ struct PendingAsset {
     receiver: Receiver<Result<Box<dyn Any + Send>, AssetServerError>>,
 }
 
+/// Normalized source identity for a typed asset.
+///
+/// `path` identifies the source file. `label` optionally identifies a sub-asset
+/// inside that source, such as a mesh, material, animation, or scene imported
+/// from a container file.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AssetPath {
+    path: PathBuf,
+    label: Option<String>,
+}
+
+impl AssetPath {
+    /// Creates a normalized path identity without a sub-asset label.
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self::with_label(path, None::<String>)
+    }
+
+    /// Creates a normalized path identity with an optional sub-asset label.
+    pub fn with_label(path: impl Into<PathBuf>, label: Option<impl Into<String>>) -> Self {
+        Self {
+            path: normalize_asset_path(path.into()),
+            label: normalize_asset_label(label),
+        }
+    }
+
+    /// Returns the normalized source path.
+    pub fn path(&self) -> &Path {
+        self.path.as_path()
+    }
+
+    /// Returns the optional sub-asset label.
+    pub fn label(&self) -> Option<&str> {
+        self.label.as_deref()
+    }
+
+    fn into_parts(self) -> (PathBuf, Option<String>) {
+        (self.path, self.label)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AssetLoadStatus {
     Loading,
@@ -31,6 +71,7 @@ pub enum AssetLoadStatus {
 struct AssetMetadata {
     type_id: TypeId,
     path: Option<PathBuf>,
+    label: Option<String>,
     status: AssetLoadStatus,
     dependencies: Vec<PathBuf>,
 }
@@ -39,7 +80,7 @@ pub struct AssetServer {
     allocator: HandleAllocator,
     pending: HashMap<u64, PendingAsset>,
     metadata: HashMap<u64, AssetMetadata>,
-    paths: HashMap<(TypeId, PathBuf), u64>,
+    paths: HashMap<(TypeId, AssetPath), u64>,
 }
 
 impl Default for AssetServer {
@@ -88,6 +129,7 @@ impl AssetServer {
             AssetMetadata {
                 type_id: TypeId::of::<T>(),
                 path: None,
+                label: None,
                 status: AssetLoadStatus::Loading,
                 dependencies: Vec::new(),
             },
@@ -101,9 +143,29 @@ impl AssetServer {
         T: Send + 'static,
         F: FnOnce(PathBuf) -> Result<T, AssetServerError> + Send + 'static,
     {
-        let path = normalize_asset_path(path.into());
+        self.load_labeled_path_async(path, None::<String>, |path, _label| loader(path))
+    }
+
+    /// Starts loading a typed asset from a source path plus optional sub-asset label.
+    ///
+    /// Labeled paths let importers publish multiple stable typed handles from
+    /// one container file without inventing fake file paths. For example,
+    /// `assets/level.gltf#Mesh0` and `assets/level.gltf#Scene0` can be tracked
+    /// independently while both still match hot-reload changes to
+    /// `assets/level.gltf`.
+    pub fn load_labeled_path_async<T, F>(
+        &mut self,
+        path: impl Into<PathBuf>,
+        label: Option<impl Into<String>>,
+        loader: F,
+    ) -> Handle<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(PathBuf, Option<String>) -> Result<T, AssetServerError> + Send + 'static,
+    {
+        let asset_path = AssetPath::with_label(path, label);
         let type_id = TypeId::of::<T>();
-        if let Some(id) = self.paths.get(&(type_id, path.clone())).copied() {
+        if let Some(id) = self.paths.get(&(type_id, asset_path.clone())).copied() {
             let reusable = self
                 .metadata
                 .get(&id)
@@ -117,16 +179,19 @@ impl AssetServer {
             if reusable {
                 return Handle::new(id);
             }
-            self.paths.remove(&(type_id, path.clone()));
+            self.paths.remove(&(type_id, asset_path.clone()));
         }
 
         let handle = self.allocate_handle::<T>();
         let id = handle.id();
+        let (path, label) = asset_path.clone().into_parts();
         let loader_path = path.clone();
+        let loader_label = label.clone();
         let (sender, receiver) = mpsc::channel();
 
         std::thread::spawn(move || {
-            let result = loader(loader_path).map(|asset| Box::new(asset) as Box<dyn Any + Send>);
+            let result = loader(loader_path, loader_label)
+                .map(|asset| Box::new(asset) as Box<dyn Any + Send>);
             let _ = sender.send(result);
         });
 
@@ -135,12 +200,13 @@ impl AssetServer {
             id,
             AssetMetadata {
                 type_id,
-                path: Some(path.clone()),
+                path: Some(path),
+                label,
                 status: AssetLoadStatus::Loading,
                 dependencies: Vec::new(),
             },
         );
-        self.paths.insert((type_id, path), id);
+        self.paths.insert((type_id, asset_path), id);
 
         handle
     }
@@ -160,33 +226,60 @@ impl AssetServer {
         T: Send + 'static,
         F: FnOnce(PathBuf) -> Result<T, AssetServerError> + Send + 'static,
     {
-        let path = normalize_asset_path(path.into());
+        self.reload_labeled_path_async(path, None::<String>, |path, _label| loader(path))
+    }
+
+    /// Reloads an already-known typed labeled path into its existing handle.
+    pub fn reload_labeled_path_async<T, F>(
+        &mut self,
+        path: impl Into<PathBuf>,
+        label: Option<impl Into<String>>,
+        loader: F,
+    ) -> Option<Handle<T>>
+    where
+        T: Send + 'static,
+        F: FnOnce(PathBuf, Option<String>) -> Result<T, AssetServerError> + Send + 'static,
+    {
+        let asset_path = AssetPath::with_label(path, label);
         let type_id = TypeId::of::<T>();
-        let id = self.paths.get(&(type_id, path.clone())).copied()?;
+        let id = self.paths.get(&(type_id, asset_path.clone())).copied()?;
 
         let metadata = self.metadata.get_mut(&id)?;
         if metadata.type_id != type_id {
             return None;
         }
 
+        let (path, label) = asset_path.into_parts();
         let loader_path = path.clone();
+        let loader_label = label.clone();
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
-            let result = loader(loader_path).map(|asset| Box::new(asset) as Box<dyn Any + Send>);
+            let result = loader(loader_path, loader_label)
+                .map(|asset| Box::new(asset) as Box<dyn Any + Send>);
             let _ = sender.send(result);
         });
 
         self.pending.insert(id, PendingAsset { type_id, receiver });
         metadata.status = AssetLoadStatus::Loading;
         metadata.path = Some(path);
+        metadata.label = label;
 
         Some(Handle::new(id))
     }
 
     pub fn handle_for_path<T: 'static>(&self, path: impl Into<PathBuf>) -> Option<Handle<T>> {
-        let path = normalize_asset_path(path.into());
+        self.handle_for_labeled_path(path, None::<String>)
+    }
+
+    /// Returns the handle for a typed path plus optional sub-asset label.
+    pub fn handle_for_labeled_path<T: 'static>(
+        &self,
+        path: impl Into<PathBuf>,
+        label: Option<impl Into<String>>,
+    ) -> Option<Handle<T>> {
+        let asset_path = AssetPath::with_label(path, label);
         self.paths
-            .get(&(TypeId::of::<T>(), path))
+            .get(&(TypeId::of::<T>(), asset_path))
             .copied()
             .map(Handle::new)
     }
@@ -201,6 +294,26 @@ impl AssetServer {
         (metadata.type_id == TypeId::of::<T>())
             .then_some(metadata.path.as_deref())
             .flatten()
+    }
+
+    /// Returns the optional sub-asset label for a typed handle.
+    pub fn asset_label<T: 'static>(&self, handle: &Handle<T>) -> Option<&str> {
+        let metadata = self.metadata.get(&handle.id())?;
+        (metadata.type_id == TypeId::of::<T>())
+            .then_some(metadata.label.as_deref())
+            .flatten()
+    }
+
+    /// Returns the typed source identity for a handle.
+    pub fn asset_source<T: 'static>(&self, handle: &Handle<T>) -> Option<AssetPath> {
+        let metadata = self.metadata.get(&handle.id())?;
+        if metadata.type_id != TypeId::of::<T>() {
+            return None;
+        }
+        Some(AssetPath {
+            path: metadata.path.clone()?,
+            label: metadata.label.clone(),
+        })
     }
 
     /// Replaces the path dependencies recorded for a typed asset.
@@ -263,7 +376,8 @@ impl AssetServer {
     /// Returns typed asset handles whose source path or dependency paths match a changed path.
     pub fn handles_for_changed_path<T: 'static>(&self, path: impl Into<PathBuf>) -> Vec<Handle<T>> {
         let path = normalize_asset_path(path.into());
-        self.metadata
+        let mut handles: Vec<_> = self
+            .metadata
             .iter()
             .filter_map(|(id, metadata)| {
                 if metadata.type_id != TypeId::of::<T>() {
@@ -276,7 +390,9 @@ impl AssetServer {
                         .any(|dependency| dependency == &path);
                 path_matches.then(|| Handle::new(*id))
             })
-            .collect()
+            .collect();
+        handles.sort_by_key(|handle: &Handle<T>| handle.id());
+        handles
     }
 
     /// Polls for completed async assets and returns ready `(Handle<T>, T)` pairs.
@@ -365,6 +481,13 @@ fn normalize_asset_path(path: PathBuf) -> PathBuf {
     std::fs::canonicalize(&path).unwrap_or(path)
 }
 
+fn normalize_asset_label(label: Option<impl Into<String>>) -> Option<String> {
+    label.and_then(|label| {
+        let label = label.into().trim().to_string();
+        (!label.is_empty()).then_some(label)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,6 +564,121 @@ mod tests {
             server.handle_for_path::<String>("assets/shared.asset"),
             Some(text)
         );
+    }
+
+    #[test]
+    fn labeled_path_identity_separates_sub_assets() {
+        let mut server = AssetServer::new();
+        let mesh_0 =
+            server.load_labeled_path_async("assets/level.gltf", Some("Mesh0"), |path, label| {
+                Ok::<_, AssetServerError>(format!("{}#{}", path.display(), label.unwrap()))
+            });
+        let mesh_1 =
+            server.load_labeled_path_async("assets/level.gltf", Some("Mesh1"), |_path, label| {
+                Ok::<_, AssetServerError>(label.unwrap())
+            });
+        let mesh_0_again = server.load_labeled_path_async(
+            "assets/level.gltf",
+            Some(" Mesh0 "),
+            |_path, _label| Ok::<_, AssetServerError>("duplicate".to_string()),
+        );
+
+        assert_eq!(mesh_0, mesh_0_again);
+        assert_ne!(mesh_0, mesh_1);
+        assert_eq!(
+            server.handle_for_labeled_path::<String>("assets/level.gltf", Some("Mesh0")),
+            Some(mesh_0)
+        );
+        assert_eq!(
+            server.handle_for_labeled_path::<String>("assets/level.gltf", Some("Mesh1")),
+            Some(mesh_1)
+        );
+        assert_eq!(server.asset_label(&mesh_0), Some("Mesh0"));
+        assert_eq!(
+            server.asset_path(&mesh_0),
+            Some(Path::new("assets/level.gltf"))
+        );
+
+        let source = server.asset_source(&mesh_1).unwrap();
+        assert_eq!(source.path(), Path::new("assets/level.gltf"));
+        assert_eq!(source.label(), Some("Mesh1"));
+
+        let ready = poll_until_ready::<String>(&mut server);
+        assert_eq!(ready.len(), 2);
+    }
+
+    #[test]
+    fn labeled_and_unlabeled_paths_are_distinct() {
+        let mut server = AssetServer::new();
+        let scene =
+            server.load_path_async("assets/level.gltf", |_| Ok::<_, AssetServerError>("scene"));
+        let mesh =
+            server.load_labeled_path_async("assets/level.gltf", Some("Mesh0"), |_path, _label| {
+                Ok::<_, AssetServerError>("mesh")
+            });
+
+        assert_ne!(scene, mesh);
+        assert_eq!(
+            server.handle_for_path::<&'static str>("assets/level.gltf"),
+            Some(scene)
+        );
+        assert_eq!(
+            server.handle_for_labeled_path::<&'static str>("assets/level.gltf", Some("Mesh0")),
+            Some(mesh)
+        );
+        assert_eq!(server.asset_label(&scene), None);
+        assert_eq!(server.asset_label(&mesh), Some("Mesh0"));
+    }
+
+    #[test]
+    fn changed_path_query_matches_all_labels_for_source_path() {
+        let mut server = AssetServer::new();
+        let mesh_0 =
+            server.load_labeled_path_async("assets/level.gltf", Some("Mesh0"), |_path, _label| {
+                Ok::<_, AssetServerError>(0u32)
+            });
+        let mesh_1 =
+            server.load_labeled_path_async("assets/level.gltf", Some("Mesh1"), |_path, _label| {
+                Ok::<_, AssetServerError>(1u32)
+            });
+        let other =
+            server.load_path_async("assets/other.gltf", |_| Ok::<_, AssetServerError>(2u32));
+
+        assert_eq!(
+            server.handles_for_changed_path::<u32>("assets/level.gltf"),
+            vec![mesh_0, mesh_1]
+        );
+        assert_eq!(
+            server.handles_for_changed_path::<u32>("assets/other.gltf"),
+            vec![other]
+        );
+    }
+
+    #[test]
+    fn reload_labeled_path_reuses_existing_handle() {
+        let mut server = AssetServer::new();
+        let mut assets = Assets::<String>::new();
+        let handle =
+            server.load_labeled_path_async("assets/level.gltf", Some("Mesh0"), |_path, label| {
+                Ok::<_, AssetServerError>(format!("{}:v1", label.unwrap()))
+            });
+
+        let loaded = poll_until_loaded(&mut server, &mut assets);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(assets.get(&handle).map(String::as_str), Some("Mesh0:v1"));
+
+        let reloaded = server
+            .reload_labeled_path_async("assets/level.gltf", Some("Mesh0"), |_path, label| {
+                Ok::<_, AssetServerError>(format!("{}:v2", label.unwrap()))
+            })
+            .unwrap();
+        assert_eq!(reloaded, handle);
+        assert_eq!(server.asset_status(&handle), Some(AssetLoadStatus::Loading));
+
+        let loaded = poll_until_loaded(&mut server, &mut assets);
+        assert_eq!(loaded.into_iter().next().unwrap().unwrap(), handle);
+        assert_eq!(assets.get(&handle).map(String::as_str), Some("Mesh0:v2"));
+        assert_eq!(server.asset_label(&handle), Some("Mesh0"));
     }
 
     #[test]

@@ -18,9 +18,10 @@ pub use crate::asset::{
     poll_material_descriptor_assets, poll_native_asset_reloads, register_material_asset,
     reload_changed_material_descriptors, reload_changed_native_assets,
     reload_material_descriptor_path, request_material_descriptor_load, AssetChange,
-    AssetChangeCursor, AssetChangeKind, AssetLoadStatus, AssetServerResource, Assets, Handle,
-    HandleAllocator, MaterialAssets, MaterialDescriptorAssets, MaterialDescriptorHandle,
-    MaterialHandle, MeshCache, MeshFilter, MeshHandle, NativeAssetReloadSummary,
+    AssetChangeCursor, AssetChangeKind, AssetLoadStatus, AssetPath, AssetServer, AssetServerError,
+    AssetServerResource, Assets, Handle, HandleAllocator, MaterialAssets, MaterialDescriptorAssets,
+    MaterialDescriptorHandle, MaterialHandle, MeshCache, MeshFilter, MeshHandle,
+    NativeAssetReloadSummary,
 };
 pub use crate::audio::{
     initialize_audio, Audio, AudioClip, AudioClipError, AudioError, AudioPlugin, AudioTone,

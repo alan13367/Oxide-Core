@@ -6,8 +6,8 @@ asset documents for scenes and materials.
 ## Current Shape
 
 - `oxide_asset` owns generic handles, typed storage, async loading, load
-  status, typed path identity, and dependency path metadata for hot reload and
-  importer invalidation.
+  status, typed path identity, labeled sub-asset identity, and dependency path
+  metadata for hot reload and importer invalidation.
 - `oxide_renderer` owns GPU resources and optional glTF/image importer helpers.
 - `oxide_renderer` owns versioned `.oxmat` material documents.
 - `oxide_scene` owns scene descriptors, renderable scene components, and
@@ -94,7 +94,28 @@ external tooling formats.
 
 ## Dependency Tracking
 
-`AssetServer` can record secondary source paths for any typed asset handle:
+`AssetServer` can record secondary source paths for any typed asset handle.
+It also supports labels for sub-assets imported from one container file:
+
+```rust
+let mesh = server.load_labeled_path_async(
+    "assets/level.gltf",
+    Some("Mesh0"),
+    |path, label| load_mesh_from_container(path, label.unwrap()),
+);
+
+let same_mesh = server.handle_for_labeled_path::<MeshAsset>(
+    "assets/level.gltf",
+    Some("Mesh0"),
+);
+```
+
+Labeled and unlabeled handles are distinct, but a watcher change for
+`assets/level.gltf` still matches every loaded label from that source. Use
+`asset_source(handle)` or `asset_label(handle)` when tools need to display or
+persist where a handle came from.
+
+For secondary files, record dependencies as before:
 
 ```rust
 server.set_asset_dependencies(
