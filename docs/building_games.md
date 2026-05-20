@@ -52,6 +52,9 @@ the engine prelude for normal game code.
   or `EventDrain<T>` for gameplay messages, and `Timer` for component/resource timers.
 - Use `World::change_tick()` with component/resource revision helpers when
   renderer, editor, AI, or save-game caches need cheap invalidation.
+- Use `World::register_component_type::<T>()` and
+  `World::register_resource_type::<T>()` when editor, scene, or tooling code
+  needs stable type names without full reflection.
 - Use `ComponentChanges<T>` when one system should own an added/changed cursor
   for a component type without a separate revision resource.
 - Use `ResourceCursor<T>` when a system should react to a resource only after

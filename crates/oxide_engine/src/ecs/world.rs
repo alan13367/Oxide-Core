@@ -11,4 +11,5 @@ pub use oxide_ecs::system::{
     EventDrain, EventReader, EventWriter, IntoSystem, IntoSystemExt, Local, Query,
     RemovedComponents, Res, ResMut, ResourceCursor, State, StateTransition, System, SystemParam,
 };
+pub use oxide_ecs::type_registry::{TypeKind, TypeMetadata, TypeRegistry};
 pub use oxide_ecs::world::{RemovedComponent, World};

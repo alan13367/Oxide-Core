@@ -32,7 +32,7 @@ pub use crate::ecs::{
     ComponentChanges, Entity, EventCursor, EventDrain, EventReader, EventWriter, Events,
     IntoSystem, IntoSystemExt, Local, Query, RemovedComponent, RemovedComponents, Res, ResMut,
     Resource, ResourceCursor, Schedule, ScheduleOrderDiagnostic, State, StateTransition, System,
-    SystemParam, With, Without, World,
+    SystemParam, TypeKind, TypeMetadata, TypeRegistry, With, Without, World,
 };
 pub use crate::ecs::{FixedTime, RendererResource, Time, WindowResource};
 pub use crate::event::{window_event_to_engine, EngineEvent};

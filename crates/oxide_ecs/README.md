@@ -12,7 +12,9 @@ The runtime includes typed entities/components/resources, standalone
 event params (`EventReader`, `EventCursor`, `EventWriter`, `EventDrain`),
 optional resources via `Option<Res<T>>` / `Option<ResMut<T>>`, persistent
 per-system `Local<T>` state, component/resource mutation revisions, and labeled
-or set-based system ordering with before/after constraints.
+or set-based system ordering with before/after constraints. `TypeRegistry`
+provides lightweight component/resource type metadata for editor, scene, and
+tooling code without pulling in a reflection framework.
 
 ```rust
 use oxide_ecs::prelude::*;
@@ -77,6 +79,12 @@ removed or entities despawn. Long running tools can bound retained removal histo
 `prune_removed_components_through::<T>(revision)` or
 `prune_all_removed_components_through(revision)` after all relevant systems have
 advanced past that revision.
+
+Use `World::register_component_type::<T>()` and
+`World::register_resource_type::<T>()` to populate the `TypeRegistry` resource.
+The registry records `TypeId`, full Rust type name, short type name, and broad
+kind (`Component`, `Resource`, or `Other`) so tooling can show stable type
+identity without field-level reflection.
 
 `Commands` can spawn/despawn entities, edit entity components, and insert,
 initialize, or remove resources at the end of the current schedule/stage.

@@ -26,6 +26,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Plugin Architecture**: Group engine setup with `Plugin`/`DefaultPlugins`, plugin registration metadata, and duplicate guards to reduce app boilerplate
 - **Ergonomic Systems**: Signature-driven systems via `IntoSystem` + params (`Res`, `ResMut`, `Query`, `Commands`) in both app stages and standalone ECS schedules
 - **ECS Change Revisions**: `World` tracks component/resource mutation ticks so renderer, asset, editor, and gameplay caches can invalidate only changed data
+- **Type Metadata Registry**: lightweight component/resource type identity for editor, scene, and tooling workflows without a reflection dependency
 - **System Ordering**: Label systems, group them into sets, and register before/after constraints inside app stages or standalone schedules
 - **Startup Schedule**: Register one-shot setup systems with normal ECS params through `AppStage::Startup`
 - **Action + Axis Input Mapping**: Bind game-defined actions and movement axes to keyboard/mouse triggers with `ActionBindings`, `AxisBindings`, and sync systems

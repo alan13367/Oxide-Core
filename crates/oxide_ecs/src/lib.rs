@@ -12,6 +12,108 @@ pub mod resource {
     pub trait Resource: 'static {}
 }
 
+pub mod type_registry {
+    use std::any::{type_name, TypeId};
+    use std::collections::HashMap;
+
+    use crate::component::Component;
+    use crate::resource::Resource;
+
+    /// Broad ECS-facing category for registered Rust types.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum TypeKind {
+        Component,
+        Resource,
+        Other,
+    }
+
+    /// Lightweight metadata for a Rust type known to the ECS runtime.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct TypeMetadata {
+        pub type_id: TypeId,
+        pub name: &'static str,
+        pub short_name: &'static str,
+        pub kind: TypeKind,
+    }
+
+    /// Registry of component/resource type metadata for editors and tooling.
+    ///
+    /// This is intentionally metadata-only. It does not expose field-level
+    /// reflection, serialization, or dynamic construction, which keeps Oxide's
+    /// ECS dependency-free while still giving tooling stable type identity.
+    #[derive(Default)]
+    pub struct TypeRegistry {
+        types: HashMap<TypeId, TypeMetadata>,
+        names: HashMap<&'static str, TypeId>,
+    }
+
+    impl Resource for TypeRegistry {}
+
+    impl TypeRegistry {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        /// Registers a component type and returns its metadata.
+        pub fn register_component<T: Component>(&mut self) -> &TypeMetadata {
+            self.register::<T>(TypeKind::Component)
+        }
+
+        /// Registers a resource type and returns its metadata.
+        pub fn register_resource<T: Resource>(&mut self) -> &TypeMetadata {
+            self.register::<T>(TypeKind::Resource)
+        }
+
+        /// Registers any `'static` Rust type with a custom kind.
+        pub fn register<T: 'static>(&mut self, kind: TypeKind) -> &TypeMetadata {
+            let type_id = TypeId::of::<T>();
+            let name = type_name::<T>();
+            let metadata = TypeMetadata {
+                type_id,
+                name,
+                short_name: short_type_name(name),
+                kind,
+            };
+            self.names.insert(name, type_id);
+            self.types.entry(type_id).or_insert(metadata)
+        }
+
+        pub fn get<T: 'static>(&self) -> Option<&TypeMetadata> {
+            self.get_by_id(TypeId::of::<T>())
+        }
+
+        pub fn get_by_id(&self, type_id: TypeId) -> Option<&TypeMetadata> {
+            self.types.get(&type_id)
+        }
+
+        pub fn get_by_name(&self, name: &str) -> Option<&TypeMetadata> {
+            self.names
+                .get(name)
+                .and_then(|type_id| self.types.get(type_id))
+        }
+
+        pub fn contains<T: 'static>(&self) -> bool {
+            self.types.contains_key(&TypeId::of::<T>())
+        }
+
+        pub fn len(&self) -> usize {
+            self.types.len()
+        }
+
+        pub fn is_empty(&self) -> bool {
+            self.types.is_empty()
+        }
+
+        pub fn iter(&self) -> impl Iterator<Item = &TypeMetadata> {
+            self.types.values()
+        }
+    }
+
+    fn short_type_name(name: &'static str) -> &'static str {
+        name.rsplit("::").next().unwrap_or(name)
+    }
+}
+
 pub mod event {
     use crate::resource::Resource;
 
@@ -1673,6 +1775,8 @@ pub mod world {
     use super::component::Component;
     use super::entity::Entity;
     use super::query::{Added, Changed, With, Without};
+    use super::resource::Resource;
+    use super::type_registry::{TypeMetadata, TypeRegistry};
     use std::any::{Any, TypeId};
     use std::collections::HashMap;
     use std::marker::PhantomData;
@@ -1953,6 +2057,22 @@ pub mod world {
 
         pub fn resource_count(&self) -> usize {
             self.resources.len()
+        }
+
+        /// Returns the type metadata registry, creating it if needed.
+        pub fn type_registry(&mut self) -> &mut TypeRegistry {
+            self.init_resource::<TypeRegistry>();
+            self.resource_mut::<TypeRegistry>()
+        }
+
+        /// Registers component metadata in the world's type registry.
+        pub fn register_component_type<T: Component>(&mut self) -> &TypeMetadata {
+            self.type_registry().register_component::<T>()
+        }
+
+        /// Registers resource metadata in the world's type registry.
+        pub fn register_resource_type<T: Resource>(&mut self) -> &TypeMetadata {
+            self.type_registry().register_resource::<T>()
         }
 
         /// Returns the current monotonic ECS mutation tick.
@@ -3083,6 +3203,7 @@ pub mod prelude {
         RemovedComponents, Res, ResMut, ResourceCursor, State, StateTransition, System,
         SystemParam,
     };
+    pub use crate::type_registry::{TypeKind, TypeMetadata, TypeRegistry};
     pub use crate::world::{RemovedComponent, World};
 }
 
@@ -3096,6 +3217,7 @@ mod tests {
         EventCursor, EventDrain, EventReader, EventWriter, IntoSystem, IntoSystemExt, Local, Query,
         RemovedComponents, Res, ResMut, ResourceCursor, State,
     };
+    use crate::type_registry::{TypeKind, TypeRegistry};
     use crate::world::World;
     use crate::{Component, Resource};
 
@@ -3154,6 +3276,50 @@ mod tests {
 
     #[derive(Resource, Default)]
     struct LastSpawned(Option<crate::entity::Entity>);
+
+    #[test]
+    fn type_registry_records_component_and_resource_metadata() {
+        let mut registry = TypeRegistry::new();
+
+        let position = registry.register_component::<Position>().clone();
+        let tick = registry.register_resource::<Tick>().clone();
+
+        assert_eq!(position.kind, TypeKind::Component);
+        assert_eq!(position.short_name, "Position");
+        assert_eq!(registry.get::<Position>(), Some(&position));
+        assert_eq!(registry.get_by_name(position.name), Some(&position));
+
+        assert_eq!(tick.kind, TypeKind::Resource);
+        assert_eq!(tick.short_name, "Tick");
+        assert_eq!(registry.get::<Tick>(), Some(&tick));
+
+        registry.register_component::<Position>();
+        assert_eq!(registry.len(), 2);
+        assert!(registry.contains::<Position>());
+        assert!(registry.contains::<Tick>());
+    }
+
+    #[test]
+    fn world_registers_type_metadata_resource_on_demand() {
+        let mut world = World::new();
+
+        let position = world.register_component_type::<Position>().clone();
+        let tick = world.register_resource_type::<Tick>().clone();
+
+        let registry = world.resource::<TypeRegistry>();
+        assert_eq!(registry.get::<Position>(), Some(&position));
+        assert_eq!(registry.get::<Tick>(), Some(&tick));
+        assert_eq!(
+            registry
+                .iter()
+                .filter(|metadata| matches!(
+                    metadata.kind,
+                    TypeKind::Component | TypeKind::Resource
+                ))
+                .count(),
+            2
+        );
+    }
 
     #[test]
     fn spawn_insert_remove_and_despawn_work() {
