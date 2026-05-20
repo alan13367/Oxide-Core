@@ -74,7 +74,9 @@ The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
 - `RenderLayers` filters meshes, terrain, and sprites against the active
   camera's layer mask. Cameras and renderables default to layer `0`.
 - `Tags` stores stable authored labels such as `enemy`, `spawn_point`, or
-  `pickup` for gameplay queries and editor/tooling filters.
+  `pickup` for gameplay queries and editor/tooling filters. Use
+  `entities_with_tag`, `first_entity_with_tag`, and `entity_has_tag` when code
+  needs authored scene markers without depending on display names.
 - `CameraRenderView` renders active cameras deterministically by `order`,
   supports disabled cameras, normalized viewports, and scene clear overrides.
 - `TerrainDescriptor` and `SceneWorldDescriptor` describe terrain and blockout
@@ -185,7 +187,8 @@ that should trigger scene reloads when they change. Relative paths are resolved
 from the `.oxscene` file location when the scene is loaded through the runtime
 asset path.
 Use entity `tags` for stable gameplay labels independent of display names.
-Systems can query `Tags` and call `contains("spawn_point")` instead of parsing
+Systems can query `Tags` directly or use `first_entity_with_tag(&mut world,
+"spawn_point")` / `entities_with_tag(&mut world, "enemy")` instead of parsing
 names.
 Prefab override paths use slash-separated entity names, such as
 `"Crate Base/Crate Top"`. Unnamed prefab entities can be addressed by sibling

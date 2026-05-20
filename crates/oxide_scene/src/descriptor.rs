@@ -77,6 +77,7 @@ impl Tags {
 
     /// Returns true if this entity has `tag`.
     pub fn contains(&self, tag: &str) -> bool {
+        let tag = tag.trim();
         self.0.iter().any(|candidate| candidate == tag)
     }
 
@@ -94,6 +95,37 @@ impl Tags {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+}
+
+/// Returns true when `entity` has a [`Tags`] component containing `tag`.
+pub fn entity_has_tag(world: &World, entity: Entity, tag: &str) -> bool {
+    world
+        .get::<Tags>(entity)
+        .is_some_and(|tags| tags.contains(tag))
+}
+
+/// Returns every entity with a [`Tags`] component containing `tag`.
+///
+/// Results follow the ECS world's query iteration order. Use stable authored
+/// names or hierarchy relationships when gameplay requires deterministic
+/// ordering among multiple matching entities.
+pub fn entities_with_tag(world: &mut World, tag: &str) -> Vec<Entity> {
+    let mut query = world.query::<(Entity, &Tags)>();
+    query
+        .iter(world)
+        .filter_map(|(entity, tags)| tags.contains(tag).then_some(entity))
+        .collect()
+}
+
+/// Returns the first entity with a [`Tags`] component containing `tag`.
+///
+/// This is a convenience for singleton markers such as `player_spawn`. Prefer
+/// [`entities_with_tag`] when multiple authored entities may share the tag.
+pub fn first_entity_with_tag(world: &mut World, tag: &str) -> Option<Entity> {
+    let mut query = world.query::<(Entity, &Tags)>();
+    query
+        .iter(world)
+        .find_map(|(entity, tags)| tags.contains(tag).then_some(entity))
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1441,10 +1473,52 @@ mod tests {
 
         assert!(tags.contains("enemy"));
         assert!(tags.contains("spawn_point"));
+        assert!(tags.contains(" enemy "));
         assert_eq!(
             tags.iter().collect::<Vec<_>>(),
             vec!["enemy", "spawn_point"]
         );
+    }
+
+    #[test]
+    fn scene_tag_helpers_find_authored_entities() {
+        let scene = SceneDescriptor {
+            dependencies: Vec::new(),
+            materials: Vec::new(),
+            prefabs: Vec::new(),
+            entities: vec![
+                SceneEntityDescriptor {
+                    name: Some("Enemy Spawn".to_string()),
+                    tags: vec!["enemy".to_string(), "spawn_point".to_string()],
+                    kind: SceneEntityKind::Empty,
+                    ..Default::default()
+                },
+                SceneEntityDescriptor {
+                    name: Some("Boss Spawn".to_string()),
+                    tags: vec!["enemy".to_string(), "boss".to_string()],
+                    kind: SceneEntityKind::Empty,
+                    ..Default::default()
+                },
+                SceneEntityDescriptor {
+                    name: Some("Camera Marker".to_string()),
+                    tags: vec!["marker".to_string()],
+                    kind: SceneEntityKind::Empty,
+                    ..Default::default()
+                },
+            ],
+        };
+
+        let mut world = World::new();
+        let roots = spawn_scene_descriptor(&mut world, &scene);
+
+        let enemies = entities_with_tag(&mut world, "enemy");
+        assert_eq!(enemies.len(), 2);
+        assert!(enemies.contains(&roots[0]));
+        assert!(enemies.contains(&roots[1]));
+        assert_eq!(first_entity_with_tag(&mut world, "boss"), Some(roots[1]));
+        assert!(entity_has_tag(&world, roots[0], " spawn_point "));
+        assert!(!entity_has_tag(&world, roots[2], "enemy"));
+        assert!(entities_with_tag(&mut world, "missing").is_empty());
     }
 
     #[test]

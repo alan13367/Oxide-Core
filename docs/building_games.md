@@ -43,8 +43,9 @@ the engine prelude for normal game code.
 - Use `SceneDescriptor` for small data-driven scenes, child hierarchies,
   registered sprite billboards, and reusable prefabs that can be instantiated
   from `.oxscene` data or Rust with per-instance child overrides. Use authored
-  entity `tags` when gameplay systems need stable labels independent of display
-  names.
+  entity `tags` plus `entities_with_tag`, `first_entity_with_tag`, and
+  `entity_has_tag` when gameplay systems need stable labels independent of
+  display names.
 - Use `reload_oxscene_path` or `reload_changed_oxscenes` when development tools
   should refresh native scene descriptors while preserving handles. Declare
   `.oxscene` `dependencies` when sidecar material, sprite, or import files
@@ -341,6 +342,18 @@ publishing authored data. Native `.oxscene` loads also validate automatically,
 and `try_spawn_scene_descriptor` / `try_spawn_scene_prefab` return structured
 diagnostics for missing prefab IDs, duplicate IDs, recursive prefab graphs, and
 invalid prefab overrides without partially spawning invalid content.
+
+Authored tags are intended for game logic and tools, not just editor display:
+
+```rust
+if let Some(spawn) = first_entity_with_tag(&mut world, "player_spawn") {
+    // Read the spawn transform or attach a player-controlled entity here.
+}
+
+for enemy in entities_with_tag(&mut world, "enemy") {
+    // Attach AI, health, or runtime state after loading the scene.
+}
+```
 
 During development, native scene descriptors can be reloaded in place:
 
