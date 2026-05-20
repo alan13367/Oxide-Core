@@ -17,7 +17,7 @@ use crate::animation::AnimationPlugin;
 use crate::asset::GltfSceneAssets;
 use crate::asset::{
     material_descriptor_asset_system, AssetServerResource, MaterialAssets,
-    MaterialDescriptorAssets, MeshCache,
+    MaterialDescriptorAssets, MeshCache, TextureImageAssets,
 };
 use crate::diagnostics::FrameDiagnosticsPlugin;
 use crate::ecs::{
@@ -30,7 +30,7 @@ use crate::render::{
 };
 #[cfg(feature = "gltf-import")]
 use crate::scene::{
-    gltf_scene_spawn_system, GltfSceneMaterialHandles, GltfSceneMeshHandles,
+    gltf_scene_spawn_system, GltfSceneImageHandles, GltfSceneMaterialHandles, GltfSceneMeshHandles,
     PendingGltfSceneSpawns, SpawnedGltfScenes,
 };
 use crate::scene::{
@@ -256,6 +256,9 @@ fn initialize_asset_resources(world: &mut World, _window: &Window) {
     if !world.contains_resource::<MeshCache>() {
         world.insert_resource(MeshCache::default());
     }
+    if !world.contains_resource::<TextureImageAssets>() {
+        world.insert_resource(TextureImageAssets::default());
+    }
     if !world.contains_resource::<SceneDescriptorAssets>() {
         world.insert_resource(SceneDescriptorAssets::default());
     }
@@ -281,6 +284,9 @@ fn initialize_asset_resources(world: &mut World, _window: &Window) {
         }
         if !world.contains_resource::<GltfSceneMaterialHandles>() {
             world.insert_resource(GltfSceneMaterialHandles::default());
+        }
+        if !world.contains_resource::<GltfSceneImageHandles>() {
+            world.insert_resource(GltfSceneImageHandles::default());
         }
     }
 }

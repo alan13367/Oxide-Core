@@ -16,6 +16,7 @@ use oxide_renderer::descriptor::{
 use oxide_renderer::gltf::{load_gltf, GltfScene};
 use oxide_renderer::material::MaterialPipeline;
 use oxide_renderer::mesh::Mesh3D;
+use oxide_renderer::texture::TextureImage;
 #[cfg(feature = "gltf-import")]
 use wgpu::{Device, Queue};
 
@@ -47,6 +48,7 @@ pub struct MaterialDescriptorAssets {
 pub type MeshHandle = CoreHandle<Mesh3D>;
 pub type MaterialHandle = CoreHandle<MaterialPipeline>;
 pub type MaterialDescriptorHandle = CoreHandle<MaterialDescriptor>;
+pub type TextureImageHandle = CoreHandle<TextureImage>;
 
 /// Result of routing changed source paths through Oxide's native reload systems.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -71,6 +73,12 @@ impl NativeAssetReloadSummary {
 #[derive(Resource, Default)]
 pub struct GltfSceneAssets {
     pub assets: CoreAssets<GltfScene>,
+}
+
+/// ECS resource storing CPU-side texture images imported from containers or files.
+#[derive(Resource, Default)]
+pub struct TextureImageAssets {
+    pub assets: CoreAssets<TextureImage>,
 }
 
 /// Registers a material pipeline under a stable handle.
@@ -268,19 +276,35 @@ pub fn material_descriptor_dependencies(
     if let ShaderDescriptor::File { path } = &descriptor.shader {
         dependencies.push(resolve_descriptor_dependency(base.as_ref(), path));
     }
-    if let Some(path) = &descriptor.albedo_texture {
+    if let Some(path) = descriptor
+        .albedo_texture
+        .as_ref()
+        .filter(|path| !is_virtual_texture_ref(path))
+    {
         dependencies.push(resolve_descriptor_dependency(base.as_ref(), path));
     }
-    if let Some(path) = &descriptor.normal_texture {
+    if let Some(path) = descriptor
+        .normal_texture
+        .as_ref()
+        .filter(|path| !is_virtual_texture_ref(path))
+    {
         dependencies.push(resolve_descriptor_dependency(base.as_ref(), path));
     }
-    if let Some(path) = &descriptor.roughness_texture {
+    if let Some(path) = descriptor
+        .roughness_texture
+        .as_ref()
+        .filter(|path| !is_virtual_texture_ref(path))
+    {
         dependencies.push(resolve_descriptor_dependency(base.as_ref(), path));
     }
 
     dependencies.sort();
     dependencies.dedup();
     dependencies
+}
+
+fn is_virtual_texture_ref(path: &str) -> bool {
+    path.trim_start().starts_with('#')
 }
 
 fn resolve_descriptor_dependency(base: Option<&PathBuf>, path: &str) -> PathBuf {
@@ -354,6 +378,24 @@ mod tests {
                 PathBuf::from("assets/materials/textures/stone_r.png"),
             ]
         );
+    }
+
+    #[test]
+    fn material_descriptor_dependencies_ignore_virtual_texture_refs() {
+        let descriptor = MaterialDescriptor {
+            name: "Imported".to_string(),
+            material_type: oxide_renderer::descriptor::MaterialType::Lit,
+            shader: ShaderDescriptor::Builtin {
+                shader: "lit".to_string(),
+            },
+            fallback_shader: Some("lit".to_string()),
+            base_color: [1.0, 1.0, 1.0, 1.0],
+            albedo_texture: Some("#image_0".to_string()),
+            normal_texture: None,
+            roughness_texture: None,
+        };
+
+        assert!(material_descriptor_dependencies("assets/model.gltf", &descriptor).is_empty());
     }
 
     #[test]

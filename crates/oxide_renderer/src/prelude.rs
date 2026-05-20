@@ -22,7 +22,7 @@ pub use crate::shader::{
     SKY_GRADIENT_SHADER, SPRITE_UI_SHADER, UNLIT_SHADER,
 };
 pub use crate::surface::SurfaceState;
-pub use crate::texture::{FallbackTexture, SamplerDescriptor, Texture, TextureError};
+pub use crate::texture::{FallbackTexture, SamplerDescriptor, Texture, TextureError, TextureImage};
 pub use crate::Renderer;
 pub use wgpu::{
     Adapter, CommandEncoder, Device, Queue, RenderPass, RenderPipeline, SurfaceConfiguration,

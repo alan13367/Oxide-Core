@@ -80,6 +80,13 @@ into `MaterialDescriptorAssets` as labeled sub-assets and registered in
 `GltfMaterialRef` and receive `MaterialFilter` when a stable material descriptor
 handle is available.
 
+Imported glTF images are converted into CPU-side RGBA `TextureImage` assets and
+published into `TextureImageAssets` with labels such as `image_0`. Materials that
+reference a glTF base-color texture keep a virtual texture reference like
+`#image_0`; these virtual references are ignored by filesystem dependency
+tracking because they point at labeled sub-assets from the same imported
+container, not separate files.
+
 The automatic scene renderer can draw `MeshFilter` entities directly from
 `MeshCache`. When a handle-based mesh entity also carries `RenderMesh`, the
 renderer uses that component's material and tint for the imported mesh and skips

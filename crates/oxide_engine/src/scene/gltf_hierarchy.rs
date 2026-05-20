@@ -7,6 +7,7 @@ use std::sync::Arc;
 use crate::asset::{
     load_gltf_async, AssetServerResource, GltfSceneAssets, Handle, MaterialDescriptorAssets,
     MaterialDescriptorHandle, MaterialFilter, MeshCache, MeshFilter, MeshHandle,
+    TextureImageAssets, TextureImageHandle,
 };
 use crate::scene::{MeshPrimitive, RenderMaterial, RenderMesh, SceneMaterialLibrary};
 use oxide_ecs::entity::Entity;
@@ -60,6 +61,12 @@ pub struct GltfSceneMeshHandles {
 #[derive(Resource, Default)]
 pub struct GltfSceneMaterialHandles {
     pub handles_by_scene: HashMap<u64, Vec<MaterialDescriptorHandle>>,
+}
+
+/// Resource storing glTF image handles keyed by scene-handle ID.
+#[derive(Resource, Default)]
+pub struct GltfSceneImageHandles {
+    pub handles_by_scene: HashMap<u64, Vec<TextureImageHandle>>,
 }
 
 /// Spawns glTF nodes into ECS while preserving the node hierarchy.
@@ -186,6 +193,9 @@ pub fn request_gltf_scene_spawn(
     if !world.contains_resource::<GltfSceneMaterialHandles>() {
         world.insert_resource(GltfSceneMaterialHandles::default());
     }
+    if !world.contains_resource::<GltfSceneImageHandles>() {
+        world.insert_resource(GltfSceneImageHandles::default());
+    }
 
     let handle = {
         let server = world.resource_mut::<AssetServerResource>();
@@ -224,6 +234,9 @@ pub fn gltf_scene_spawn_system(world: &mut World) {
     if !world.contains_resource::<MaterialDescriptorAssets>() {
         world.insert_resource(MaterialDescriptorAssets::default());
     }
+    if !world.contains_resource::<TextureImageAssets>() {
+        world.insert_resource(TextureImageAssets::default());
+    }
     if !world.contains_resource::<SceneMaterialLibrary>() {
         world.insert_resource(SceneMaterialLibrary::default());
     }
@@ -232,6 +245,9 @@ pub fn gltf_scene_spawn_system(world: &mut World) {
     }
     if !world.contains_resource::<GltfSceneMaterialHandles>() {
         world.insert_resource(GltfSceneMaterialHandles::default());
+    }
+    if !world.contains_resource::<GltfSceneImageHandles>() {
+        world.insert_resource(GltfSceneImageHandles::default());
     }
 
     let completed = {
@@ -245,6 +261,7 @@ pub fn gltf_scene_spawn_system(world: &mut World) {
             match result {
                 Ok((handle, mut scene)) => {
                     let mesh_handles = register_gltf_scene_meshes(world, handle, &mut scene);
+                    let image_handles = register_gltf_scene_images(world, handle, &mut scene);
                     let material_handles = register_gltf_scene_materials(world, handle, &mut scene);
                     world
                         .resource_mut::<GltfSceneAssets>()
@@ -261,6 +278,12 @@ pub fn gltf_scene_spawn_system(world: &mut World) {
                             .resource_mut::<GltfSceneMaterialHandles>()
                             .handles_by_scene
                             .insert(handle.id(), material_handles);
+                    }
+                    if !image_handles.is_empty() {
+                        world
+                            .resource_mut::<GltfSceneImageHandles>()
+                            .handles_by_scene
+                            .insert(handle.id(), image_handles);
                     }
                     ready_handles.push(handle);
                 }
@@ -358,6 +381,42 @@ fn register_gltf_scene_meshes(
     mesh_handles
 }
 
+fn register_gltf_scene_images(
+    world: &mut World,
+    handle: Handle<GltfScene>,
+    scene: &mut GltfScene,
+) -> Vec<TextureImageHandle> {
+    if scene.images.is_empty() {
+        return Vec::new();
+    }
+
+    let mut image_assets = world
+        .remove_resource::<TextureImageAssets>()
+        .unwrap_or_default();
+    let mut image_handles = Vec::with_capacity(scene.images.len());
+    {
+        let server = world.resource_mut::<AssetServerResource>();
+        let scene_source = server.server.asset_source(&handle);
+        for (image_name, image) in std::mem::take(&mut scene.images) {
+            let image_handle = if let Some(source) = &scene_source {
+                server.server.insert_loaded_labeled_path(
+                    &mut image_assets.assets,
+                    source.path().to_path_buf(),
+                    Some(image_name.as_str()),
+                    image,
+                )
+            } else {
+                let image_handle = server.server.allocate_handle();
+                image_assets.assets.insert(image_handle, image);
+                image_handle
+            };
+            image_handles.push(image_handle);
+        }
+    }
+    world.insert_resource(image_assets);
+    image_handles
+}
+
 fn register_gltf_scene_materials(
     world: &mut World,
     handle: Handle<GltfScene>,
@@ -410,6 +469,7 @@ mod tests {
     use crate::asset::AssetServerResource;
     use glam::{Quat, Vec3};
     use oxide_renderer::descriptor::{MaterialDescriptor, MaterialType, ShaderDescriptor};
+    use oxide_renderer::texture::TextureImage;
     use oxide_transform::{Children, Parent};
 
     fn test_material(name: &str, base_color: [f32; 4]) -> MaterialDescriptor {
@@ -434,6 +494,7 @@ mod tests {
         let scene = GltfScene {
             meshes: Vec::new(),
             materials: Vec::new(),
+            images: Vec::new(),
             mesh_material_indices: Vec::new(),
             nodes: vec![GltfNode {
                 name: Some("root".to_string()),
@@ -473,6 +534,7 @@ mod tests {
         let scene = GltfScene {
             meshes: Vec::new(),
             materials: Vec::new(),
+            images: Vec::new(),
             mesh_material_indices: Vec::new(),
             nodes: vec![GltfNode {
                 name: Some("mesh_node".to_string()),
@@ -509,6 +571,7 @@ mod tests {
                 "material_0".to_string(),
                 test_material("imported_blue", [0.0, 0.0, 1.0, 1.0]),
             )],
+            images: Vec::new(),
             mesh_material_indices: vec![Some(0)],
             nodes: vec![GltfNode {
                 name: Some("material_node".to_string()),
@@ -562,6 +625,7 @@ mod tests {
         let scene = GltfScene {
             meshes: Vec::new(),
             materials: Vec::new(),
+            images: Vec::new(),
             mesh_material_indices: Vec::new(),
             nodes: vec![GltfNode {
                 name: Some("root".to_string()),
@@ -605,6 +669,7 @@ mod tests {
                 "material_0".to_string(),
                 test_material("imported_red", [1.0, 0.0, 0.0, 1.0]),
             )],
+            images: Vec::new(),
             mesh_material_indices: vec![Some(0)],
             nodes: Vec::new(),
         };
@@ -628,5 +693,49 @@ mod tests {
         assert!(world
             .resource::<SceneMaterialLibrary>()
             .contains("imported_red"));
+    }
+
+    #[test]
+    fn gltf_images_register_as_labeled_texture_assets() {
+        let mut world = World::new();
+        world.insert_resource(AssetServerResource::default());
+        world.insert_resource(TextureImageAssets::default());
+
+        let handle = {
+            let server = world.resource_mut::<AssetServerResource>();
+            server
+                .server
+                .register_loaded_path::<GltfScene>("assets/models/level.gltf")
+        };
+        let mut scene = GltfScene {
+            meshes: Vec::new(),
+            materials: Vec::new(),
+            images: vec![(
+                "image_0".to_string(),
+                TextureImage::from_rgba(1, 1, vec![255, 0, 0, 255]).unwrap(),
+            )],
+            mesh_material_indices: Vec::new(),
+            nodes: Vec::new(),
+        };
+
+        let handles = register_gltf_scene_images(&mut world, handle, &mut scene);
+
+        assert_eq!(handles.len(), 1);
+        assert!(scene.images.is_empty());
+        assert_eq!(
+            world
+                .resource::<AssetServerResource>()
+                .server
+                .asset_label(&handles[0]),
+            Some("image_0")
+        );
+        assert_eq!(
+            world
+                .resource::<TextureImageAssets>()
+                .assets
+                .get(&handles[0])
+                .map(|image| (image.width, image.height, image.rgba.as_slice())),
+            Some((1, 1, [255, 0, 0, 255].as_slice()))
+        );
     }
 }

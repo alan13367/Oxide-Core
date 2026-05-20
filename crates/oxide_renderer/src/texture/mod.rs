@@ -28,6 +28,44 @@ pub enum TextureError {
     ImageImportDisabled,
     #[error("Invalid texture dimensions: {width}x{height}")]
     InvalidDimensions { width: u32, height: u32 },
+    #[error("Invalid RGBA byte length {actual}; expected {expected} for {width}x{height}")]
+    InvalidRgbaLength {
+        width: u32,
+        height: u32,
+        expected: usize,
+        actual: usize,
+    },
+}
+
+/// CPU-side RGBA image data ready to upload into a GPU texture.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextureImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+impl TextureImage {
+    /// Creates a CPU texture image from tightly packed RGBA8 bytes.
+    pub fn from_rgba(width: u32, height: u32, rgba: Vec<u8>) -> Result<Self, TextureError> {
+        if width == 0 || height == 0 {
+            return Err(TextureError::InvalidDimensions { width, height });
+        }
+        let expected = width as usize * height as usize * 4;
+        if rgba.len() != expected {
+            return Err(TextureError::InvalidRgbaLength {
+                width,
+                height,
+                expected,
+                actual: rgba.len(),
+            });
+        }
+        Ok(Self {
+            width,
+            height,
+            rgba,
+        })
+    }
 }
 
 /// A GPU texture with its view and sampler.
@@ -39,6 +77,22 @@ pub struct Texture {
 }
 
 impl Texture {
+    /// Uploads a CPU-side texture image to the GPU.
+    pub fn from_image(
+        device: &Device,
+        queue: &Queue,
+        image: &TextureImage,
+        label: Option<&str>,
+    ) -> Self {
+        Self::from_bytes(
+            device,
+            queue,
+            &image.rgba,
+            (image.width, image.height),
+            label,
+        )
+    }
+
     /// Creates a texture from raw bytes (RGBA format).
     pub fn from_bytes(
         device: &Device,

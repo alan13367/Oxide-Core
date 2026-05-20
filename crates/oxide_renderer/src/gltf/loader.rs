@@ -4,12 +4,14 @@ use std::path::Path;
 
 use glam::{Quat, Vec3};
 use gltf::buffer::Data;
+use gltf::image::Format;
 use gltf::mesh::Mode;
 use wgpu::{Device, Queue};
 
 use crate::descriptor::{MaterialDescriptor, MaterialType, ShaderDescriptor};
 use crate::mesh::Mesh3D;
 use crate::mesh::Vertex3D;
+use crate::texture::{TextureError, TextureImage};
 
 #[derive(thiserror::Error, Debug)]
 pub enum GltfError {
@@ -21,6 +23,8 @@ pub enum GltfError {
     UnsupportedMode(Mode),
     #[error("Mesh has no positions")]
     MissingPositions,
+    #[error("Failed to convert glTF image '{label}' into RGBA texture data: {source}")]
+    TextureImage { label: String, source: TextureError },
 }
 
 /// Result of loading a glTF file.
@@ -29,6 +33,8 @@ pub struct GltfScene {
     pub meshes: Vec<(String, Mesh3D)>,
     /// Loaded material descriptors with their names.
     pub materials: Vec<(String, MaterialDescriptor)>,
+    /// Loaded CPU-side images with their labels.
+    pub images: Vec<(String, TextureImage)>,
     /// Material index for each loaded mesh, aligned with [`Self::meshes`].
     pub mesh_material_indices: Vec<Option<usize>>,
     /// Node hierarchy information for spawning entities.
@@ -75,12 +81,13 @@ pub fn load_gltf(
     let path_str = path.display().to_string();
 
     // Load the glTF document and buffers
-    let (document, buffers, _images) = gltf::import(path).map_err(|source| GltfError::Load {
+    let (document, buffers, images) = gltf::import(path).map_err(|source| GltfError::Load {
         path: path_str.clone(),
         source,
     })?;
 
     let materials = extract_materials(&document);
+    let images = extract_images(images)?;
 
     // Extract meshes
     let mut meshes = Vec::new();
@@ -105,6 +112,7 @@ pub fn load_gltf(
     Ok(GltfScene {
         meshes,
         materials,
+        images,
         mesh_material_indices,
         nodes,
     })
@@ -117,6 +125,9 @@ fn extract_materials(document: &gltf::Document) -> Vec<(String, MaterialDescript
         .map(|(idx, material)| {
             let name = format!("material_{idx}");
             let pbr = material.pbr_metallic_roughness();
+            let albedo_texture = pbr
+                .base_color_texture()
+                .map(|texture| format!("#image_{}", texture.texture().source().index()));
             let descriptor = MaterialDescriptor {
                 name: name.clone(),
                 material_type: MaterialType::Lit,
@@ -125,13 +136,111 @@ fn extract_materials(document: &gltf::Document) -> Vec<(String, MaterialDescript
                 },
                 fallback_shader: Some("lit".to_string()),
                 base_color: pbr.base_color_factor(),
-                albedo_texture: None,
+                albedo_texture,
                 normal_texture: None,
                 roughness_texture: None,
             };
             (name, descriptor)
         })
         .collect()
+}
+
+fn extract_images(
+    images: Vec<gltf::image::Data>,
+) -> Result<Vec<(String, TextureImage)>, GltfError> {
+    images
+        .into_iter()
+        .enumerate()
+        .map(|(idx, image)| {
+            let label = format!("image_{idx}");
+            let rgba = gltf_image_to_rgba(&image);
+            let texture =
+                TextureImage::from_rgba(image.width, image.height, rgba).map_err(|source| {
+                    GltfError::TextureImage {
+                        label: label.clone(),
+                        source,
+                    }
+                })?;
+            Ok((label, texture))
+        })
+        .collect()
+}
+
+fn gltf_image_to_rgba(image: &gltf::image::Data) -> Vec<u8> {
+    match image.format {
+        Format::R8 => expand_u8_pixels(&image.pixels, 1),
+        Format::R8G8 => expand_u8_pixels(&image.pixels, 2),
+        Format::R8G8B8 => expand_u8_pixels(&image.pixels, 3),
+        Format::R8G8B8A8 => image.pixels.clone(),
+        Format::R16 => expand_u16_pixels(&image.pixels, 1),
+        Format::R16G16 => expand_u16_pixels(&image.pixels, 2),
+        Format::R16G16B16 => expand_u16_pixels(&image.pixels, 3),
+        Format::R16G16B16A16 => expand_u16_pixels(&image.pixels, 4),
+        Format::R32G32B32FLOAT => expand_f32_pixels(&image.pixels, 3),
+        Format::R32G32B32A32FLOAT => expand_f32_pixels(&image.pixels, 4),
+    }
+}
+
+fn expand_u8_pixels(pixels: &[u8], channels: usize) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity((pixels.len() / channels) * 4);
+    for pixel in pixels.chunks_exact(channels) {
+        rgba.push(pixel[0]);
+        rgba.push(if channels > 1 { pixel[1] } else { pixel[0] });
+        rgba.push(if channels > 2 { pixel[2] } else { pixel[0] });
+        rgba.push(if channels > 3 { pixel[3] } else { 255 });
+    }
+    rgba
+}
+
+fn expand_u16_pixels(pixels: &[u8], channels: usize) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity((pixels.len() / (channels * 2)) * 4);
+    for pixel in pixels.chunks_exact(channels * 2) {
+        let channel = |index: usize| -> u8 {
+            let offset = index * 2;
+            if index < channels {
+                let value = u16::from_le_bytes([pixel[offset], pixel[offset + 1]]);
+                (value / 257) as u8
+            } else if index == 3 {
+                255
+            } else {
+                let value = u16::from_le_bytes([pixel[0], pixel[1]]);
+                (value / 257) as u8
+            }
+        };
+        rgba.push(channel(0));
+        rgba.push(channel(1));
+        rgba.push(channel(2));
+        rgba.push(channel(3));
+    }
+    rgba
+}
+
+fn expand_f32_pixels(pixels: &[u8], channels: usize) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity((pixels.len() / (channels * 4)) * 4);
+    for pixel in pixels.chunks_exact(channels * 4) {
+        let channel = |index: usize| -> u8 {
+            if index < channels {
+                let offset = index * 4;
+                let value = f32::from_le_bytes([
+                    pixel[offset],
+                    pixel[offset + 1],
+                    pixel[offset + 2],
+                    pixel[offset + 3],
+                ]);
+                (value.clamp(0.0, 1.0) * 255.0).round() as u8
+            } else if index == 3 {
+                255
+            } else {
+                let value = f32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]]);
+                (value.clamp(0.0, 1.0) * 255.0).round() as u8
+            }
+        };
+        rgba.push(channel(0));
+        rgba.push(channel(1));
+        rgba.push(channel(2));
+        rgba.push(channel(3));
+    }
+    rgba
 }
 
 /// Extracts the node hierarchy from a glTF document.
@@ -225,4 +334,33 @@ fn load_primitive(
 
     // Create the mesh
     Ok(Mesh3D::create(device, &vertices, &indices, Some(name)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gltf_rgb8_image_expands_to_rgba() {
+        let image = gltf::image::Data {
+            pixels: vec![255, 0, 128],
+            format: Format::R8G8B8,
+            width: 1,
+            height: 1,
+        };
+
+        assert_eq!(gltf_image_to_rgba(&image), vec![255, 0, 128, 255]);
+    }
+
+    #[test]
+    fn gltf_rgba16_image_downsamples_to_rgba8() {
+        let image = gltf::image::Data {
+            pixels: vec![0xff, 0xff, 0x00, 0x00, 0x80, 0x80, 0xff, 0xff],
+            format: Format::R16G16B16A16,
+            width: 1,
+            height: 1,
+        };
+
+        assert_eq!(gltf_image_to_rgba(&image), vec![255, 0, 128, 255]);
+    }
 }
