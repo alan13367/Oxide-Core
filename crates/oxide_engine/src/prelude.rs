@@ -20,7 +20,7 @@ pub use crate::asset::{
     reload_material_descriptor_path, request_material_descriptor_load, AssetChange,
     AssetChangeCursor, AssetChangeKind, AssetLoadStatus, AssetPath, AssetServer, AssetServerError,
     AssetServerResource, Assets, Handle, HandleAllocator, MaterialAssets, MaterialDescriptorAssets,
-    MaterialDescriptorHandle, MaterialHandle, MeshCache, MeshFilter, MeshHandle,
+    MaterialDescriptorHandle, MaterialFilter, MaterialHandle, MeshCache, MeshFilter, MeshHandle,
     NativeAssetReloadSummary,
 };
 pub use crate::audio::{
@@ -93,8 +93,9 @@ pub use crate::scene::{
 #[cfg(feature = "gltf-import")]
 pub use crate::scene::{
     gltf_scene_spawn_system, queue_gltf_scene_spawn, request_gltf_scene_spawn,
-    spawn_gltf_scene_hierarchy, spawn_gltf_scene_hierarchy_with_meshes, take_spawned_scene_roots,
-    GltfMeshRef, GltfSceneMeshHandles, PendingGltfSceneSpawns, SpawnedGltfScenes,
+    spawn_gltf_scene_hierarchy, spawn_gltf_scene_hierarchy_with_assets,
+    spawn_gltf_scene_hierarchy_with_meshes, take_spawned_scene_roots, GltfMaterialRef, GltfMeshRef,
+    GltfSceneMaterialHandles, GltfSceneMeshHandles, PendingGltfSceneSpawns, SpawnedGltfScenes,
 };
 pub use crate::time::{Timer, TimerMode};
 pub use crate::ui::{

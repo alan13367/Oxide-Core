@@ -13,6 +13,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Materials + Shaders**: built-in shader pack plus custom WGSL (inline/file) with fallback support
 - **Native Asset Documents**: versioned `.oxscene` and `.oxmat` JSON wrappers with legacy descriptor loading support, nested scene entities, authored scene paths, structured scene instance spawn results, live-world scene/prefab export for editor save flows, scoped query/unload helpers, scene-declared dependencies/materials, registered sprite billboards, reusable scene prefabs with instance overrides, and descriptor validation diagnostics
 - **Asset Dependency Tracking**: `AssetServer` records typed source paths, ready or async labeled sub-assets, and secondary source paths; `.oxscene` files can declare scene dependency paths, typed handles can be queried by changed file, native scene/material reloads can be routed together, known paths can be reloaded in place, and `Assets<T>` exposes per-handle revisions plus cursor-readable change records for cache invalidation
+- **glTF Import Bridging**: imported glTF meshes and materials are published as labeled Oxide assets, and spawned nodes retain lightweight mesh/material references for tooling and later renderer integration
 - **Native Scene Reloading**: `.oxscene` handles can be refreshed from direct file changes or dependency changes without duplicating spawned roots
 - **Automatic Scene Renderer**: optional plugin that renders `RenderMesh` scene entities without app-owned pipelines
 - **Scene Material Library**: reusable named scene materials can be registered directly, declared inside `.oxscene`, populated from loaded `.oxmat` descriptors, and referenced from `.oxscene` meshes
@@ -487,9 +488,11 @@ if let Some(roots) = take_spawned_scene_roots(&mut self.world, scene_handle) {
 }
 ```
 
-Loaded glTF meshes are also published into `MeshCache` as labeled mesh assets
-when the source path is known. Spawned mesh nodes receive `GltfMeshRef` and, when
-available, `MeshFilter` with the stable mesh handle.
+Loaded glTF meshes are published into `MeshCache` as labeled mesh assets, and
+glTF materials are published into `MaterialDescriptorAssets` as labeled
+descriptor assets when the source path is known. Spawned mesh nodes receive
+`GltfMeshRef`/`GltfMaterialRef` plus `MeshFilter`/`MaterialFilter` when stable
+handles are available.
 
 ### 10. Physics Plugin Integration
 

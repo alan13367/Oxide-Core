@@ -7,6 +7,7 @@ use gltf::buffer::Data;
 use gltf::mesh::Mode;
 use wgpu::{Device, Queue};
 
+use crate::descriptor::{MaterialDescriptor, MaterialType, ShaderDescriptor};
 use crate::mesh::Mesh3D;
 use crate::mesh::Vertex3D;
 
@@ -26,6 +27,10 @@ pub enum GltfError {
 pub struct GltfScene {
     /// Loaded meshes with their names.
     pub meshes: Vec<(String, Mesh3D)>,
+    /// Loaded material descriptors with their names.
+    pub materials: Vec<(String, MaterialDescriptor)>,
+    /// Material index for each loaded mesh, aligned with [`Self::meshes`].
+    pub mesh_material_indices: Vec<Option<usize>>,
     /// Node hierarchy information for spawning entities.
     pub nodes: Vec<GltfNode>,
 }
@@ -75,8 +80,11 @@ pub fn load_gltf(
         source,
     })?;
 
+    let materials = extract_materials(&document);
+
     // Extract meshes
     let mut meshes = Vec::new();
+    let mut mesh_material_indices = Vec::new();
     for (mesh_idx, mesh) in document.meshes().enumerate() {
         for (prim_idx, primitive) in mesh.primitives().enumerate() {
             // Only support triangle mode
@@ -85,6 +93,7 @@ pub fn load_gltf(
             }
 
             let mesh_name = format!("mesh_{}_prim{}", mesh_idx, prim_idx);
+            mesh_material_indices.push(primitive.material().index());
             let loaded_mesh = load_primitive(device, queue, &primitive, &buffers, &mesh_name)?;
             meshes.push((mesh_name, loaded_mesh));
         }
@@ -93,7 +102,36 @@ pub fn load_gltf(
     // Extract node hierarchy
     let nodes = extract_nodes(&document, &meshes);
 
-    Ok(GltfScene { meshes, nodes })
+    Ok(GltfScene {
+        meshes,
+        materials,
+        mesh_material_indices,
+        nodes,
+    })
+}
+
+fn extract_materials(document: &gltf::Document) -> Vec<(String, MaterialDescriptor)> {
+    document
+        .materials()
+        .enumerate()
+        .map(|(idx, material)| {
+            let name = format!("material_{idx}");
+            let pbr = material.pbr_metallic_roughness();
+            let descriptor = MaterialDescriptor {
+                name: name.clone(),
+                material_type: MaterialType::Lit,
+                shader: ShaderDescriptor::Builtin {
+                    shader: "lit".to_string(),
+                },
+                fallback_shader: Some("lit".to_string()),
+                base_color: pbr.base_color_factor(),
+                albedo_texture: None,
+                normal_texture: None,
+                roughness_texture: None,
+            };
+            (name, descriptor)
+        })
+        .collect()
 }
 
 /// Extracts the node hierarchy from a glTF document.

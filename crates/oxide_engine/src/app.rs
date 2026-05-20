@@ -30,7 +30,8 @@ use crate::render::{
 };
 #[cfg(feature = "gltf-import")]
 use crate::scene::{
-    gltf_scene_spawn_system, GltfSceneMeshHandles, PendingGltfSceneSpawns, SpawnedGltfScenes,
+    gltf_scene_spawn_system, GltfSceneMaterialHandles, GltfSceneMeshHandles,
+    PendingGltfSceneSpawns, SpawnedGltfScenes,
 };
 use crate::scene::{
     oxscene_spawn_system, prepare_scene_renderer, queue_scene_renderer, resize_scene_renderer,
@@ -277,6 +278,9 @@ fn initialize_asset_resources(world: &mut World, _window: &Window) {
         }
         if !world.contains_resource::<GltfSceneMeshHandles>() {
             world.insert_resource(GltfSceneMeshHandles::default());
+        }
+        if !world.contains_resource::<GltfSceneMaterialHandles>() {
+            world.insert_resource(GltfSceneMaterialHandles::default());
         }
     }
 }

@@ -73,6 +73,13 @@ the glTF source path plus the mesh label emitted by the importer. Spawned nodes
 keep the lightweight `GltfMeshRef` index and also receive `MeshFilter` when a
 stable mesh handle is available.
 
+Imported glTF materials are converted into Oxide `MaterialDescriptor` values
+using the lit built-in shader and the glTF base color factor. They are published
+into `MaterialDescriptorAssets` as labeled sub-assets and registered in
+`SceneMaterialLibrary` by descriptor name. Spawned mesh nodes keep
+`GltfMaterialRef` and receive `MaterialFilter` when a stable material descriptor
+handle is available.
+
 This keeps the compatibility glTF path useful for development while moving the
 runtime shape toward Oxide-owned handles and caches.
 

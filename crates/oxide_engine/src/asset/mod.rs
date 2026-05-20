@@ -134,6 +134,18 @@ impl MeshFilter {
     }
 }
 
+/// Component that references a CPU-side material descriptor for rendering.
+#[derive(Component, Clone, Debug)]
+pub struct MaterialFilter {
+    pub material: MaterialDescriptorHandle,
+}
+
+impl MaterialFilter {
+    pub fn new(material: MaterialDescriptorHandle) -> Self {
+        Self { material }
+    }
+}
+
 /// Registers a material pipeline under a stable handle.
 pub fn register_material_asset(
     server: &mut CoreAssetServer,
