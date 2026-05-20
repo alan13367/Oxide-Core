@@ -925,6 +925,8 @@ pub enum SceneDescriptorError {
 
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum SceneExportError {
+    #[error("Cannot export prefab: prefab ID must not be empty")]
+    EmptyPrefabId,
     #[error("Cannot export entity {entity:?}: missing TransformComponent")]
     MissingTransform { entity: Entity },
     #[error(
@@ -1027,6 +1029,37 @@ pub fn scene_descriptor_from_roots(
     world: &World,
     roots: impl IntoIterator<Item = Entity>,
 ) -> Result<SceneDescriptor, SceneExportError> {
+    Ok(SceneDescriptor {
+        entities: scene_entities_from_roots(world, roots)?,
+        ..Default::default()
+    })
+}
+
+/// Builds a reusable prefab descriptor from the provided root entities.
+///
+/// The roots are exported with the same component coverage as
+/// [`scene_descriptor_from_roots`]. Use this for editor actions such as "create
+/// prefab from selection" without going through an intermediate scene document.
+pub fn scene_prefab_from_roots(
+    world: &World,
+    id: impl Into<String>,
+    roots: impl IntoIterator<Item = Entity>,
+) -> Result<ScenePrefabDescriptor, SceneExportError> {
+    let id = id.into().trim().to_string();
+    if id.is_empty() {
+        return Err(SceneExportError::EmptyPrefabId);
+    }
+
+    Ok(ScenePrefabDescriptor {
+        id,
+        entities: scene_entities_from_roots(world, roots)?,
+    })
+}
+
+fn scene_entities_from_roots(
+    world: &World,
+    roots: impl IntoIterator<Item = Entity>,
+) -> Result<Vec<SceneEntityDescriptor>, SceneExportError> {
     let mut visited = HashSet::new();
     let mut stack = HashSet::new();
     let mut entities = Vec::new();
@@ -1040,10 +1073,7 @@ pub fn scene_descriptor_from_roots(
         )?);
     }
 
-    Ok(SceneDescriptor {
-        entities,
-        ..Default::default()
-    })
+    Ok(entities)
 }
 
 fn scene_entity_descriptor_from_world(
@@ -2058,6 +2088,68 @@ mod tests {
                 shader: "Basic".to_string()
             }
         );
+    }
+
+    #[test]
+    fn scene_prefab_exports_selection_roots_for_reuse() {
+        let mut world = World::new();
+        let root = world
+            .spawn((
+                Name("Crate Pair".to_string()),
+                TransformComponent::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let child = world
+            .spawn((
+                Name("Crate".to_string()),
+                TransformComponent::from_position(Vec3::new(1.0, 0.0, 0.0)),
+                GlobalTransform::default(),
+                RenderMesh::new(MeshPrimitive::Cube, RenderMaterial::default()),
+            ))
+            .id();
+        attach_child(&mut world, root, child);
+
+        let prefab = scene_prefab_from_roots(&world, " crate_pair ", [root]).unwrap();
+
+        assert_eq!(prefab.id, "crate_pair");
+        assert_eq!(prefab.entities.len(), 1);
+        assert_eq!(prefab.entities[0].name.as_deref(), Some("Crate Pair"));
+        assert_eq!(prefab.entities[0].children.len(), 1);
+
+        let scene = SceneDescriptor {
+            prefabs: vec![prefab],
+            entities: vec![SceneEntityDescriptor {
+                name: Some("Instance".to_string()),
+                kind: SceneEntityKind::Prefab {
+                    id: "crate_pair".to_string(),
+                    overrides: Vec::new(),
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        scene.validate().unwrap();
+
+        let mut spawned_world = World::new();
+        let spawned = spawn_scene_descriptor_instance(&mut spawned_world, &scene).unwrap();
+        assert_eq!(
+            entities_in_scene_instance(&mut spawned_world, spawned.id).len(),
+            3
+        );
+        assert!(entity_by_scene_path_in_instance(
+            &mut spawned_world,
+            spawned.id,
+            "Instance/Crate Pair/Crate"
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn scene_prefab_export_rejects_empty_ids() {
+        let world = World::new();
+        let err = scene_prefab_from_roots(&world, "  ", []).unwrap_err();
+        assert_eq!(err, SceneExportError::EmptyPrefabId);
     }
 
     #[test]

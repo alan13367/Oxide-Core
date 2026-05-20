@@ -365,6 +365,16 @@ preserves hierarchy, transforms, names, tags, visibility, render layers, meshes,
 sprites, cameras, and lights, and reports `SceneExportError` when a live entity
 uses data that cannot be represented by the current `.oxscene` schema.
 
+Selections can also become reusable prefabs:
+
+```rust
+let prefab = scene_prefab_from_roots(&world, "crate_pair", selected_roots)?;
+scene_descriptor.prefabs.push(prefab);
+```
+
+The prefab can then be instantiated through normal `.oxscene` prefab entities or
+`spawn_scene_prefab_instance`.
+
 Authored tags are intended for game logic and tools, not just editor display:
 
 ```rust
@@ -599,6 +609,8 @@ The editor is implemented as normal engine data, not a separate tool runtime:
   retint scene entities.
 - `scene_descriptor_from_world` and `scene_descriptor_from_roots` provide the
   save-side bridge from edited ECS data back into `.oxscene` descriptors.
+- `scene_prefab_from_roots` lets editor tools promote selected entities into
+  reusable `.oxscene` prefab descriptors.
 - `GameUiPlugin` inserts a `GameUi` resource and renders panels, buttons, bars,
   counters, and reticles as camera-locked scene primitives.
 - `GameTextRenderer` is installed with `GameUiPlugin`; it batches styled text

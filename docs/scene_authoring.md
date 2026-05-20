@@ -246,6 +246,18 @@ hierarchy order plus supported Oxide scene components: `Name`, `Tags`,
 `SpriteBillboard`, cameras, and lights. It returns `SceneExportError` instead of
 silently dropping unsupported material shaders or malformed hierarchies.
 
+Selections can be promoted directly into prefab descriptors:
+
+```rust
+let prefab = scene_prefab_from_roots(&world, "crate_pair", selected_roots)?;
+scene.prefabs.push(prefab);
+save_scene_descriptor("assets/scenes/edited.oxscene", &scene)?;
+```
+
+The exported prefab stores normal `SceneEntityDescriptor` roots, so it validates,
+spawns, and accepts prefab overrides through the same path as hand-authored
+`.oxscene` prefabs.
+
 ## Scene Materials
 
 Code-first scenes can register named material intents once and reference them
