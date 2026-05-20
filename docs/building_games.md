@@ -28,9 +28,10 @@ the engine prelude for normal game code.
 - Use `RenderLayers` to filter meshes, terrain, and sprites per camera for
   first-person weapons, debug-only helpers, editor overlays, or alternate views.
 - Use `CameraRenderView` on camera entities when a game or tool has multiple
-  cameras. Lower `order` values are selected first, inactive views are ignored,
-  `viewport` draws into a normalized target rectangle, and `clear_color`
-  overrides the scene renderer's default clear color.
+  cameras. The scene renderer draws all active views in ascending `order`;
+  inactive views are ignored, `viewport` draws into a normalized target
+  rectangle, and the first view's `clear_color` overrides the scene renderer's
+  default frame clear color.
 - Use `ActionBindings<T>`, `ActionInput<T>`, and
   `sync_action_input_system::<T>` for semantic keyboard/mouse controls such as
   jump, fire, interact, or pause.
@@ -202,9 +203,9 @@ commands.spawn((
 ));
 ```
 
-`RenderLayers` controls which camera sees a renderable entity. Entities and
-cameras default to layer `0`; a mesh, terrain, or sprite only renders when its
-layer mask intersects the active camera's layer mask:
+`RenderLayers` controls which cameras see a renderable entity. Entities and
+cameras default to layer `0`; a mesh, terrain, or sprite only renders in camera
+views whose layer masks intersect its layer mask:
 
 ```rust
 commands.spawn((

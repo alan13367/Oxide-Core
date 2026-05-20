@@ -20,6 +20,7 @@ runner detects it and automatically:
 - batches cube and sphere primitives into instance buffers,
 - turns `Terrain` components into heightfield meshes,
 - batches `SpriteBillboard` entities into world or overlay sprite passes,
+- prepares one draw packet per active `CameraRenderView`, in ascending order,
 - queues the scene pass at the `RENDER_PASS_SCENE` anchor before
   `App::queue`,
 - resizes the depth texture when the window resizes.
@@ -70,7 +71,7 @@ The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
   children via `InheritedVisibility`.
 - `RenderLayers` filters meshes, terrain, and sprites against the active
   camera's layer mask. Cameras and renderables default to layer `0`.
-- `CameraRenderView` selects the active camera deterministically by `order`,
+- `CameraRenderView` renders active cameras deterministically by `order`,
   supports disabled cameras, normalized viewports, and scene clear overrides.
 - `TerrainDescriptor` and `SceneWorldDescriptor` describe terrain and blockout
   objects for code-first maps.
@@ -90,7 +91,9 @@ Scene entities also support a `visible` field; setting it to `false` spawns
 without despawning it. Add `render_layers` with a raw bit mask when authored
 entities should only render through cameras on matching layers.
 Camera entities also support `order`, `active`, `viewport`, and `clear_color`
-fields for view selection, normalized target rectangles, and clear behavior.
+fields for ordered multi-camera views, normalized target rectangles, and frame
+clear behavior. The first active view clears the frame; later views load the
+existing color target so viewports can be composited.
 
 ```json
 {

@@ -411,6 +411,21 @@ struct TerrainDraw {
     instances: InstanceBatch,
 }
 
+struct ViewCameraBinding {
+    _buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+}
+
+struct SceneViewDraw {
+    camera: ViewCameraBinding,
+    viewport: CameraViewport,
+    clear_color: wgpu::Color,
+    cube_instances: Vec<InstanceBatch>,
+    sphere_instances: Vec<SphereInstanceBatch>,
+    terrain_draws: Vec<TerrainDraw>,
+    sprite_batches: Vec<SpriteBatch>,
+}
+
 /// GPU renderer for the high-level `RenderMesh` scene component.
 ///
 /// Install it with `SceneRendererPlugin`. Once present in the world, the app
@@ -427,22 +442,17 @@ pub struct SceneRenderer {
     cube_mesh: Mesh3D,
     sphere_meshes: HashMap<(u32, u32), Mesh3D>,
     terrain_meshes: HashMap<Entity, TerrainMeshEntry>,
-    cube_instances: Vec<InstanceBatch>,
-    sphere_instances: Vec<SphereInstanceBatch>,
-    terrain_draws: Vec<TerrainDraw>,
+    view_draws: Vec<SceneViewDraw>,
     sprite_vertex_buffer: wgpu::Buffer,
     sprite_index_buffer: wgpu::Buffer,
     sprite_index_count: u32,
     sprite_textures: HashMap<SpriteId, SpriteTexture>,
-    sprite_batches: Vec<SpriteBatch>,
     target_width: u32,
     target_height: u32,
     gizmo_pipeline: wgpu::RenderPipeline,
     gizmo_vertex_buffer: wgpu::Buffer,
     gizmo_vertex_count: u32,
     clear_color: wgpu::Color,
-    frame_clear_color: wgpu::Color,
-    frame_viewport: CameraViewport,
     stats: SceneRendererStats,
 }
 
@@ -524,29 +534,23 @@ impl SceneRenderer {
             cube_mesh: Mesh3D::new_cube(device),
             sphere_meshes: HashMap::new(),
             terrain_meshes: HashMap::new(),
-            cube_instances: Vec::new(),
-            sphere_instances: Vec::new(),
-            terrain_draws: Vec::new(),
+            view_draws: Vec::new(),
             sprite_vertex_buffer,
             sprite_index_buffer,
             sprite_index_count,
             sprite_textures: HashMap::new(),
-            sprite_batches: Vec::new(),
             target_width: width,
             target_height: height,
             gizmo_pipeline,
             gizmo_vertex_buffer,
             gizmo_vertex_count: 0,
             clear_color,
-            frame_clear_color: clear_color,
-            frame_viewport: CameraViewport::full(),
             stats: SceneRendererStats::default(),
         }
     }
 
     pub fn set_clear_color(&mut self, clear_color: wgpu::Color) {
         self.clear_color = clear_color;
-        self.frame_clear_color = clear_color;
     }
 
     pub fn stats(&self) -> SceneRendererStats {
@@ -560,83 +564,110 @@ impl SceneRenderer {
         world: &mut World,
         aspect_ratio: f32,
     ) {
-        let camera = active_camera_view(world);
-        self.frame_clear_color = camera
-            .and_then(|camera| camera.clear_color)
-            .unwrap_or(self.clear_color);
-        self.frame_viewport = camera
-            .and_then(|camera| camera.viewport)
-            .unwrap_or_else(CameraViewport::full);
-        let camera_aspect_ratio = camera
-            .and_then(|camera| camera.viewport)
-            .and_then(|viewport| viewport_aspect_ratio(viewport, aspect_ratio))
-            .unwrap_or(aspect_ratio);
-        self.update_camera(queue, camera, camera_aspect_ratio);
         self.light_buffer.update(device, queue, world);
-        let camera_layers = camera.map(|camera| camera.layers).unwrap_or_default();
-        self.prepare_instances(device, world, camera_layers);
-        self.prepare_terrain(device, world, camera_layers);
-        self.prepare_sprites(device, queue, world, camera);
+        self.sync_sprite_textures(device, queue, world);
         self.prepare_gizmo_lines(queue, world);
+        self.prune_terrain_meshes(world);
+
+        let mut cameras = active_camera_views(world);
+        if cameras.is_empty() {
+            cameras.push(PreparedCameraView::fallback());
+        }
+
+        self.view_draws.clear();
+        let mut stats = SceneRendererStats::default();
+        for camera in cameras {
+            let view = self.prepare_view(device, queue, world, aspect_ratio, camera);
+            stats.cube_instances += view
+                .cube_instances
+                .iter()
+                .map(|batch| batch.count)
+                .sum::<u32>();
+            stats.sphere_instances += view
+                .sphere_instances
+                .iter()
+                .map(|batch| batch.instances.count)
+                .sum::<u32>();
+            stats.terrain_instances += view.terrain_draws.len() as u32;
+            stats.sprite_instances += view
+                .sprite_batches
+                .iter()
+                .map(|batch| batch.instances.count)
+                .sum::<u32>();
+            stats.draw_calls += view.cube_instances.len() as u32
+                + view.sphere_instances.len() as u32
+                + view.terrain_draws.len() as u32
+                + view.sprite_batches.len() as u32
+                + u32::from(self.gizmo_vertex_count > 0);
+            self.view_draws.push(view);
+        }
+        self.stats = stats;
     }
 
     pub fn queue(&mut self, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder) {
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Scene Renderer Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(self.frame_clear_color),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &self.depth_texture.view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
+        for (index, scene_view) in self.view_draws.iter().enumerate() {
+            let color_load = if index == 0 {
+                wgpu::LoadOp::Clear(scene_view.clear_color)
+            } else {
+                wgpu::LoadOp::Load
+            };
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Scene Renderer Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: color_load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0),
+                        store: wgpu::StoreOp::Store,
+                    }),
                 }),
-                stencil_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(0),
-                    store: wgpu::StoreOp::Store,
-                }),
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
 
-        apply_render_viewport(
-            &mut render_pass,
-            self.frame_viewport,
-            self.target_width,
-            self.target_height,
-        );
+            apply_render_viewport(
+                &mut render_pass,
+                scene_view.viewport,
+                self.target_width,
+                self.target_height,
+            );
 
-        render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_bind_group(0, &self.camera_buffer.bind_group, &[]);
-        render_pass.set_bind_group(1, &self.light_buffer.bind_group, &[]);
+            render_pass.set_pipeline(&self.pipeline);
+            render_pass.set_bind_group(0, &scene_view.camera.bind_group, &[]);
+            render_pass.set_bind_group(1, &self.light_buffer.bind_group, &[]);
 
-        for instances in &self.cube_instances {
-            draw_mesh_batch(&mut render_pass, &self.cube_mesh, instances);
-        }
-
-        for batch in &self.sphere_instances {
-            if let Some(mesh) = self.sphere_meshes.get(&(batch.segments, batch.rings)) {
-                draw_mesh_batch(&mut render_pass, mesh, &batch.instances);
+            for instances in &scene_view.cube_instances {
+                draw_mesh_batch(&mut render_pass, &self.cube_mesh, instances);
             }
-        }
 
-        for terrain in &self.terrain_draws {
-            if let Some(entry) = self.terrain_meshes.get(&terrain.entity) {
-                draw_mesh_batch(&mut render_pass, &entry.mesh, &terrain.instances);
+            for batch in &scene_view.sphere_instances {
+                if let Some(mesh) = self.sphere_meshes.get(&(batch.segments, batch.rings)) {
+                    draw_mesh_batch(&mut render_pass, mesh, &batch.instances);
+                }
             }
-        }
 
-        self.queue_sprites(&mut render_pass);
-        self.queue_gizmo_lines(&mut render_pass);
+            for terrain in &scene_view.terrain_draws {
+                if let Some(entry) = self.terrain_meshes.get(&terrain.entity) {
+                    draw_mesh_batch(&mut render_pass, &entry.mesh, &terrain.instances);
+                }
+            }
+
+            self.queue_sprites(&mut render_pass, scene_view);
+            self.queue_gizmo_lines(&mut render_pass, scene_view);
+        }
     }
 
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
@@ -649,20 +680,38 @@ impl SceneRenderer {
         self.target_height = height;
     }
 
-    fn update_camera(
-        &self,
+    fn prepare_view(
+        &mut self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
-        camera: Option<PreparedCameraView>,
-        aspect_ratio: f32,
-    ) {
-        let mut uniform = CameraUniform::new();
-        if let Some(camera) = camera {
-            uniform.update(
-                camera.camera.0.view_projection_matrix(aspect_ratio),
-                camera.camera.0.position,
-            );
+        world: &mut World,
+        target_aspect_ratio: f32,
+        camera: PreparedCameraView,
+    ) -> SceneViewDraw {
+        let viewport = camera.viewport.unwrap_or_else(CameraViewport::full);
+        let aspect_ratio =
+            viewport_aspect_ratio(viewport, target_aspect_ratio).unwrap_or(target_aspect_ratio);
+        let camera_binding = create_view_camera_binding(
+            device,
+            queue,
+            &self.camera_buffer.bind_group_layout,
+            &camera,
+            aspect_ratio,
+        );
+        let (cube_instances, sphere_instances) =
+            self.prepare_instances(device, world, camera.layers);
+        let terrain_draws = self.prepare_terrain(device, world, camera.layers);
+        let sprite_batches = self.prepare_sprites(device, world, camera);
+
+        SceneViewDraw {
+            camera: camera_binding,
+            viewport,
+            clear_color: camera.clear_color.unwrap_or(self.clear_color),
+            cube_instances,
+            sphere_instances,
+            terrain_draws,
+            sprite_batches,
         }
-        self.camera_buffer.update(queue, &uniform);
     }
 
     fn prepare_instances(
@@ -670,7 +719,7 @@ impl SceneRenderer {
         device: &wgpu::Device,
         world: &mut World,
         camera_layers: RenderLayers,
-    ) {
+    ) -> (Vec<InstanceBatch>, Vec<SphereInstanceBatch>) {
         let renderables = collect_renderables(world, camera_layers);
         let mut cube_instances = BTreeMap::<MaterialBatchKey, Vec<SceneInstanceRaw>>::new();
         let mut sphere_instances =
@@ -695,28 +744,21 @@ impl SceneRenderer {
             }
         }
 
-        self.cube_instances = cube_instances
+        let cube_batches = cube_instances
             .values()
             .filter_map(|instances| {
                 create_instance_batch(device, "Scene Cube Instances", instances)
             })
             .collect();
-        self.sphere_instances.clear();
-
-        let cube_count = cube_instances
-            .values()
-            .map(|instances| instances.len() as u32)
-            .sum();
-        let mut sphere_count = 0u32;
+        let mut sphere_batches = Vec::new();
         for ((segments, rings, _material), instances) in sphere_instances {
             self.sphere_meshes
                 .entry((segments, rings))
                 .or_insert_with(|| Mesh3D::new_sphere(device, segments, rings));
 
-            sphere_count += instances.len() as u32;
             if let Some(batch) = create_instance_batch(device, "Scene Sphere Instances", &instances)
             {
-                self.sphere_instances.push(SphereInstanceBatch {
+                sphere_batches.push(SphereInstanceBatch {
                     segments,
                     rings,
                     instances: batch,
@@ -724,20 +766,7 @@ impl SceneRenderer {
             }
         }
 
-        self.stats = SceneRendererStats {
-            cube_instances: cube_count,
-            sphere_instances: sphere_count,
-            terrain_instances: self.terrain_draws.len() as u32,
-            sprite_instances: self
-                .sprite_batches
-                .iter()
-                .map(|batch| batch.instances.count)
-                .sum(),
-            draw_calls: self.cube_instances.len() as u32
-                + self.sphere_instances.len() as u32
-                + self.terrain_draws.len() as u32
-                + self.sprite_batches.len() as u32,
-        };
+        (cube_batches, sphere_batches)
     }
 
     fn prepare_terrain(
@@ -745,12 +774,9 @@ impl SceneRenderer {
         device: &wgpu::Device,
         world: &mut World,
         camera_layers: RenderLayers,
-    ) {
+    ) -> Vec<TerrainDraw> {
         let terrains = collect_terrains(world, camera_layers);
-        let active_entities: HashSet<Entity> = terrains.iter().map(|(entity, _)| *entity).collect();
-        self.terrain_meshes
-            .retain(|entity, _| active_entities.contains(entity));
-        self.terrain_draws.clear();
+        let mut draws = Vec::new();
 
         for (entity, terrain) in terrains {
             let needs_rebuild = self
@@ -774,23 +800,21 @@ impl SceneRenderer {
             let instance = SceneInstanceRaw::new(model, terrain.tint, material);
             if let Some(instances) = create_instance_batch(device, "Terrain Instances", &[instance])
             {
-                self.terrain_draws.push(TerrainDraw { entity, instances });
+                draws.push(TerrainDraw { entity, instances });
             }
         }
+
+        draws
     }
 
     fn prepare_sprites(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         world: &mut World,
-        camera: Option<PreparedCameraView>,
-    ) {
-        self.sync_sprite_textures(device, queue, world);
-        self.sprite_batches.clear();
-
-        let Some(camera) = camera.and_then(CameraFrame::from_view) else {
-            return;
+        camera: PreparedCameraView,
+    ) -> Vec<SpriteBatch> {
+        let Some(camera) = CameraFrame::from_view(camera) else {
+            return Vec::new();
         };
 
         let sprites = collect_sprites(world, camera.layers);
@@ -817,17 +841,27 @@ impl SceneRenderer {
                 .push(instance);
         }
 
-        for ((depth, sprite), instances) in batches {
-            if let Some(instance_batch) =
-                create_instance_batch(device, "Scene Sprite Instances", &instances)
-            {
-                self.sprite_batches.push(SpriteBatch {
-                    sprite,
-                    depth,
-                    instances: instance_batch,
-                });
-            }
-        }
+        batches
+            .into_iter()
+            .filter_map(|((depth, sprite), instances)| {
+                create_instance_batch(device, "Scene Sprite Instances", &instances).map(
+                    |instance_batch| SpriteBatch {
+                        sprite,
+                        depth,
+                        instances: instance_batch,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn prune_terrain_meshes(&mut self, world: &mut World) {
+        let active_entities: HashSet<Entity> = collect_terrains(world, RenderLayers::all())
+            .into_iter()
+            .map(|(entity, _)| entity)
+            .collect();
+        self.terrain_meshes
+            .retain(|entity, _| active_entities.contains(entity));
     }
 
     fn sync_sprite_textures(
@@ -901,14 +935,18 @@ impl SceneRenderer {
         }
     }
 
-    fn queue_sprites<'pass>(&'pass self, render_pass: &mut wgpu::RenderPass<'pass>) {
+    fn queue_sprites<'pass>(
+        &'pass self,
+        render_pass: &mut wgpu::RenderPass<'pass>,
+        scene_view: &'pass SceneViewDraw,
+    ) {
         render_pass.set_vertex_buffer(0, self.sprite_vertex_buffer.slice(..));
         render_pass.set_index_buffer(
             self.sprite_index_buffer.slice(..),
             wgpu::IndexFormat::Uint16,
         );
 
-        for batch in &self.sprite_batches {
+        for batch in &scene_view.sprite_batches {
             let Some(texture) = self.sprite_textures.get(&batch.sprite) else {
                 continue;
             };
@@ -916,7 +954,7 @@ impl SceneRenderer {
                 SpriteDepthMode::World => render_pass.set_pipeline(&self.sprite_world_pipeline),
                 SpriteDepthMode::Overlay => render_pass.set_pipeline(&self.sprite_overlay_pipeline),
             }
-            render_pass.set_bind_group(0, &self.camera_buffer.bind_group, &[]);
+            render_pass.set_bind_group(0, &scene_view.camera.bind_group, &[]);
             render_pass.set_bind_group(1, &texture.bind_group, &[]);
             render_pass.set_vertex_buffer(1, batch.instances.buffer.slice(..));
             render_pass.draw_indexed(0..self.sprite_index_count, 0, 0..batch.instances.count);
@@ -952,13 +990,17 @@ impl SceneRenderer {
         );
     }
 
-    fn queue_gizmo_lines<'pass>(&'pass self, render_pass: &mut wgpu::RenderPass<'pass>) {
+    fn queue_gizmo_lines<'pass>(
+        &'pass self,
+        render_pass: &mut wgpu::RenderPass<'pass>,
+        scene_view: &'pass SceneViewDraw,
+    ) {
         if self.gizmo_vertex_count == 0 {
             return;
         }
 
         render_pass.set_pipeline(&self.gizmo_pipeline);
-        render_pass.set_bind_group(0, &self.camera_buffer.bind_group, &[]);
+        render_pass.set_bind_group(0, &scene_view.camera.bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.gizmo_vertex_buffer.slice(..));
         render_pass.draw(0..self.gizmo_vertex_count, 0..1);
     }
@@ -1242,6 +1284,41 @@ fn create_instance_batch<T: Pod>(
     })
 }
 
+fn create_view_camera_binding(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    camera: &PreparedCameraView,
+    aspect_ratio: f32,
+) -> ViewCameraBinding {
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Scene View Camera Buffer"),
+        size: std::mem::size_of::<CameraUniform>() as wgpu::BufferAddress,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Scene View Camera Bind Group"),
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: buffer.as_entire_binding(),
+        }],
+    });
+
+    let mut uniform = CameraUniform::new();
+    uniform.update(
+        camera.camera.0.view_projection_matrix(aspect_ratio),
+        camera.camera.0.position,
+    );
+    queue.write_buffer(&buffer, 0, bytemuck::bytes_of(&uniform));
+
+    ViewCameraBinding {
+        _buffer: buffer,
+        bind_group,
+    }
+}
+
 fn collect_renderables(
     world: &mut World,
     camera_layers: RenderLayers,
@@ -1294,6 +1371,17 @@ struct PreparedCameraView {
     clear_color: Option<wgpu::Color>,
 }
 
+impl PreparedCameraView {
+    fn fallback() -> Self {
+        Self {
+            camera: CameraComponent::default(),
+            layers: RenderLayers::default(),
+            viewport: Some(CameraViewport::full()),
+            clear_color: None,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct CameraFrame {
     position: Vec3,
@@ -1324,7 +1412,7 @@ impl CameraFrame {
     }
 }
 
-fn active_camera_view(world: &mut World) -> Option<PreparedCameraView> {
+fn active_camera_views(world: &mut World) -> Vec<PreparedCameraView> {
     let cameras = {
         let mut query = world.query::<(Entity, &CameraComponent)>();
         query
@@ -1333,7 +1421,7 @@ fn active_camera_view(world: &mut World) -> Option<PreparedCameraView> {
             .collect::<Vec<_>>()
     };
 
-    cameras
+    let mut cameras = cameras
         .into_iter()
         .filter_map(|(entity, camera)| {
             let view = world
@@ -1345,7 +1433,11 @@ fn active_camera_view(world: &mut World) -> Option<PreparedCameraView> {
             }
             Some((entity, camera, view))
         })
-        .min_by_key(|(entity, _, view)| (view.order, entity.index(), entity.generation()))
+        .collect::<Vec<_>>();
+    cameras.sort_by_key(|(entity, _, view)| (view.order, entity.index(), entity.generation()));
+
+    cameras
+        .into_iter()
         .map(|(entity, camera, view)| PreparedCameraView {
             camera,
             layers: render_layers(world, entity),
@@ -1354,6 +1446,7 @@ fn active_camera_view(world: &mut World) -> Option<PreparedCameraView> {
                 .clear_color
                 .map(|[r, g, b, a]| wgpu::Color { r, g, b, a }),
         })
+        .collect()
 }
 
 fn viewport_aspect_ratio(viewport: CameraViewport, target_aspect_ratio: f32) -> Option<f32> {
@@ -1607,7 +1700,7 @@ mod tests {
     }
 
     #[test]
-    fn active_camera_view_uses_lowest_active_order() {
+    fn active_camera_views_sort_by_order_and_skip_disabled() {
         let mut world = World::new();
         world.spawn((
             CameraComponent::default(),
@@ -1628,7 +1721,10 @@ mod tests {
             RenderLayers::layer(2),
         ));
 
-        let camera = active_camera_view(&mut world).expect("active camera");
+        let cameras = active_camera_views(&mut world);
+        assert_eq!(cameras.len(), 2);
+
+        let camera = cameras[0];
         assert_eq!(camera.layers, RenderLayers::layer(2));
         assert_eq!(
             camera.viewport,
@@ -1647,5 +1743,6 @@ mod tests {
                 a: 1.0,
             })
         );
+        assert_eq!(cameras[1].layers, RenderLayers::layer(1));
     }
 }
