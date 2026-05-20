@@ -647,8 +647,8 @@ mod tests {
             roughness_factor: 0.5,
             emissive_color: [0.0, 0.0, 0.0],
             alpha_mode: AlphaMode::Opaque,
-            albedo_texture: None,
-            normal_texture: None,
+            albedo_texture: Some("#image_0".to_string()),
+            normal_texture: Some("#image_1".to_string()),
             roughness_texture: None,
         }
     }
@@ -986,6 +986,13 @@ mod tests {
         assert!(world
             .resource::<SceneMaterialLibrary>()
             .contains("imported_red"));
+        let material = world
+            .resource::<MaterialDescriptorAssets>()
+            .assets
+            .get(&handles[0])
+            .unwrap();
+        assert_eq!(material.albedo_texture.as_deref(), Some("#image_0"));
+        assert_eq!(material.normal_texture.as_deref(), Some("#image_1"));
     }
 
     #[test]

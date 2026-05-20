@@ -8,7 +8,7 @@ use gltf::image::Format;
 use gltf::mesh::Mode;
 use wgpu::{Device, Queue};
 
-use crate::descriptor::{MaterialDescriptor, MaterialType, ShaderDescriptor};
+use crate::descriptor::{AlphaMode, MaterialDescriptor, MaterialType, ShaderDescriptor};
 use crate::mesh::Mesh3D;
 use crate::mesh::Vertex3D;
 use crate::texture::{TextureError, TextureImage};
@@ -172,6 +172,14 @@ fn extract_materials(document: &gltf::Document) -> Vec<(String, MaterialDescript
             let albedo_texture = pbr
                 .base_color_texture()
                 .map(|texture| format!("#image_{}", texture.texture().source().index()));
+            let normal_texture = material
+                .normal_texture()
+                .map(|texture| format!("#image_{}", texture.texture().source().index()));
+            let alpha_mode = match material.alpha_mode() {
+                gltf::material::AlphaMode::Opaque => AlphaMode::Opaque,
+                gltf::material::AlphaMode::Mask => AlphaMode::Mask,
+                gltf::material::AlphaMode::Blend => AlphaMode::Blend,
+            };
             let descriptor = MaterialDescriptor {
                 name: name.clone(),
                 material_type: MaterialType::Lit,
@@ -183,9 +191,9 @@ fn extract_materials(document: &gltf::Document) -> Vec<(String, MaterialDescript
                 metallic_factor: pbr.metallic_factor(),
                 roughness_factor: pbr.roughness_factor(),
                 emissive_color: material.emissive_factor(),
-                alpha_mode: crate::descriptor::AlphaMode::Opaque,
+                alpha_mode,
                 albedo_texture,
-                normal_texture: None,
+                normal_texture,
                 roughness_texture: None,
             };
             (name, descriptor)
@@ -439,14 +447,25 @@ mod tests {
     fn gltf_materials_preserve_pbr_factors() {
         let raw = br#"{
             "asset": { "version": "2.0" },
+            "images": [
+                { "uri": "albedo.png" },
+                { "uri": "normal.png" }
+            ],
+            "textures": [
+                { "source": 0 },
+                { "source": 1 }
+            ],
             "materials": [
                 {
                     "pbrMetallicRoughness": {
                         "baseColorFactor": [0.8, 0.7, 0.6, 1.0],
                         "metallicFactor": 0.35,
-                        "roughnessFactor": 0.85
+                        "roughnessFactor": 0.85,
+                        "baseColorTexture": { "index": 0 }
                     },
-                    "emissiveFactor": [0.1, 0.2, 0.3]
+                    "normalTexture": { "index": 1 },
+                    "emissiveFactor": [0.1, 0.2, 0.3],
+                    "alphaMode": "BLEND"
                 }
             ]
         }"#;
@@ -460,5 +479,9 @@ mod tests {
         assert_eq!(descriptor.metallic_factor, 0.35);
         assert_eq!(descriptor.roughness_factor, 0.85);
         assert_eq!(descriptor.emissive_color, [0.1, 0.2, 0.3]);
+        assert_eq!(descriptor.alpha_mode, AlphaMode::Blend);
+        assert_eq!(descriptor.albedo_texture.as_deref(), Some("#image_0"));
+        assert_eq!(descriptor.normal_texture.as_deref(), Some("#image_1"));
+        assert_eq!(descriptor.roughness_texture, None);
     }
 }

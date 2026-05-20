@@ -503,7 +503,9 @@ if let Some(roots) = take_spawned_scene_roots(&mut self.world, scene_handle) {
 
 Loaded glTF meshes are published into `MeshCache` as labeled mesh assets, and
 glTF materials/images are published into `MaterialDescriptorAssets` and
-`TextureImageAssets` as labeled assets when the source path is known. Spawned
+`TextureImageAssets` as labeled assets when the source path is known. Imported
+materials preserve glTF PBR factors, alpha mode, base-color textures, and normal
+textures as Oxide material descriptors. Spawned
 mesh nodes receive `GltfMeshRef`/`GltfMaterialRef` plus
 `MeshFilter`/`MaterialFilter` when stable handles are available. The automatic
 scene renderer draws `MeshFilter` entities from `MeshCache`; if the entity also

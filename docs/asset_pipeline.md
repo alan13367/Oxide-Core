@@ -117,18 +117,20 @@ keep the lightweight `GltfMeshRef` index and also receive `MeshFilter` when a
 stable mesh handle is available.
 
 Imported glTF materials are converted into Oxide `MaterialDescriptor` values
-using the lit built-in shader and the glTF base color factor. They are published
-into `MaterialDescriptorAssets` as labeled sub-assets and registered in
-`SceneMaterialLibrary` by descriptor name. Spawned mesh nodes keep
+using the lit built-in shader plus glTF base color, metallic, roughness,
+emissive, alpha mode, base-color texture, and normal texture data. They are
+published into `MaterialDescriptorAssets` as labeled sub-assets and registered
+in `SceneMaterialLibrary` by descriptor name. Spawned mesh nodes keep
 `GltfMaterialRef` and receive `MaterialFilter` when a stable material descriptor
 handle is available.
 
 Imported glTF images are converted into CPU-side RGBA `TextureImage` assets and
 published into `TextureImageAssets` with labels such as `image_0`. Materials that
-reference a glTF base-color texture keep a virtual texture reference like
-`#image_0`; these virtual references are ignored by filesystem dependency
+reference a glTF base-color or normal texture keep virtual texture references
+like `#image_0`; these virtual references are ignored by filesystem dependency
 tracking because they point at labeled sub-assets from the same imported
-container, not separate files.
+container, not separate files. Packed glTF metallic-roughness texture channel
+extraction is intentionally left to a later importer pass.
 
 The automatic scene renderer can draw `MeshFilter` entities directly from
 `MeshCache`. When a handle-based mesh entity also carries `RenderMesh`, the
