@@ -5,9 +5,10 @@ asset documents for scenes and materials.
 
 ## Current Shape
 
-- `oxide_asset` owns generic handles, typed storage, async loading, load
-  status, typed path identity, labeled sub-asset identity, and dependency path
-  metadata for hot reload and importer invalidation.
+- `oxide_asset` owns generic handles, typed storage, async loading, registered
+  typed extension loaders, load status, typed path identity, labeled sub-asset
+  identity, and dependency path metadata for hot reload and importer
+  invalidation.
 - `oxide_renderer` owns GPU resources and optional glTF/image importer helpers.
 - `oxide_renderer` owns versioned `.oxmat` material documents.
 - `oxide_scene` owns scene descriptors, renderable scene components, and
@@ -72,6 +73,29 @@ their authored labels, so a scene material can use `"albedo_texture":
 
 `examples/minimal_game` demonstrates this path with
 `assets/scenes/starter.oxscene`.
+
+## Registered Typed Loaders
+
+For app-owned or plugin-owned asset types, register extension loaders once on
+`AssetServer` and then request typed paths without repeating the parsing closure
+at every call site:
+
+```rust
+server.register_loader::<String, _>(["txt"], |path| {
+    std::fs::read_to_string(path).map_err(|err| {
+        AssetServerError::Message(format!("failed to read {}: {err}", path.display()))
+    })
+});
+
+let handle = server.load_registered_path::<String>("assets/dialogue/intro.txt")?;
+```
+
+The registered path uses the same typed path identity, status, polling, and
+reload machinery as `load_path_async`. Calling
+`reload_registered_path::<T>(path)` refreshes a known path through its
+registered loader while preserving the existing handle. Closure-based
+`load_path_async` and `load_labeled_path_async` remain available for one-off
+loads and container importers that need labels or custom dependency handling.
 
 ## glTF Import Handles
 

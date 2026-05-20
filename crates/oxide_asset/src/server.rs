@@ -2,6 +2,7 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::Arc;
 
 use crate::{Assets, Handle, HandleAllocator};
 
@@ -9,11 +10,22 @@ use crate::{Assets, Handle, HandleAllocator};
 pub enum AssetServerError {
     #[error("{0}")]
     Message(String),
+    #[error(
+        "no asset loader registered for type '{type_name}' and extension '{extension}' while loading '{path}'"
+    )]
+    NoLoader {
+        type_name: &'static str,
+        path: PathBuf,
+        extension: String,
+    },
     #[error("asset type mismatch during async load completion")]
     TypeMismatch,
     #[error("asset loading thread disconnected")]
     ChannelDisconnected,
 }
+
+type ErasedAssetLoader =
+    Arc<dyn Fn(PathBuf) -> Result<Box<dyn Any + Send>, AssetServerError> + Send + Sync>;
 
 struct PendingAsset {
     type_id: TypeId,
@@ -81,6 +93,7 @@ pub struct AssetServer {
     pending: HashMap<u64, PendingAsset>,
     metadata: HashMap<u64, AssetMetadata>,
     paths: HashMap<(TypeId, AssetPath), u64>,
+    loaders: HashMap<(TypeId, String), ErasedAssetLoader>,
 }
 
 impl Default for AssetServer {
@@ -96,11 +109,102 @@ impl AssetServer {
             pending: HashMap::new(),
             metadata: HashMap::new(),
             paths: HashMap::new(),
+            loaders: HashMap::new(),
         }
     }
 
     pub fn allocate_handle<T>(&mut self) -> Handle<T> {
         self.allocator.allocate::<T>()
+    }
+
+    /// Registers a typed loader for one or more file extensions.
+    ///
+    /// Extensions are case-insensitive and may be passed with or without a
+    /// leading dot. Registering the same `(T, extension)` pair again replaces
+    /// the previous loader. Registered loaders are used by
+    /// [`load_registered_path`](Self::load_registered_path) and
+    /// [`reload_registered_path`](Self::reload_registered_path), while the
+    /// lower-level closure-based loading APIs remain available for custom
+    /// one-off import flows.
+    pub fn register_loader<T, F>(
+        &mut self,
+        extensions: impl IntoIterator<Item = impl AsRef<str>>,
+        loader: F,
+    ) where
+        T: Send + 'static,
+        F: Fn(&Path) -> Result<T, AssetServerError> + Send + Sync + 'static,
+    {
+        let loader = Arc::new(loader);
+        for extension in extensions {
+            let Some(extension) = normalize_asset_extension(extension.as_ref()) else {
+                continue;
+            };
+            let loader = Arc::clone(&loader);
+            self.loaders.insert(
+                (TypeId::of::<T>(), extension),
+                Arc::new(move |path| {
+                    loader(path.as_path()).map(|asset| Box::new(asset) as Box<dyn Any + Send>)
+                }),
+            );
+        }
+    }
+
+    /// Returns registered loader extensions for a typed asset.
+    pub fn registered_loader_extensions<T: 'static>(&self) -> Vec<&str> {
+        let type_id = TypeId::of::<T>();
+        let mut extensions: Vec<_> = self
+            .loaders
+            .keys()
+            .filter_map(|(loader_type, extension)| {
+                (*loader_type == type_id).then_some(extension.as_str())
+            })
+            .collect();
+        extensions.sort_unstable();
+        extensions
+    }
+
+    /// Starts loading a typed asset by looking up a registered loader for the path extension.
+    pub fn load_registered_path<T>(
+        &mut self,
+        path: impl Into<PathBuf>,
+    ) -> Result<Handle<T>, AssetServerError>
+    where
+        T: Send + 'static,
+    {
+        let path = path.into();
+        let loader = self.loader_for_path::<T>(&path)?;
+        Ok(self.load_path_async(path, move |path| {
+            loader(path)?
+                .downcast::<T>()
+                .map(|asset| *asset)
+                .map_err(|_| AssetServerError::TypeMismatch)
+        }))
+    }
+
+    /// Reloads a known typed path through its registered loader.
+    ///
+    /// Returns `Ok(None)` when the path is not known for `T`. If the path is
+    /// known but no loader is registered for its extension, returns
+    /// [`AssetServerError::NoLoader`].
+    pub fn reload_registered_path<T>(
+        &mut self,
+        path: impl Into<PathBuf>,
+    ) -> Result<Option<Handle<T>>, AssetServerError>
+    where
+        T: Send + 'static,
+    {
+        let path = path.into();
+        if self.handle_for_path::<T>(path.clone()).is_none() {
+            return Ok(None);
+        }
+
+        let loader = self.loader_for_path::<T>(&path)?;
+        Ok(self.reload_path_async(path, move |path| {
+            loader(path)?
+                .downcast::<T>()
+                .map(|asset| *asset)
+                .map_err(|_| AssetServerError::TypeMismatch)
+        }))
     }
 
     pub fn load_async<T, F>(&mut self, loader: F) -> Handle<T>
@@ -555,6 +659,25 @@ impl AssetServer {
             metadata.status = status;
         }
     }
+
+    fn loader_for_path<T: 'static>(
+        &self,
+        path: &Path,
+    ) -> Result<ErasedAssetLoader, AssetServerError> {
+        let extension = path_extension(path);
+        extension
+            .as_ref()
+            .and_then(|extension| {
+                self.loaders
+                    .get(&(TypeId::of::<T>(), extension.clone()))
+                    .cloned()
+            })
+            .ok_or_else(|| AssetServerError::NoLoader {
+                type_name: std::any::type_name::<T>(),
+                path: path.to_path_buf(),
+                extension: extension.unwrap_or_else(|| "<none>".to_string()),
+            })
+    }
 }
 
 fn normalize_asset_path(path: PathBuf) -> PathBuf {
@@ -568,10 +691,28 @@ fn normalize_asset_label(label: Option<impl Into<String>>) -> Option<String> {
     })
 }
 
+fn normalize_asset_extension(extension: &str) -> Option<String> {
+    let extension = extension
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase();
+    (!extension.is_empty()).then_some(extension)
+}
+
+fn path_extension(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .and_then(normalize_asset_extension)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Assets;
+    use std::sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc,
+    };
     use std::time::{Duration, Instant};
 
     fn poll_until_ready<T: Send + 'static>(
@@ -661,6 +802,85 @@ mod tests {
             server.handle_for_path::<String>("assets/shared.asset"),
             Some(text)
         );
+    }
+
+    #[test]
+    fn registered_loader_loads_path_by_extension_and_reuses_handle() {
+        let mut server = AssetServer::new();
+        server.register_loader::<String, _>([" .TXT "], |path| {
+            Ok(format!("loaded:{}", path.display()))
+        });
+
+        assert_eq!(server.registered_loader_extensions::<String>(), vec!["txt"]);
+
+        let handle = server
+            .load_registered_path::<String>("assets/dialogue.TXT")
+            .unwrap();
+        let duplicate = server
+            .load_registered_path::<String>("assets/dialogue.TXT")
+            .unwrap();
+
+        assert_eq!(handle, duplicate);
+        assert_eq!(
+            server.handle_for_path::<String>("assets/dialogue.TXT"),
+            Some(handle)
+        );
+
+        let ready = poll_until_ready::<String>(&mut server);
+        assert_eq!(ready.len(), 1);
+        let (ready_handle, value) = ready.into_iter().next().unwrap().unwrap();
+        assert_eq!(ready_handle, handle);
+        assert_eq!(value, "loaded:assets/dialogue.TXT");
+        assert_eq!(server.asset_status(&handle), Some(AssetLoadStatus::Loaded));
+    }
+
+    #[test]
+    fn registered_loader_reload_preserves_handle() {
+        let mut server = AssetServer::new();
+        let mut assets = Assets::<u32>::new();
+        let version = Arc::new(AtomicU32::new(1));
+        let loader_version = Arc::clone(&version);
+        server.register_loader::<u32, _>(["num"], move |_path| {
+            Ok(loader_version.fetch_add(1, Ordering::SeqCst))
+        });
+
+        let handle = server
+            .load_registered_path::<u32>("assets/value.num")
+            .unwrap();
+        let loaded = poll_until_loaded(&mut server, &mut assets);
+        assert_eq!(loaded.into_iter().next().unwrap().unwrap(), handle);
+        assert_eq!(assets.get(&handle), Some(&1));
+
+        let reloaded = server
+            .reload_registered_path::<u32>("assets/value.num")
+            .unwrap()
+            .unwrap();
+        assert_eq!(reloaded, handle);
+
+        let loaded = poll_until_loaded(&mut server, &mut assets);
+        assert_eq!(loaded.into_iter().next().unwrap().unwrap(), handle);
+        assert_eq!(assets.get(&handle), Some(&2));
+    }
+
+    #[test]
+    fn registered_loader_reports_missing_extension_loader() {
+        let mut server = AssetServer::new();
+        let err = server
+            .load_registered_path::<u32>("assets/value.unknown")
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            AssetServerError::NoLoader {
+                type_name,
+                extension,
+                ..
+            } if type_name == std::any::type_name::<u32>() && extension == "unknown"
+        ));
+        assert!(matches!(
+            server.reload_registered_path::<u32>("assets/value.unknown"),
+            Ok(None)
+        ));
     }
 
     #[test]

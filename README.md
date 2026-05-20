@@ -12,7 +12,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Focused Runtime Crates**: camera, lighting, scene, UI, editor, audio, physics, asset, input, transform, renderer, and ECS code live outside the façade crate behind Oxide-owned APIs
 - **Materials + Shaders**: built-in shader pack plus custom WGSL (inline/file) with fallback support
 - **Native Asset Documents**: versioned `.oxscene` and `.oxmat` JSON wrappers with legacy descriptor loading support, nested scene entities, authored scene paths, indexed scene instance lookups, structured scene instance spawn results, live-world scene/prefab export for editor save flows, scoped query/unload helpers, scene-declared dependencies/materials, scene-authored albedo texture loading, registered sprite billboards, reusable scene prefabs with instance overrides, and descriptor validation diagnostics
-- **Asset Dependency Tracking**: `AssetServer` records typed source paths, ready or async labeled sub-assets, and secondary source paths; `.oxscene` files can declare scene dependency paths and automatically record non-virtual material albedo texture paths, typed handles can be queried by changed file, native scene/material reloads can be routed together, known paths can be reloaded in place, and `Assets<T>` exposes per-handle revisions plus cursor-readable change records and ECS `Events<AssetChange<T>>` for cache/tooling invalidation
+- **Asset Dependency Tracking**: `AssetServer` records typed source paths, ready or async labeled sub-assets, registered typed extension loaders, and secondary source paths; `.oxscene` files can declare scene dependency paths and automatically record non-virtual material albedo texture paths, typed handles can be queried by changed file, native scene/material reloads can be routed together, known paths can be reloaded in place, and `Assets<T>` exposes per-handle revisions plus cursor-readable change records and ECS `Events<AssetChange<T>>` for cache/tooling invalidation
 - **glTF Import Bridging**: imported glTF meshes, materials, and images are published as labeled Oxide assets, and spawned nodes retain lightweight mesh/material references that the automatic scene renderer can draw through `MeshFilter`
 - **Native Scene Reloading**: `.oxscene` handles can be refreshed from direct file changes or dependency changes without duplicating spawned roots
 - **Automatic Scene Renderer**: optional plugin that renders `RenderMesh` scene entities without app-owned pipelines
@@ -536,6 +536,13 @@ Current physics runtime highlights include:
 - Joint support (`Fixed`, `Hinge`, `BallSocket`, `Spring`)
 - Query API (`raycast`, `raycast_all`, `sphere_cast`, `overlaps_sphere`, `overlaps_box`)
 - Collision event lifecycle (`Started`, `Persisted`, `Ended`)
+
+## Asset Workflow
+
+- Register app/plugin asset loaders once with `AssetServer::register_loader::<T, _>(["ext"], loader)`
+- Request typed loads with `load_registered_path::<T>(path)` when an extension loader exists
+- Refresh known typed paths in place with `reload_registered_path::<T>(path)` so handles remain stable
+- Keep using `load_labeled_path_async` for container importers that publish multiple sub-assets from one file
 
 ## Shader Workflow
 
