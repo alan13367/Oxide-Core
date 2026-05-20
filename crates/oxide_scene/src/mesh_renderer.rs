@@ -101,6 +101,7 @@ pub enum RenderMaterial {
         shader: BuiltinShader,
         material_type: MaterialType,
         name: String,
+        base_color: [f32; 4],
     },
     Named(String),
 }
@@ -111,6 +112,7 @@ impl Default for RenderMaterial {
             shader: BuiltinShader::Unlit,
             material_type: MaterialType::Unlit,
             name: "default_unlit".to_string(),
+            base_color: [1.0, 1.0, 1.0, 1.0],
         }
     }
 }
@@ -127,6 +129,32 @@ impl RenderMaterial {
             shader,
             material_type: descriptor.material_type,
             name: descriptor.name.clone(),
+            base_color: descriptor.base_color,
+        }
+    }
+
+    /// Returns this material with a replacement base color.
+    pub fn with_base_color(mut self, base_color: [f32; 4]) -> Self {
+        if let Self::Builtin {
+            base_color: color, ..
+        } = &mut self
+        {
+            *color = base_color;
+        }
+        self
+    }
+
+    /// Returns the material base color resolved through an optional library.
+    pub fn base_color_with_library(&self, library: Option<&SceneMaterialLibrary>) -> [f32; 4] {
+        if let Self::Named(name) = self {
+            if let Some(resolved) = library.and_then(|library| library.get(name)) {
+                return resolved.base_color_with_library(None);
+            }
+        }
+
+        match self {
+            Self::Builtin { base_color, .. } => *base_color,
+            Self::Named(_) => [1.0, 1.0, 1.0, 1.0],
         }
     }
 }

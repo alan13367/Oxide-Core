@@ -216,7 +216,8 @@ When `DefaultPlugins` loads a `.oxmat` descriptor through
 `request_material_descriptor_load`, the descriptor is also registered into
 `SceneMaterialLibrary` under `MaterialDescriptor::name`. This gives small
 scenes a data-driven material path without forcing gameplay components to hold
-renderer pipelines.
+renderer pipelines. Material descriptors can set `base_color`; the automatic
+scene renderer multiplies that material color with each entity's `color` tint.
 
 Native scene descriptors can declare reusable material entries in the top-level
 `materials` array. Spawn registers those entries into `SceneMaterialLibrary`
@@ -250,8 +251,9 @@ loaded `.oxmat` materials through the material `ref` field:
 }
 ```
 
-The `color` field remains a per-entity tint even when material shader data is
-resolved from the library.
+For top-level scene material declarations, `color` becomes the reusable
+material base color. For mesh entities and prefab overrides, `color` remains the
+per-entity tint even when material shader data is resolved from the library.
 
 ## Native Sprites
 

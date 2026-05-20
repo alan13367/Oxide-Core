@@ -323,6 +323,7 @@ mod tests {
                 path: "shaders/stone.wgsl".to_string(),
             },
             fallback_shader: Some("lit".to_string()),
+            base_color: [1.0, 1.0, 1.0, 1.0],
             albedo_texture: Some("textures/stone.png".to_string()),
             normal_texture: Some("textures/stone_n.png".to_string()),
             roughness_texture: Some("textures/stone_r.png".to_string()),
@@ -399,7 +400,8 @@ mod tests {
             material_descriptor_asset_system(&mut world);
             if world
                 .get_resource::<SceneMaterialLibrary>()
-                .map(|library| library.contains("Bronze"))
+                .and_then(|library| library.get("Bronze"))
+                .map(|material| material.base_color_with_library(None) == [0.45, 0.3, 0.18, 1.0])
                 .unwrap_or(false)
             {
                 let _ = fs::remove_dir_all(root);
@@ -439,6 +441,7 @@ mod tests {
                     "material": {{
                         "name": "{name}",
                         "material_type": "lit",
+                        "base_color": [0.45, 0.3, 0.18, 1.0],
                         "shader": {{ "source": "file", "path": "{shader}" }},
                         "fallback_shader": "lit"
                     }}

@@ -305,9 +305,10 @@ impl MaterialBatchKey {
                 shader,
                 material_type,
                 name,
+                base_color,
             } => Self {
                 mode: material_mode(*shader, *material_type),
-                identity: format!("builtin:{shader:?}:{material_type:?}:{name}"),
+                identity: format!("builtin:{shader:?}:{material_type:?}:{name}:{base_color:?}"),
             },
             RenderMaterial::Named(name) => Self {
                 mode: MaterialMode::Lit,
@@ -322,6 +323,15 @@ fn material_mode(shader: BuiltinShader, material_type: MaterialType) -> Material
         (BuiltinShader::Lit, _) | (_, MaterialType::Lit) => MaterialMode::Lit,
         _ => MaterialMode::Unlit,
     }
+}
+
+fn multiply_color(left: [f32; 4], right: [f32; 4]) -> [f32; 4] {
+    [
+        left[0] * right[0],
+        left[1] * right[1],
+        left[2] * right[2],
+        left[3] * right[3],
+    ]
 }
 
 #[derive(Debug)]
@@ -746,7 +756,14 @@ impl SceneRenderer {
                 &render_mesh.material,
                 material_library.as_ref(),
             );
-            let instance = SceneInstanceRaw::new(model, render_mesh.tint, material.clone());
+            let base_color = render_mesh
+                .material
+                .base_color_with_library(material_library.as_ref());
+            let instance = SceneInstanceRaw::new(
+                model,
+                multiply_color(render_mesh.tint, base_color),
+                material.clone(),
+            );
             match render_mesh.primitive {
                 MeshPrimitive::Cube => {
                     cube_instances.entry(material).or_default().push(instance);
@@ -819,7 +836,11 @@ impl SceneRenderer {
                 &terrain.material,
                 material_library.as_ref(),
             );
-            let instance = SceneInstanceRaw::new(model, terrain.tint, material);
+            let base_color = terrain
+                .material
+                .base_color_with_library(material_library.as_ref());
+            let instance =
+                SceneInstanceRaw::new(model, multiply_color(terrain.tint, base_color), material);
             if let Some(instances) = create_instance_batch(device, "Terrain Instances", &[instance])
             {
                 draws.push(TerrainDraw { entity, instances });
@@ -1635,6 +1656,7 @@ mod tests {
             shader: BuiltinShader::Unlit,
             material_type: MaterialType::Unlit,
             name: "ui".to_string(),
+            base_color: [1.0, 1.0, 1.0, 1.0],
         };
 
         let key = MaterialBatchKey::from_material(&material);
@@ -1649,6 +1671,7 @@ mod tests {
             shader: BuiltinShader::Lit,
             material_type: MaterialType::Lit,
             name: "scene_lit".to_string(),
+            base_color: [1.0, 1.0, 1.0, 1.0],
         };
 
         let key = MaterialBatchKey::from_material(&material);
@@ -1674,6 +1697,7 @@ mod tests {
                 shader: BuiltinShader::Unlit,
                 material_type: MaterialType::Unlit,
                 name: "matte".to_string(),
+                base_color: [0.5, 0.75, 1.0, 1.0],
             },
         );
 
@@ -1686,7 +1710,33 @@ mod tests {
 
         assert_eq!(unresolved.mode, MaterialMode::Lit);
         assert_eq!(resolved.mode, MaterialMode::Unlit);
-        assert_eq!(resolved.identity, "builtin:Unlit:Unlit:matte");
+        assert_eq!(
+            resolved.identity,
+            "builtin:Unlit:Unlit:matte:[0.5, 0.75, 1.0, 1.0]"
+        );
+    }
+
+    #[test]
+    fn named_material_base_color_multiplies_instance_tint() {
+        let mut library = SceneMaterialLibrary::new();
+        library.register(
+            "bronze",
+            RenderMaterial::Builtin {
+                shader: BuiltinShader::Unlit,
+                material_type: MaterialType::Unlit,
+                name: "bronze".to_string(),
+                base_color: [0.5, 0.25, 0.75, 0.5],
+            },
+        );
+        let material = RenderMaterial::Named("bronze".to_string());
+        let base_color = material.base_color_with_library(Some(&library));
+        let instance = SceneInstanceRaw::new(
+            Mat4::IDENTITY,
+            multiply_color([0.8, 0.6, 0.4, 0.5], base_color),
+            MaterialBatchKey::from_material_with_library(&material, Some(&library)),
+        );
+
+        assert_eq!(instance.tint, [0.4, 0.15, 0.3, 0.25]);
     }
 
     #[test]

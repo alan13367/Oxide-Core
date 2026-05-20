@@ -527,6 +527,7 @@ impl From<SceneMaterialDescriptor> for RenderMaterial {
             shader: value.shader.into(),
             material_type: value.shader.material_type(),
             name: value.name,
+            base_color: [1.0, 1.0, 1.0, 1.0],
         }
     }
 }
@@ -747,7 +748,7 @@ fn register_scene_materials(world: &mut World, scene: &SceneDescriptor) {
     for material in &scene.materials {
         library.register(
             material.name.clone(),
-            RenderMaterial::from(material.clone()),
+            RenderMaterial::from(material.clone()).with_base_color(material.color),
         );
     }
 }

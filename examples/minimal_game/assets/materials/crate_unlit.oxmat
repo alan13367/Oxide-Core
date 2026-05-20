@@ -4,6 +4,7 @@
   "material": {
     "name": "crate_unlit",
     "material_type": "unlit",
+    "base_color": [0.9, 0.72, 0.48, 1.0],
     "shader": {
       "source": "builtin",
       "shader": "unlit"

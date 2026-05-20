@@ -64,7 +64,8 @@ Use `request_material_descriptor_load(server, path)` to asynchronously load a
 records dependencies for file shaders and texture paths. Loaded descriptors are
 also registered into `SceneMaterialLibrary` by `MaterialDescriptor::name`, so
 `RenderMaterial::Named("stone".to_string())` can resolve through the automatic
-scene renderer.
+scene renderer. `base_color` is preserved on the registered material and
+multiplied with each renderable's tint during scene rendering.
 
 ```rust
 let handle = request_material_descriptor_load(
