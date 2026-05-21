@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::animation::{
-    QuatKeyframe, TransformAnimationChannel, TransformAnimationClip, TransformAnimationClipAssets,
+    QuatKeyframe, SkeletonSkin, SkeletonSkinAssets, SkeletonSkinHandle, SkinFilter,
+    TransformAnimationChannel, TransformAnimationClip, TransformAnimationClipAssets,
     TransformAnimationClipHandle, TransformAnimationInterpolation, TransformAnimationTarget,
     Vec3Keyframe,
 };
@@ -21,6 +22,7 @@ use oxide_ecs::world::World;
 use oxide_ecs::{Component, Resource};
 use oxide_renderer::gltf::{
     GltfAnimationClip, GltfAnimationCurve, GltfAnimationInterpolation, GltfNode, GltfScene,
+    GltfSkin,
 };
 use oxide_transform::{
     attach_child, detach_child, Children, GlobalTransform, Parent, TransformComponent,
@@ -39,6 +41,12 @@ pub struct GltfMeshRef {
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GltfMaterialRef {
     pub material_index: usize,
+}
+
+/// Component storing the source glTF skin index for an entity.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GltfSkinRef {
+    pub skin_index: usize,
 }
 
 /// Component storing the source glTF node index for animation and tooling.
@@ -97,11 +105,25 @@ pub struct GltfSceneAnimationHandles {
     pub handles_by_scene: HashMap<u64, Vec<TransformAnimationClipHandle>>,
 }
 
+/// Resource storing glTF skin handles keyed by scene-handle ID.
+#[derive(Resource, Default)]
+pub struct GltfSceneSkinHandles {
+    pub handles_by_scene: HashMap<u64, Vec<SkeletonSkinHandle>>,
+}
+
+#[derive(Clone, Copy)]
+struct GltfSpawnContext<'a> {
+    mesh_handles: Option<&'a [MeshHandle]>,
+    material_handles: Option<&'a [MaterialDescriptorHandle]>,
+    skin_handles: Option<&'a [SkeletonSkinHandle]>,
+    scene_handle: Option<Handle<GltfScene>>,
+}
+
 /// Spawns glTF nodes into ECS while preserving the node hierarchy.
 ///
 /// Returns the root entities created from the scene.
 pub fn spawn_gltf_scene_hierarchy(world: &mut World, scene: &GltfScene) -> Vec<Entity> {
-    spawn_gltf_scene_hierarchy_with_assets(world, scene, None, None)
+    spawn_gltf_scene_hierarchy_with_assets(world, scene, None, None, None)
 }
 
 /// Spawns glTF nodes and attaches mesh handles when available.
@@ -110,17 +132,27 @@ pub fn spawn_gltf_scene_hierarchy_with_meshes(
     scene: &GltfScene,
     mesh_handles: Option<&[MeshHandle]>,
 ) -> Vec<Entity> {
-    spawn_gltf_scene_hierarchy_with_assets(world, scene, mesh_handles, None)
+    spawn_gltf_scene_hierarchy_with_assets(world, scene, mesh_handles, None, None)
 }
 
-/// Spawns glTF nodes and attaches imported mesh and material handles when available.
+/// Spawns glTF nodes and attaches imported mesh, material, and skin handles when available.
 pub fn spawn_gltf_scene_hierarchy_with_assets(
     world: &mut World,
     scene: &GltfScene,
     mesh_handles: Option<&[MeshHandle]>,
     material_handles: Option<&[MaterialDescriptorHandle]>,
+    skin_handles: Option<&[SkeletonSkinHandle]>,
 ) -> Vec<Entity> {
-    spawn_gltf_scene_hierarchy_inner(world, scene, mesh_handles, material_handles, None)
+    spawn_gltf_scene_hierarchy_inner(
+        world,
+        scene,
+        GltfSpawnContext {
+            mesh_handles,
+            material_handles,
+            skin_handles,
+            scene_handle: None,
+        },
+    )
 }
 
 fn spawn_gltf_scene_hierarchy_for_handle(
@@ -129,31 +161,29 @@ fn spawn_gltf_scene_hierarchy_for_handle(
     scene: &GltfScene,
     mesh_handles: Option<&[MeshHandle]>,
     material_handles: Option<&[MaterialDescriptorHandle]>,
+    skin_handles: Option<&[SkeletonSkinHandle]>,
 ) -> Vec<Entity> {
-    spawn_gltf_scene_hierarchy_inner(world, scene, mesh_handles, material_handles, Some(handle))
+    spawn_gltf_scene_hierarchy_inner(
+        world,
+        scene,
+        GltfSpawnContext {
+            mesh_handles,
+            material_handles,
+            skin_handles,
+            scene_handle: Some(handle),
+        },
+    )
 }
 
 fn spawn_gltf_scene_hierarchy_inner(
     world: &mut World,
     scene: &GltfScene,
-    mesh_handles: Option<&[MeshHandle]>,
-    material_handles: Option<&[MaterialDescriptorHandle]>,
-    scene_handle: Option<Handle<GltfScene>>,
+    context: GltfSpawnContext<'_>,
 ) -> Vec<Entity> {
     scene
         .nodes
         .iter()
-        .map(|node| {
-            spawn_gltf_node(
-                world,
-                scene,
-                node,
-                None,
-                mesh_handles,
-                material_handles,
-                scene_handle,
-            )
-        })
+        .map(|node| spawn_gltf_node(world, scene, node, None, context))
         .collect()
 }
 
@@ -162,9 +192,7 @@ fn spawn_gltf_node(
     scene: &GltfScene,
     node: &GltfNode,
     parent: Option<Entity>,
-    mesh_handles: Option<&[MeshHandle]>,
-    material_handles: Option<&[MaterialDescriptorHandle]>,
-    scene_handle: Option<Handle<GltfScene>>,
+    context: GltfSpawnContext<'_>,
 ) -> Entity {
     let mut entity_builder = world.spawn((
         GltfNodeRef {
@@ -179,13 +207,16 @@ fn spawn_gltf_node(
         GlobalTransform::default(),
     ));
 
-    if let Some(scene) = scene_handle {
+    if let Some(scene) = context.scene_handle {
         entity_builder.insert(GltfSceneInstance { scene });
     }
 
     if let Some(mesh_index) = node.mesh_index {
         entity_builder.insert(GltfMeshRef { mesh_index });
-        if let Some(mesh_handle) = mesh_handles.and_then(|handles| handles.get(mesh_index)) {
+        if let Some(mesh_handle) = context
+            .mesh_handles
+            .and_then(|handles| handles.get(mesh_index))
+        {
             entity_builder.insert(MeshFilter::new(*mesh_handle));
         }
         if let Some(material_index) = scene
@@ -195,8 +226,9 @@ fn spawn_gltf_node(
             .flatten()
         {
             entity_builder.insert(GltfMaterialRef { material_index });
-            if let Some(material_handle) =
-                material_handles.and_then(|handles| handles.get(material_index))
+            if let Some(material_handle) = context
+                .material_handles
+                .and_then(|handles| handles.get(material_index))
             {
                 entity_builder.insert(MaterialFilter::new(*material_handle));
             }
@@ -210,6 +242,16 @@ fn spawn_gltf_node(
         }
     }
 
+    if let Some(skin_index) = node.skin_index {
+        entity_builder.insert(GltfSkinRef { skin_index });
+        if let Some(skin_handle) = context
+            .skin_handles
+            .and_then(|handles| handles.get(skin_index))
+        {
+            entity_builder.insert(SkinFilter::new(*skin_handle));
+        }
+    }
+
     let entity = entity_builder.id();
 
     if let Some(parent_entity) = parent {
@@ -217,15 +259,7 @@ fn spawn_gltf_node(
     }
 
     for child in &node.children {
-        spawn_gltf_node(
-            world,
-            scene,
-            child,
-            Some(entity),
-            mesh_handles,
-            material_handles,
-            scene_handle,
-        );
+        spawn_gltf_node(world, scene, child, Some(entity), context);
     }
 
     entity
@@ -270,6 +304,12 @@ pub fn request_gltf_scene_spawn(
     if !world.contains_resource::<TransformAnimationClipAssets>() {
         world.insert_resource(TransformAnimationClipAssets::default());
     }
+    if !world.contains_resource::<GltfSceneSkinHandles>() {
+        world.insert_resource(GltfSceneSkinHandles::default());
+    }
+    if !world.contains_resource::<SkeletonSkinAssets>() {
+        world.insert_resource(SkeletonSkinAssets::default());
+    }
 
     let handle = {
         let server = world.resource_mut::<AssetServerResource>();
@@ -300,6 +340,12 @@ pub fn reload_gltf_scene_path(
     }
     if !world.contains_resource::<TransformAnimationClipAssets>() {
         world.insert_resource(TransformAnimationClipAssets::default());
+    }
+    if !world.contains_resource::<GltfSceneSkinHandles>() {
+        world.insert_resource(GltfSceneSkinHandles::default());
+    }
+    if !world.contains_resource::<SkeletonSkinAssets>() {
+        world.insert_resource(SkeletonSkinAssets::default());
     }
 
     let handle = {
@@ -405,6 +451,12 @@ pub fn gltf_scene_spawn_system(world: &mut World) {
     if !world.contains_resource::<TransformAnimationClipAssets>() {
         world.insert_resource(TransformAnimationClipAssets::default());
     }
+    if !world.contains_resource::<GltfSceneSkinHandles>() {
+        world.insert_resource(GltfSceneSkinHandles::default());
+    }
+    if !world.contains_resource::<SkeletonSkinAssets>() {
+        world.insert_resource(SkeletonSkinAssets::default());
+    }
 
     let completed = {
         let server = world.resource_mut::<AssetServerResource>();
@@ -427,6 +479,7 @@ pub fn gltf_scene_spawn_system(world: &mut World) {
                     let material_handles = register_gltf_scene_materials(world, handle, &mut scene);
                     let animation_handles =
                         register_gltf_scene_animations(world, handle, &mut scene);
+                    let skin_handles = register_gltf_scene_skins(world, handle, &mut scene);
                     world
                         .resource_mut::<GltfSceneAssets>()
                         .assets
@@ -454,6 +507,12 @@ pub fn gltf_scene_spawn_system(world: &mut World) {
                             .resource_mut::<GltfSceneAnimationHandles>()
                             .handles_by_scene
                             .insert(handle.id(), animation_handles);
+                    }
+                    if !skin_handles.is_empty() {
+                        world
+                            .resource_mut::<GltfSceneSkinHandles>()
+                            .handles_by_scene
+                            .insert(handle.id(), skin_handles);
                     }
                     ready_handles.push(handle);
                 }
@@ -488,6 +547,11 @@ pub fn gltf_scene_spawn_system(world: &mut World) {
                 .handles_by_scene
                 .get(&handle.id())
                 .cloned();
+            let skin_handles = world
+                .resource::<GltfSceneSkinHandles>()
+                .handles_by_scene
+                .get(&handle.id())
+                .cloned();
             let _ = despawn_gltf_scene_entities(world, handle);
             let roots = spawn_gltf_scene_hierarchy_for_handle(
                 world,
@@ -495,6 +559,7 @@ pub fn gltf_scene_spawn_system(world: &mut World) {
                 &scene,
                 mesh_handles.as_deref(),
                 material_handles.as_deref(),
+                skin_handles.as_deref(),
             );
             spawned.push((handle, roots));
         }
@@ -672,6 +737,43 @@ fn register_gltf_scene_animations(
     animation_handles
 }
 
+fn register_gltf_scene_skins(
+    world: &mut World,
+    handle: Handle<GltfScene>,
+    scene: &mut GltfScene,
+) -> Vec<SkeletonSkinHandle> {
+    if scene.skins.is_empty() {
+        return Vec::new();
+    }
+
+    let mut skin_assets = world
+        .remove_resource::<SkeletonSkinAssets>()
+        .unwrap_or_default();
+    let mut skin_handles = Vec::with_capacity(scene.skins.len());
+    {
+        let server = world.resource_mut::<AssetServerResource>();
+        let scene_source = server.server.asset_source(&handle);
+        for (skin_name, skin) in scene.skins.iter().cloned() {
+            let skin = skeleton_skin_from_gltf(skin);
+            let skin_handle = if let Some(source) = &scene_source {
+                server.server.insert_loaded_labeled_path(
+                    &mut skin_assets.assets,
+                    source.path().to_path_buf(),
+                    Some(skin_name.as_str()),
+                    skin,
+                )
+            } else {
+                let skin_handle = server.server.allocate_handle();
+                skin_assets.assets.insert(skin_handle, skin);
+                skin_handle
+            };
+            skin_handles.push(skin_handle);
+        }
+    }
+    world.insert_resource(skin_assets);
+    skin_handles
+}
+
 fn transform_animation_clip_from_gltf(clip: GltfAnimationClip) -> TransformAnimationClip {
     let duration = Duration::from_secs_f32(clip.duration_seconds.max(0.0));
     let mut converted = TransformAnimationClip::new(clip.name, duration);
@@ -722,6 +824,19 @@ fn transform_animation_clip_from_gltf(clip: GltfAnimationClip) -> TransformAnima
     converted
 }
 
+fn skeleton_skin_from_gltf(skin: GltfSkin) -> SkeletonSkin {
+    let joints = skin
+        .joints
+        .into_iter()
+        .map(|joint| TransformAnimationTarget(joint as u64))
+        .collect::<Vec<_>>();
+    let mut converted = SkeletonSkin::new(skin.name, joints, skin.inverse_bind_matrices);
+    if let Some(root) = skin.skeleton_root {
+        converted = converted.with_skeleton_root(TransformAnimationTarget(root as u64));
+    }
+    converted
+}
+
 fn despawn_gltf_scene_entities(world: &mut World, handle: Handle<GltfScene>) -> Vec<Entity> {
     let entities = {
         let mut query = world.query::<(Entity, &GltfSceneInstance)>();
@@ -764,7 +879,7 @@ fn despawn_gltf_scene_entities(world: &mut World, handle: Handle<GltfScene>) -> 
 mod tests {
     use super::*;
     use crate::asset::AssetServerResource;
-    use glam::{Quat, Vec3};
+    use glam::{Mat4, Quat, Vec3};
     use oxide_renderer::descriptor::{
         AlphaMode, MaterialDescriptor, MaterialType, ShaderDescriptor,
     };
@@ -798,11 +913,14 @@ mod tests {
             materials: Vec::new(),
             images: Vec::new(),
             animations: Vec::new(),
+            skins: Vec::new(),
             mesh_material_indices: Vec::new(),
+            mesh_skinning: Vec::new(),
             nodes: vec![GltfNode {
                 node_index: 0,
                 name: Some(name.to_string()),
                 mesh_index: None,
+                skin_index: None,
                 translation,
                 rotation: Quat::IDENTITY,
                 scale: Vec3::ONE,
@@ -821,11 +939,14 @@ mod tests {
             materials: Vec::new(),
             images: Vec::new(),
             animations: Vec::new(),
+            skins: Vec::new(),
             mesh_material_indices: Vec::new(),
+            mesh_skinning: Vec::new(),
             nodes: vec![GltfNode {
                 node_index: 0,
                 name: Some("root".to_string()),
                 mesh_index: None,
+                skin_index: None,
                 translation: Vec3::new(1.0, 0.0, 0.0),
                 rotation: Quat::IDENTITY,
                 scale: Vec3::ONE,
@@ -833,6 +954,7 @@ mod tests {
                     node_index: 0,
                     name: Some("child".to_string()),
                     mesh_index: Some(0),
+                    skin_index: None,
                     translation: Vec3::new(0.0, 2.0, 0.0),
                     rotation: Quat::IDENTITY,
                     scale: Vec3::ONE,
@@ -873,11 +995,14 @@ mod tests {
             materials: Vec::new(),
             images: Vec::new(),
             animations: Vec::new(),
+            skins: Vec::new(),
             mesh_material_indices: Vec::new(),
+            mesh_skinning: Vec::new(),
             nodes: vec![GltfNode {
                 node_index: 0,
                 name: Some("mesh_node".to_string()),
                 mesh_index: Some(0),
+                skin_index: None,
                 translation: Vec3::ZERO,
                 rotation: Quat::IDENTITY,
                 scale: Vec3::ONE,
@@ -913,11 +1038,14 @@ mod tests {
             )],
             images: Vec::new(),
             animations: Vec::new(),
+            skins: Vec::new(),
             mesh_material_indices: vec![Some(0)],
+            mesh_skinning: vec![None],
             nodes: vec![GltfNode {
                 node_index: 0,
                 name: Some("material_node".to_string()),
                 mesh_index: Some(0),
+                skin_index: None,
                 translation: Vec3::ZERO,
                 rotation: Quat::IDENTITY,
                 scale: Vec3::ONE,
@@ -930,6 +1058,7 @@ mod tests {
             &scene,
             None,
             Some(&[material_handle]),
+            None,
         );
 
         assert_eq!(roots.len(), 1);
@@ -952,6 +1081,59 @@ mod tests {
     }
 
     #[test]
+    fn gltf_hierarchy_attaches_skin_filter_handles() {
+        let mut world = World::new();
+        let skin_handle = SkeletonSkinHandle::new(13);
+
+        let scene = GltfScene {
+            dependencies: Vec::new(),
+            meshes: Vec::new(),
+            materials: Vec::new(),
+            images: Vec::new(),
+            animations: Vec::new(),
+            skins: vec![(
+                "skin_0".to_string(),
+                GltfSkin {
+                    name: "skin_0".to_string(),
+                    joints: vec![0, 1],
+                    inverse_bind_matrices: vec![Mat4::IDENTITY; 2],
+                    skeleton_root: Some(0),
+                },
+            )],
+            mesh_material_indices: Vec::new(),
+            mesh_skinning: Vec::new(),
+            nodes: vec![GltfNode {
+                node_index: 2,
+                name: Some("skinned_node".to_string()),
+                mesh_index: Some(0),
+                skin_index: Some(0),
+                translation: Vec3::ZERO,
+                rotation: Quat::IDENTITY,
+                scale: Vec3::ONE,
+                children: Vec::new(),
+            }],
+        };
+
+        let roots = spawn_gltf_scene_hierarchy_with_assets(
+            &mut world,
+            &scene,
+            None,
+            None,
+            Some(&[skin_handle]),
+        );
+
+        assert_eq!(roots.len(), 1);
+        assert_eq!(
+            world.get::<GltfSkinRef>(roots[0]),
+            Some(&GltfSkinRef { skin_index: 0 })
+        );
+        assert_eq!(
+            world.get::<SkinFilter>(roots[0]).map(|filter| filter.skin),
+            Some(skin_handle)
+        );
+    }
+
+    #[test]
     fn queued_gltf_scene_spawns_when_asset_is_available() {
         let mut world = World::new();
         world.insert_resource(AssetServerResource::default());
@@ -970,11 +1152,14 @@ mod tests {
             materials: Vec::new(),
             images: Vec::new(),
             animations: Vec::new(),
+            skins: Vec::new(),
             mesh_material_indices: Vec::new(),
+            mesh_skinning: Vec::new(),
             nodes: vec![GltfNode {
                 node_index: 0,
                 name: Some("root".to_string()),
                 mesh_index: None,
+                skin_index: None,
                 translation: Vec3::ZERO,
                 rotation: Quat::IDENTITY,
                 scale: Vec3::ONE,
@@ -1121,7 +1306,9 @@ mod tests {
             )],
             images: Vec::new(),
             animations: Vec::new(),
+            skins: Vec::new(),
             mesh_material_indices: vec![Some(0)],
+            mesh_skinning: vec![None],
             nodes: Vec::new(),
         };
 
@@ -1182,7 +1369,9 @@ mod tests {
                 TextureImage::from_rgba(1, 1, vec![255, 0, 0, 255]).unwrap(),
             )],
             animations: Vec::new(),
+            skins: Vec::new(),
             mesh_material_indices: Vec::new(),
+            mesh_skinning: Vec::new(),
             nodes: Vec::new(),
         };
 
@@ -1245,7 +1434,9 @@ mod tests {
                     }],
                 },
             )],
+            skins: Vec::new(),
             mesh_material_indices: Vec::new(),
+            mesh_skinning: Vec::new(),
             nodes: Vec::new(),
         };
 
@@ -1268,6 +1459,61 @@ mod tests {
         assert_eq!(clip.duration, Duration::from_secs(1));
         assert_eq!(clip.channels.len(), 1);
         assert_eq!(clip.channels[0].target(), TransformAnimationTarget(4));
+    }
+
+    #[test]
+    fn gltf_skins_register_as_labeled_skeleton_skin_assets() {
+        let mut world = World::new();
+        world.insert_resource(AssetServerResource::default());
+        world.insert_resource(SkeletonSkinAssets::default());
+
+        let handle = {
+            let server = world.resource_mut::<AssetServerResource>();
+            server
+                .server
+                .register_loaded_path::<GltfScene>("assets/models/level.gltf")
+        };
+        let mut scene = GltfScene {
+            dependencies: Vec::new(),
+            meshes: Vec::new(),
+            materials: Vec::new(),
+            images: Vec::new(),
+            animations: Vec::new(),
+            skins: vec![(
+                "skin_0".to_string(),
+                GltfSkin {
+                    name: "skin_0".to_string(),
+                    joints: vec![2, 3],
+                    inverse_bind_matrices: vec![Mat4::IDENTITY; 2],
+                    skeleton_root: Some(2),
+                },
+            )],
+            mesh_material_indices: Vec::new(),
+            mesh_skinning: Vec::new(),
+            nodes: Vec::new(),
+        };
+
+        let handles = register_gltf_scene_skins(&mut world, handle, &mut scene);
+
+        assert_eq!(handles.len(), 1);
+        assert_eq!(
+            world
+                .resource::<AssetServerResource>()
+                .server
+                .asset_label(&handles[0]),
+            Some("skin_0")
+        );
+        let skin = world
+            .resource::<SkeletonSkinAssets>()
+            .assets
+            .get(&handles[0])
+            .expect("skin should be published");
+        assert_eq!(skin.name, "skin_0");
+        assert_eq!(
+            skin.joints,
+            vec![TransformAnimationTarget(2), TransformAnimationTarget(3)]
+        );
+        assert_eq!(skin.skeleton_root, Some(TransformAnimationTarget(2)));
     }
 
     fn run_gltf_spawn_until_ready(world: &mut World, handle: Handle<GltfScene>) {

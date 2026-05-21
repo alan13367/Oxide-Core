@@ -27,6 +27,9 @@ the engine prelude for normal game code.
   `AnimationPlayer` for imported or authored transform clips. glTF nodes are
   spawned with `TransformAnimationTarget` values based on their source node
   index.
+- glTF skins are imported into `SkeletonSkinAssets`; skinned nodes receive
+  `SkinFilter` and `GltfSkinRef` so character meshes have stable skin handles
+  before GPU skinning is enabled.
 - Use `Visibility::Hidden` to hide a renderable entity or hierarchy subtree
   without despawning it. `InheritedVisibility` is propagated automatically.
 - Use `RenderLayers` to filter meshes, terrain, and sprites per camera for

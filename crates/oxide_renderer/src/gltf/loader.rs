@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use glam::{Quat, Vec3};
+use glam::{Mat4, Quat, Vec3};
 use gltf::animation::util::ReadOutputs;
 use gltf::buffer::Data;
 use gltf::image::Format;
@@ -40,10 +40,36 @@ pub struct GltfScene {
     pub images: Vec<(String, TextureImage)>,
     /// Imported transform animation clips with their labels.
     pub animations: Vec<(String, GltfAnimationClip)>,
+    /// Imported skeletal skin bind data with their labels.
+    pub skins: Vec<(String, GltfSkin)>,
     /// Material index for each loaded mesh, aligned with [`Self::meshes`].
     pub mesh_material_indices: Vec<Option<usize>>,
+    /// Skinning vertex attributes for each loaded mesh, aligned with [`Self::meshes`].
+    pub mesh_skinning: Vec<Option<GltfMeshSkinning>>,
     /// Node hierarchy information for spawning entities.
     pub nodes: Vec<GltfNode>,
+}
+
+/// Imported glTF skeletal skin bind data.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GltfSkin {
+    /// Imported skin label.
+    pub name: String,
+    /// Source glTF node indices used as joints.
+    pub joints: Vec<usize>,
+    /// Inverse bind matrices aligned with [`Self::joints`].
+    pub inverse_bind_matrices: Vec<Mat4>,
+    /// Optional source glTF skeleton root node index.
+    pub skeleton_root: Option<usize>,
+}
+
+/// Per-vertex skinning attributes for one imported mesh primitive.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GltfMeshSkinning {
+    /// Joint indices influencing each vertex.
+    pub joints: Vec<[u16; 4]>,
+    /// Joint weights influencing each vertex.
+    pub weights: Vec<[f32; 4]>,
 }
 
 /// Imported glTF transform animation clip.
@@ -117,6 +143,8 @@ pub struct GltfNode {
     pub name: Option<String>,
     /// Index of the mesh (if this node has a mesh).
     pub mesh_index: Option<usize>,
+    /// Index of the skin (if this node is skinned).
+    pub skin_index: Option<usize>,
     /// Local transform: position.
     pub translation: Vec3,
     /// Local transform: rotation.
@@ -133,6 +161,7 @@ impl Default for GltfNode {
             name: None,
             node_index: 0,
             mesh_index: None,
+            skin_index: None,
             translation: Vec3::ZERO,
             rotation: Quat::IDENTITY,
             scale: Vec3::ONE,
@@ -160,10 +189,12 @@ pub fn load_gltf(
     let materials = extract_materials(&document);
     let images = extract_images(&document, images)?;
     let animations = extract_animations(&document, &buffers);
+    let skins = extract_skins(&document, &buffers);
 
     // Extract meshes
     let mut meshes = Vec::new();
     let mut mesh_material_indices = Vec::new();
+    let mut mesh_skinning = Vec::new();
     for (mesh_idx, mesh) in document.meshes().enumerate() {
         for (prim_idx, primitive) in mesh.primitives().enumerate() {
             // Only support triangle mode
@@ -173,6 +204,7 @@ pub fn load_gltf(
 
             let mesh_name = format!("mesh_{}_prim{}", mesh_idx, prim_idx);
             mesh_material_indices.push(primitive.material().index());
+            mesh_skinning.push(extract_primitive_skinning(&primitive, &buffers));
             let loaded_mesh = load_primitive(device, queue, &primitive, &buffers, &mesh_name)?;
             meshes.push((mesh_name, loaded_mesh));
         }
@@ -187,7 +219,9 @@ pub fn load_gltf(
         materials,
         images,
         animations,
+        skins,
         mesh_material_indices,
+        mesh_skinning,
         nodes,
     })
 }
@@ -425,6 +459,51 @@ fn extract_animations(
         .collect()
 }
 
+fn extract_skins(document: &gltf::Document, buffers: &[Data]) -> Vec<(String, GltfSkin)> {
+    document
+        .skins()
+        .enumerate()
+        .map(|(idx, skin)| {
+            let name = format!("skin_{idx}");
+            let joints = skin.joints().map(|joint| joint.index()).collect::<Vec<_>>();
+            let reader = skin.reader(|buffer| buffers.get(buffer.index()).map(|data| &*data.0));
+            let inverse_bind_matrices = reader
+                .read_inverse_bind_matrices()
+                .map(|matrices| {
+                    matrices
+                        .map(|matrix| Mat4::from_cols_array_2d(&matrix))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| vec![Mat4::IDENTITY; joints.len()]);
+            let skeleton_root = skin.skeleton().map(|node| node.index());
+            (
+                name.clone(),
+                GltfSkin {
+                    name,
+                    joints,
+                    inverse_bind_matrices,
+                    skeleton_root,
+                },
+            )
+        })
+        .collect()
+}
+
+fn extract_primitive_skinning(
+    primitive: &gltf::Primitive,
+    buffers: &[Data],
+) -> Option<GltfMeshSkinning> {
+    let reader = primitive.reader(|buffer| buffers.get(buffer.index()).map(|data| &*data.0));
+    let joints = reader
+        .read_joints(0)
+        .map(|joints| joints.into_u16().collect::<Vec<_>>())?;
+    let weights = reader
+        .read_weights(0)
+        .map(|weights| weights.into_f32().collect::<Vec<_>>())?;
+
+    Some(GltfMeshSkinning { joints, weights })
+}
+
 fn gltf_metallic_roughness_image_sources(document: &gltf::Document) -> Vec<usize> {
     let mut sources: Vec<_> = document
         .materials()
@@ -568,6 +647,7 @@ fn convert_node(node: &gltf::Node, meshes: &[(String, Mesh3D)]) -> GltfNode {
         node_index,
         name: Some(format!("node_{node_index}")),
         mesh_index,
+        skin_index: node.skin().map(|skin| skin.index()),
         translation: Vec3::new(t[0], t[1], t[2]),
         rotation: Quat::from_xyzw(r[0], r[1], r[2], r[3]),
         scale: Vec3::new(s[0], s[1], s[2]),
@@ -716,6 +796,73 @@ mod tests {
         assert_eq!(clips[0].1.channels[0].target_node, 0);
         assert_eq!(keyframes[0].value, Vec3::ZERO);
         assert_eq!(keyframes[1].value, Vec3::new(2.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn gltf_skins_extract_joint_bind_data() {
+        let raw = br#"{
+            "asset": { "version": "2.0" },
+            "nodes": [{}, {}],
+            "skins": [
+                { "joints": [0, 1], "skeleton": 0 }
+            ]
+        }"#;
+        let gltf = gltf::Gltf::from_slice(raw).unwrap();
+
+        let skins = extract_skins(&gltf.document, &[]);
+
+        assert_eq!(skins.len(), 1);
+        assert_eq!(skins[0].0, "skin_0");
+        assert_eq!(skins[0].1.joints, vec![0, 1]);
+        assert_eq!(skins[0].1.skeleton_root, Some(0));
+        assert_eq!(skins[0].1.inverse_bind_matrices, vec![Mat4::IDENTITY; 2]);
+    }
+
+    #[test]
+    fn gltf_primitives_extract_joint_and_weight_attributes() {
+        let raw = br#"{
+            "asset": { "version": "2.0" },
+            "buffers": [{ "byteLength": 36 }],
+            "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 8 },
+                { "buffer": 0, "byteOffset": 8, "byteLength": 16 },
+                { "buffer": 0, "byteOffset": 24, "byteLength": 12 }
+            ],
+            "accessors": [
+                { "bufferView": 0, "componentType": 5123, "count": 1, "type": "VEC4" },
+                { "bufferView": 1, "componentType": 5126, "count": 1, "type": "VEC4" },
+                { "bufferView": 2, "componentType": 5126, "count": 1, "type": "VEC3", "min": [0.0, 0.0, 0.0], "max": [0.0, 0.0, 0.0] }
+            ],
+            "meshes": [{
+                "primitives": [{
+                    "attributes": { "JOINTS_0": 0, "WEIGHTS_0": 1, "POSITION": 2 }
+                }]
+            }]
+        }"#;
+        let gltf = gltf::Gltf::from_slice(raw).unwrap();
+        let mut bytes = Vec::new();
+        for value in [1_u16, 2, 3, 4] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in [0.25_f32, 0.5, 0.125, 0.125] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in [0.0_f32, 0.0, 0.0] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        let primitive = gltf
+            .document
+            .meshes()
+            .next()
+            .unwrap()
+            .primitives()
+            .next()
+            .unwrap();
+
+        let skinning = extract_primitive_skinning(&primitive, &[Data(bytes)]).unwrap();
+
+        assert_eq!(skinning.joints, vec![[1, 2, 3, 4]]);
+        assert_eq!(skinning.weights, vec![[0.25, 0.5, 0.125, 0.125]]);
     }
 
     #[test]

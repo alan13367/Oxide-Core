@@ -141,6 +141,12 @@ Imported glTF animation samplers are converted into Oxide
 Spawned glTF nodes receive `GltfNodeRef` and `TransformAnimationTarget`
 components based on the source glTF node index, so gameplay can attach
 `AnimationPlayer` components to nodes using the same clip asset and target ID.
+Imported glTF skins are converted into `SkeletonSkin` assets and published with
+labels such as `skin_0`. The importer preserves joint node indices, inverse bind
+matrices, optional skeleton roots, and primitive `JOINTS_0`/`WEIGHTS_0`
+attributes as Oxide-owned data. Spawned skinned nodes receive `GltfSkinRef` and
+`SkinFilter`, which gives the future GPU skinning path stable handles without
+changing authoring code.
 
 The automatic scene renderer can draw `MeshFilter` entities directly from
 `MeshCache`. When a handle-based mesh entity also carries `RenderMesh`, the

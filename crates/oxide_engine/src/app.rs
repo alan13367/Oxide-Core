@@ -12,7 +12,10 @@ use winit::{
     window::WindowId,
 };
 
-use crate::animation::{AnimationPlugin, TransformAnimationClip, TransformAnimationClipAssets};
+use crate::animation::{
+    AnimationPlugin, SkeletonSkin, SkeletonSkinAssets, TransformAnimationClip,
+    TransformAnimationClipAssets,
+};
 #[cfg(feature = "gltf-import")]
 use crate::asset::GltfSceneAssets;
 use crate::asset::{
@@ -32,7 +35,8 @@ use crate::render::{
 #[cfg(feature = "gltf-import")]
 use crate::scene::{
     gltf_scene_spawn_system, GltfSceneAnimationHandles, GltfSceneImageHandles,
-    GltfSceneMaterialHandles, GltfSceneMeshHandles, PendingGltfSceneSpawns, SpawnedGltfScenes,
+    GltfSceneMaterialHandles, GltfSceneMeshHandles, GltfSceneSkinHandles, PendingGltfSceneSpawns,
+    SpawnedGltfScenes,
 };
 use crate::scene::{
     oxscene_spawn_system, prepare_scene_renderer, queue_scene_renderer, resize_scene_renderer,
@@ -106,6 +110,8 @@ pub const TEXTURE_IMAGE_ASSET_EVENTS_SYSTEM: &str = "oxide.asset.events.texture_
 /// Stable label for publishing transform animation clip asset change events.
 pub const TRANSFORM_ANIMATION_CLIP_ASSET_EVENTS_SYSTEM: &str =
     "oxide.asset.events.transform_animation_clips";
+/// Stable label for publishing skeleton skin asset change events.
+pub const SKELETON_SKIN_ASSET_EVENTS_SYSTEM: &str = "oxide.asset.events.skeleton_skins";
 /// Stable label for the built-in native `.oxscene` spawn system.
 pub const OXSCENE_SPAWN_SYSTEM: &str = "oxide.scene.oxscene_spawn";
 /// Stable label for the built-in glTF hierarchy spawn system.
@@ -293,6 +299,12 @@ fn install_builtin_asset_event_systems<T: App>(app: &mut AppBuilder<T>) {
         ASSET_EVENT_ANCHOR,
         publish_asset_change_events::<TransformAnimationClip, TransformAnimationClipAssets>,
     );
+    app.add_labeled_system_after_mut(
+        AppStage::PreUpdate,
+        SKELETON_SKIN_ASSET_EVENTS_SYSTEM,
+        ASSET_EVENT_ANCHOR,
+        publish_asset_change_events::<SkeletonSkin, SkeletonSkinAssets>,
+    );
     #[cfg(feature = "gltf-import")]
     app.add_labeled_system_after_mut(
         AppStage::PreUpdate,
@@ -332,11 +344,15 @@ fn initialize_asset_resources(world: &mut World, _window: &Window) {
     if !world.contains_resource::<TransformAnimationClipAssets>() {
         world.insert_resource(TransformAnimationClipAssets::default());
     }
+    if !world.contains_resource::<SkeletonSkinAssets>() {
+        world.insert_resource(SkeletonSkinAssets::default());
+    }
     world.init_resource::<Events<AssetChange<MaterialPipeline>>>();
     world.init_resource::<Events<AssetChange<Mesh3D>>>();
     world.init_resource::<Events<AssetChange<MaterialDescriptor>>>();
     world.init_resource::<Events<AssetChange<TextureImage>>>();
     world.init_resource::<Events<AssetChange<TransformAnimationClip>>>();
+    world.init_resource::<Events<AssetChange<SkeletonSkin>>>();
     if !world.contains_resource::<SceneDescriptorAssets>() {
         world.insert_resource(SceneDescriptorAssets::default());
     }
@@ -369,6 +385,9 @@ fn initialize_asset_resources(world: &mut World, _window: &Window) {
         }
         if !world.contains_resource::<GltfSceneAnimationHandles>() {
             world.insert_resource(GltfSceneAnimationHandles::default());
+        }
+        if !world.contains_resource::<GltfSceneSkinHandles>() {
+            world.insert_resource(GltfSceneSkinHandles::default());
         }
     }
 }

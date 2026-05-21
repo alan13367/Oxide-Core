@@ -23,7 +23,9 @@ use oxide_renderer::texture::TextureImage;
 #[cfg(feature = "gltf-import")]
 use wgpu::{Device, Queue};
 
-use crate::animation::{TransformAnimationClip, TransformAnimationClipAssets};
+use crate::animation::{
+    SkeletonSkin, SkeletonSkinAssets, TransformAnimationClip, TransformAnimationClipAssets,
+};
 #[cfg(feature = "gltf-import")]
 use crate::ecs::RendererResource;
 #[cfg(feature = "gltf-import")]
@@ -89,6 +91,12 @@ impl AssetStore<TransformAnimationClip> for TransformAnimationClipAssets {
     }
 }
 
+impl AssetStore<SkeletonSkin> for SkeletonSkinAssets {
+    fn assets(&self) -> &CoreAssets<SkeletonSkin> {
+        &self.assets
+    }
+}
+
 /// Publishes unread asset changes from an [`AssetStore`] into ECS events.
 ///
 /// Register this with concrete type parameters, for example:
@@ -113,6 +121,7 @@ pub type MaterialHandle = CoreHandle<MaterialPipeline>;
 pub type MaterialDescriptorHandle = oxide_scene::MaterialDescriptorHandle;
 pub type TextureImageHandle = oxide_scene::TextureImageHandle;
 pub type TransformAnimationClipHandle = CoreHandle<TransformAnimationClip>;
+pub type SkeletonSkinHandle = CoreHandle<SkeletonSkin>;
 
 /// ECS resource storing handle-indexed glTF scenes.
 #[cfg(feature = "gltf-import")]

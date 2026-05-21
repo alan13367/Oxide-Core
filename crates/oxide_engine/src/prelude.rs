@@ -2,7 +2,8 @@
 
 pub use crate::animation::{
     transform_animation_system, transform_tween_system, AnimationPlayer, AnimationPlugin,
-    QuatKeyframe, TransformAnimationChannel, TransformAnimationClip, TransformAnimationClipAssets,
+    QuatKeyframe, SkeletonSkin, SkeletonSkinAssets, SkeletonSkinHandle, SkinFilter,
+    TransformAnimationChannel, TransformAnimationClip, TransformAnimationClipAssets,
     TransformAnimationClipHandle, TransformAnimationInterpolation, TransformAnimationProperty,
     TransformAnimationTarget, TransformTween, TweenEasing, TweenRepeat, Vec3Keyframe,
     TRANSFORM_ANIMATION_SYSTEM, TRANSFORM_TWEEN_SYSTEM,
@@ -15,8 +16,9 @@ pub use crate::app::{
     Render, RenderPlugin, Startup, TransformPlugin, Update, GLTF_SCENE_SPAWN_SYSTEM,
     MATERIAL_ASSET_EVENTS_SYSTEM, MATERIAL_DESCRIPTOR_ASSET_EVENTS_SYSTEM,
     MATERIAL_DESCRIPTOR_ASSET_SYSTEM, MESH_ASSET_EVENTS_SYSTEM, OXSCENE_SPAWN_SYSTEM,
-    TEXTURE_IMAGE_ASSET_EVENTS_SYSTEM, TRANSFORM_ANIMATION_CLIP_ASSET_EVENTS_SYSTEM,
-    TRANSFORM_PROPAGATE_SYSTEM, VISIBILITY_PROPAGATE_SYSTEM,
+    SKELETON_SKIN_ASSET_EVENTS_SYSTEM, TEXTURE_IMAGE_ASSET_EVENTS_SYSTEM,
+    TRANSFORM_ANIMATION_CLIP_ASSET_EVENTS_SYSTEM, TRANSFORM_PROPAGATE_SYSTEM,
+    VISIBILITY_PROPAGATE_SYSTEM,
 };
 #[cfg(feature = "gltf-import")]
 pub use crate::asset::{load_gltf_async, reload_gltf_async, GltfSceneAssets};
@@ -107,7 +109,7 @@ pub use crate::scene::{
     spawn_gltf_scene_hierarchy_with_assets, spawn_gltf_scene_hierarchy_with_meshes,
     take_spawned_scene_roots, GltfMaterialRef, GltfMeshRef, GltfNodeRef, GltfSceneAnimationHandles,
     GltfSceneImageHandles, GltfSceneInstance, GltfSceneMaterialHandles, GltfSceneMeshHandles,
-    PendingGltfSceneSpawns, SpawnedGltfScenes,
+    GltfSceneSkinHandles, GltfSkinRef, PendingGltfSceneSpawns, SpawnedGltfScenes,
 };
 pub use crate::time::{Timer, TimerMode};
 pub use crate::ui::{

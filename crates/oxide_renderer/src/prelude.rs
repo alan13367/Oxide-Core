@@ -9,7 +9,8 @@ pub use crate::descriptor::{
 #[cfg(feature = "gltf-import")]
 pub use crate::gltf::{
     load_gltf, GltfAnimationChannel, GltfAnimationClip, GltfAnimationCurve,
-    GltfAnimationInterpolation, GltfError, GltfNode, GltfQuatKeyframe, GltfScene, GltfVec3Keyframe,
+    GltfAnimationInterpolation, GltfError, GltfMeshSkinning, GltfNode, GltfQuatKeyframe, GltfScene,
+    GltfSkin, GltfVec3Keyframe,
 };
 pub use crate::material::{get_material_bind_group_layout, MaterialError, MaterialPipeline};
 pub use crate::mesh::{

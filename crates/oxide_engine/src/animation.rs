@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use glam::{Quat, Vec3};
+use glam::{Mat4, Quat, Vec3};
 use oxide_asset::{Assets, Handle};
 use oxide_ecs::{Component, Resource};
 use oxide_math::transform::Transform;
@@ -18,12 +18,70 @@ pub const TRANSFORM_ANIMATION_SYSTEM: &str = "oxide.animation.transform_clips";
 
 /// Typed handle for transform animation clips.
 pub type TransformAnimationClipHandle = Handle<TransformAnimationClip>;
+/// Typed handle for skeletal skin bind data.
+pub type SkeletonSkinHandle = Handle<SkeletonSkin>;
 
 /// Resource storing imported or authored transform animation clips.
 #[derive(Resource, Default)]
 pub struct TransformAnimationClipAssets {
     /// Handle-indexed transform animation clip storage.
     pub assets: Assets<TransformAnimationClip>,
+}
+
+/// Resource storing imported or authored skeletal skin bind data.
+#[derive(Resource, Default)]
+pub struct SkeletonSkinAssets {
+    /// Handle-indexed skeletal skin storage.
+    pub assets: Assets<SkeletonSkin>,
+}
+
+/// Skeletal skin bind data for a skinned mesh.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkeletonSkin {
+    /// Human-readable skin name or imported label.
+    pub name: String,
+    /// Joint targets used by this skin.
+    pub joints: Vec<TransformAnimationTarget>,
+    /// Inverse bind matrices aligned with [`Self::joints`].
+    pub inverse_bind_matrices: Vec<Mat4>,
+    /// Optional skeleton root target.
+    pub skeleton_root: Option<TransformAnimationTarget>,
+}
+
+impl SkeletonSkin {
+    /// Creates skeletal skin bind data.
+    pub fn new(
+        name: impl Into<String>,
+        joints: Vec<TransformAnimationTarget>,
+        inverse_bind_matrices: Vec<Mat4>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            joints,
+            inverse_bind_matrices,
+            skeleton_root: None,
+        }
+    }
+
+    /// Sets the skeleton root target.
+    pub fn with_skeleton_root(mut self, skeleton_root: TransformAnimationTarget) -> Self {
+        self.skeleton_root = Some(skeleton_root);
+        self
+    }
+}
+
+/// Component that links an entity to skeletal skin bind data.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SkinFilter {
+    /// Skin asset handle used by this entity.
+    pub skin: SkeletonSkinHandle,
+}
+
+impl SkinFilter {
+    /// Creates a skin filter from a skin handle.
+    pub fn new(skin: SkeletonSkinHandle) -> Self {
+        Self { skin }
+    }
 }
 
 /// Stable target identity for transform animation tracks.
@@ -601,6 +659,9 @@ fn initialize_animation_resources(world: &mut World, _window: &crate::window::Wi
     }
     if !world.contains_resource::<TransformAnimationClipAssets>() {
         world.insert_resource(TransformAnimationClipAssets::default());
+    }
+    if !world.contains_resource::<SkeletonSkinAssets>() {
+        world.insert_resource(SkeletonSkinAssets::default());
     }
 }
 
