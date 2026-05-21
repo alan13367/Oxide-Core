@@ -11,7 +11,11 @@ use crate::diagnostics::{
     SCENE_RENDERABLE_CANDIDATES, SCENE_SPHERE_INSTANCES, SCENE_SPRITE_INSTANCES,
     SCENE_TERRAIN_INSTANCES,
 };
-use crate::ecs::{RendererResource, WindowResource, World};
+use glam::Vec2;
+use oxide_ecs::Resource;
+
+use crate::ecs::{Entity, Events, RendererResource, WindowResource, World};
+use crate::input::{MouseButton, MouseInput};
 use crate::render::RenderFrame;
 use crate::ui::{
     authoring_ui_visible, DevOverlay, DevOverlayPlugin, DevOverlaySnapshot, EguiPlugin,
@@ -134,6 +138,215 @@ pub fn resize_scene_renderer(world: &mut World, width: u32, height: u32) {
     world.insert_non_send_resource(scene_renderer);
 }
 
+/// Installs gameplay-facing scene picking state and events.
+pub struct PickingPlugin;
+
+impl<T: App> Plugin<T> for PickingPlugin {
+    fn build(&self, app: &mut AppBuilder<T>) {
+        app.add_startup_system_mut(initialize_picking);
+        app.add_system_mut(AppStage::PostUpdate, picking_system);
+    }
+}
+
+/// Current cursor-derived scene picking state.
+///
+/// `hovered` and `pressed` persist while the cursor remains over an entity or
+/// a mouse press is held. `clicked` is a one-frame transition set on a release
+/// over the same entity that was pressed.
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+pub struct PickingState {
+    /// Last world-space ray generated from the cursor and active camera.
+    pub ray: Option<ScenePickRay>,
+    /// Entity currently under the cursor.
+    pub hovered: Option<ScenePickHit>,
+    /// Entity that received the active left-button press.
+    pub pressed: Option<ScenePickHit>,
+    /// Entity clicked this frame.
+    pub clicked: Option<ScenePickHit>,
+}
+
+impl PickingState {
+    /// Returns the currently hovered entity, if any.
+    pub fn hovered_entity(&self) -> Option<Entity> {
+        self.hovered.map(|hit| hit.entity)
+    }
+
+    /// Returns the entity pressed by the active left-button hold, if any.
+    pub fn pressed_entity(&self) -> Option<Entity> {
+        self.pressed.map(|hit| hit.entity)
+    }
+
+    /// Returns the entity clicked on the current frame, if any.
+    pub fn clicked_entity(&self) -> Option<Entity> {
+        self.clicked.map(|hit| hit.entity)
+    }
+
+    fn clear_frame_transitions(&mut self) {
+        self.clicked = None;
+    }
+}
+
+/// Kind of high-level scene picking transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PickEventKind {
+    /// Cursor entered a pickable entity.
+    HoverEnter,
+    /// Cursor left a pickable entity.
+    HoverExit,
+    /// Left mouse button was pressed over a pickable entity.
+    Pressed,
+    /// Left mouse button was released after pressing a pickable entity.
+    Released,
+    /// Left mouse button was released over the same entity that was pressed.
+    Clicked,
+}
+
+/// Event emitted by [`PickingPlugin`] for scene hover and click changes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PickEvent {
+    /// Transition that occurred.
+    pub kind: PickEventKind,
+    /// Entity associated with the transition.
+    pub entity: Entity,
+    /// Most recent hit data for the entity, when it is still under the cursor.
+    pub hit: Option<ScenePickHit>,
+}
+
+impl PickEvent {
+    fn new(kind: PickEventKind, entity: Entity, hit: Option<ScenePickHit>) -> Self {
+        Self { kind, entity, hit }
+    }
+}
+
+/// Initializes resources used by [`PickingPlugin`].
+pub fn initialize_picking(world: &mut World, _window: &Window) {
+    install_picking(world);
+}
+
+/// Inserts picking state and event storage if they are missing.
+pub fn install_picking(world: &mut World) {
+    if !world.contains_resource::<PickingState>() {
+        world.insert_resource(PickingState::default());
+    }
+    if !world.contains_resource::<Events<PickEvent>>() {
+        world.insert_resource(Events::<PickEvent>::new());
+    }
+}
+
+/// Updates scene picking state from the current cursor and active camera.
+pub fn picking_system(world: &mut World) {
+    install_picking(world);
+
+    let (cursor, left_pressed, left_released, cursor_grabbed) =
+        match world.get_resource::<MouseInput>() {
+            Some(mouse) => (
+                mouse.position,
+                mouse.just_pressed(MouseButton::Left),
+                mouse.just_released(MouseButton::Left),
+                mouse.cursor_grabbed(),
+            ),
+            None => (None, false, false, false),
+        };
+
+    let viewport_size = if let Some(window) = world.get_resource::<WindowResource>() {
+        [window.width as f32, window.height as f32]
+    } else if let Some(renderer) = world.get_resource::<RendererResource>() {
+        [
+            renderer.renderer.width() as f32,
+            renderer.renderer.height() as f32,
+        ]
+    } else {
+        [0.0, 0.0]
+    };
+
+    let previous_hovered = world
+        .resource::<PickingState>()
+        .hovered
+        .map(|hit| hit.entity);
+
+    let pick = if !cursor_grabbed {
+        cursor.and_then(|position| {
+            pick_scene_from_viewport(
+                world,
+                Vec2::new(position.x as f32, position.y as f32),
+                viewport_size,
+            )
+        })
+    } else {
+        None
+    };
+
+    let (ray, hovered) = pick
+        .map(|(ray, hit)| (Some(ray), Some(hit)))
+        .unwrap_or((None, None));
+    let hovered_entity = hovered.map(|hit| hit.entity);
+
+    let mut events = Vec::new();
+    if previous_hovered != hovered_entity {
+        if let Some(entity) = previous_hovered {
+            events.push(PickEvent::new(PickEventKind::HoverExit, entity, None));
+        }
+        if let Some(hit) = hovered {
+            events.push(PickEvent::new(
+                PickEventKind::HoverEnter,
+                hit.entity,
+                Some(hit),
+            ));
+        }
+    }
+
+    let mut released_pressed = None;
+    let clicked = {
+        let state = world.resource_mut::<PickingState>();
+        state.clear_frame_transitions();
+        state.ray = ray;
+        state.hovered = hovered;
+
+        if left_pressed {
+            state.pressed = hovered;
+            if let Some(hit) = hovered {
+                events.push(PickEvent::new(
+                    PickEventKind::Pressed,
+                    hit.entity,
+                    Some(hit),
+                ));
+            }
+        }
+
+        if left_released {
+            released_pressed = state.pressed;
+            state.pressed = None;
+        }
+
+        let clicked = released_pressed.and_then(|pressed| {
+            hovered
+                .filter(|hit| hit.entity == pressed.entity)
+                .map(|hit| (pressed, hit))
+        });
+        state.clicked = clicked.map(|(_, hit)| hit);
+        clicked
+    };
+
+    if let Some(pressed) = released_pressed {
+        events.push(PickEvent::new(
+            PickEventKind::Released,
+            pressed.entity,
+            hovered.filter(|hit| hit.entity == pressed.entity),
+        ));
+    }
+    if let Some((pressed, hit)) = clicked {
+        events.push(PickEvent::new(
+            PickEventKind::Clicked,
+            pressed.entity,
+            Some(hit),
+        ));
+    }
+
+    if let Some(pick_events) = world.get_resource_mut::<Events<PickEvent>>() {
+        pick_events.extend(events);
+    }
+}
+
 pub struct SceneEditorPlugin;
 
 impl<T: App> Plugin<T> for SceneEditorPlugin {
@@ -207,6 +420,7 @@ impl<T: App> PluginGroup<T> for SceneAuthoringPlugins {
     fn build(self, app: &mut AppBuilder<T>) {
         app.add_plugin_mut(EguiPlugin);
         app.add_plugin_mut(SceneRendererPlugin);
+        app.add_plugin_mut(PickingPlugin);
         app.add_plugin_mut(SceneEditorPlugin);
         app.add_plugin_mut(GameUiPlugin);
         app.add_plugin_mut(RuntimeUiPlugin);
@@ -217,6 +431,9 @@ impl<T: App> PluginGroup<T> for SceneAuthoringPlugins {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::camera::CameraComponent;
+    use crate::input::MouseInput;
+    use winit::dpi::PhysicalPosition;
 
     #[test]
     fn record_scene_renderer_stats_publishes_diagnostic_labels() {
@@ -245,5 +462,109 @@ mod tests {
         assert_eq!(diagnostics.latest(SCENE_TERRAIN_INSTANCES), Some(1.0));
         assert_eq!(diagnostics.latest(SCENE_SPRITE_INSTANCES), Some(7.0));
         assert_eq!(diagnostics.latest(SCENE_DRAW_CALLS), Some(8.0));
+    }
+
+    #[test]
+    fn picking_system_tracks_hover_press_and_click() {
+        let mut world = World::new();
+        world.insert_resource(WindowResource::new(100, 100));
+        world.insert_resource(MouseInput::default());
+        install_picking(&mut world);
+
+        world.spawn(CameraComponent::default());
+        let entity = world
+            .spawn((
+                TransformComponent::default(),
+                GlobalTransform::default(),
+                RenderMesh::new(MeshPrimitive::Cube, RenderMaterial::default()),
+            ))
+            .id();
+
+        {
+            let mouse = world.resource_mut::<MouseInput>();
+            mouse.set_position(PhysicalPosition::new(50.0, 50.0));
+            mouse.process_button(MouseButton::Left, true);
+        }
+
+        picking_system(&mut world);
+
+        let state = world.resource::<PickingState>();
+        assert_eq!(state.hovered_entity(), Some(entity));
+        assert_eq!(state.pressed_entity(), Some(entity));
+        assert_eq!(state.clicked_entity(), None);
+
+        {
+            let mouse = world.resource_mut::<MouseInput>();
+            mouse.update();
+            mouse.process_button(MouseButton::Left, false);
+        }
+
+        picking_system(&mut world);
+
+        let state = world.resource::<PickingState>();
+        assert_eq!(state.hovered_entity(), Some(entity));
+        assert_eq!(state.pressed_entity(), None);
+        assert_eq!(state.clicked_entity(), Some(entity));
+
+        let kinds = world
+            .resource::<Events<PickEvent>>()
+            .iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                PickEventKind::HoverEnter,
+                PickEventKind::Pressed,
+                PickEventKind::Released,
+                PickEventKind::Clicked,
+            ]
+        );
+    }
+
+    #[test]
+    fn picking_system_emits_hover_exit_when_cursor_leaves() {
+        let mut world = World::new();
+        world.insert_resource(WindowResource::new(100, 100));
+        world.insert_resource(MouseInput::default());
+        install_picking(&mut world);
+
+        world.spawn(CameraComponent::default());
+        let entity = world
+            .spawn((
+                TransformComponent::default(),
+                GlobalTransform::default(),
+                RenderMesh::new(MeshPrimitive::Cube, RenderMaterial::default()),
+            ))
+            .id();
+
+        world
+            .resource_mut::<MouseInput>()
+            .set_position(PhysicalPosition::new(50.0, 50.0));
+        picking_system(&mut world);
+        assert_eq!(
+            world.resource::<PickingState>().hovered_entity(),
+            Some(entity)
+        );
+
+        world
+            .resource_mut::<MouseInput>()
+            .set_position(PhysicalPosition::new(0.0, 0.0));
+        picking_system(&mut world);
+
+        assert_eq!(world.resource::<PickingState>().hovered_entity(), None);
+        let exit = world
+            .resource::<Events<PickEvent>>()
+            .iter()
+            .find(|event| event.kind == PickEventKind::HoverExit)
+            .copied();
+        assert_eq!(
+            exit,
+            Some(PickEvent {
+                kind: PickEventKind::HoverExit,
+                entity,
+                hit: None,
+            })
+        );
     }
 }

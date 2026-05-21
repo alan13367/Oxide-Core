@@ -167,6 +167,12 @@ impl App for MinimalGame {
             .world
             .resource::<AxisInput<GameAxis>>()
             .value(&GameAxis::MoveX);
+        let picked_entity = self
+            .world
+            .get_resource::<PickingState>()
+            .and_then(|picking| picking.hovered_entity())
+            .map(|entity| format!("{entity:?}"))
+            .unwrap_or_else(|| "none".to_string());
         if let Some(marker) = self.marker_animation {
             if let Some(machine) = self.world.get_mut::<AnimationStateMachine>(marker) {
                 let state = if move_x.abs() > 0.01 {
@@ -195,9 +201,10 @@ impl App for MinimalGame {
             ui.label("fixed", format!("Fixed ticks: {fixed_ticks}"));
             ui.label("pulses", format!("Pulses handled: {pulse_count}"));
             ui.label("axis", format!("Move axis: {move_x:.1}"));
+            ui.label("picking", format!("Hovered entity: {picked_entity}"));
             ui.label(
                 "controls",
-                "A/D axis, Space or button: spawn cube; tween + blended clip animation",
+                "A/D axis, Space or button: spawn cube; cursor hover/clicks scene meshes",
             );
             ui.separator();
             ui.button("spawn", "Spawn Cube");
@@ -307,6 +314,14 @@ fn handle_pulse_events(mut events: EventDrain<GameEvent>, mut pulses: ResMut<Pul
     }
 }
 
+fn log_pick_events(mut events: EventCursor<PickEvent>) {
+    for event in events.read() {
+        if event.kind == PickEventKind::Clicked {
+            tracing::debug!("clicked scene entity {:?}", event.entity);
+        }
+    }
+}
+
 fn publish_scene_spawn_result(mut pending: ResMut<PendingSceneRoots>, mut commands: Commands) {
     if pending.entities.is_empty() {
         return;
@@ -342,6 +357,7 @@ fn main() {
         .add_system(AppStage::Update, publish_scene_spawn_result)
         .add_system(AppStage::FixedUpdate, fixed_tick_system)
         .add_system(AppStage::Update, handle_pulse_events)
+        .add_system(AppStage::Update, log_pick_events)
         .add_plugin(PhysicsPlugin)
         .run();
 }

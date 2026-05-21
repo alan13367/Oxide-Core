@@ -370,6 +370,10 @@ labels exported by the prelude.
 The same visibility, layer, and bounds metadata is used by gameplay picking via
 `pick_scene` and `pick_scene_from_viewport`, so authored culling bounds also
 make imported mesh-handle entities pickable.
+At the engine layer, `PickingPlugin` converts the active cursor and camera into
+`PickingState` plus `PickEvent` hover/press/release/click transitions.
+`SceneAuthoringPlugins` installs it automatically; use `PickingPlugin` directly
+for lean runtime selection without authoring UI.
 Texture labels such as `#image_0` or `#crate_albedo` resolve against
 `TextureImageAssets`; file paths such as `textures/crate.png` are loaded by the
 native scene asset pipeline and tracked as scene dependencies. Loaded `.oxmat`

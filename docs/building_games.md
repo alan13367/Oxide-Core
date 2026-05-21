@@ -57,8 +57,8 @@ the engine prelude for normal game code.
 - Use `AxisBindings<T>`, `AxisInput<T>`, and `sync_axis_input_system::<T>` for
   semantic movement axes such as move X/Y, look X/Y, or throttle.
 - Use `SceneAuthoringPlugins` when you want the built-in scene renderer,
-  camera-locked game UI, native UI text rendering, custom font registration,
-  scene editor resource, runtime UI model, and debug overlay.
+  scene picking, camera-locked game UI, native UI text rendering, custom font
+  registration, scene editor resource, runtime UI model, and debug overlay.
 - Use `SceneDescriptor` for small data-driven scenes, child hierarchies,
   registered sprite billboards, and reusable prefabs that can be instantiated
   from `.oxscene` data or Rust with per-instance child overrides. Use authored
@@ -318,6 +318,34 @@ Use `viewport_pick_ray`, `pick_scene`, or `pick_scene_from_viewport` for
 gameplay selection. Picking respects `Visibility` and `RenderLayers`, uses exact
 unit primitive intersections for `RenderMesh`, and uses `RenderBounds` for
 mesh-handle/imported entities.
+
+`SceneAuthoringPlugins` installs `PickingPlugin`, which updates `PickingState`
+and emits `PickEvent` values from the current cursor, active camera, and left
+mouse button. Install `PickingPlugin` directly when a game wants hover/click
+events without the editor or UI plugins:
+
+```rust
+fn interact_with_pick(
+    picking: Res<PickingState>,
+    mut events: EventCursor<PickEvent>,
+) {
+    if let Some(entity) = picking.clicked_entity() {
+        tracing::debug!("clicked scene entity: {:?}", entity);
+    }
+
+    for event in events.read() {
+        if event.kind == PickEventKind::HoverEnter {
+            tracing::trace!("hovered {:?}", event.entity);
+        }
+    }
+}
+
+app::<MyGame>()
+    .add_plugins(DefaultPlugins)
+    .add_plugin(PickingPlugin)
+    .add_system(AppStage::Update, interact_with_pick)
+    .run();
+```
 
 Use `add_labeled_system`, `add_system_to_set`, `add_system_before`, and
 `add_system_after` when plugins or gameplay systems need stable ordering inside

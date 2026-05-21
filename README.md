@@ -20,7 +20,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Camera Render Views**: ordered multi-camera scene rendering with active flags, normalized viewports, per-camera clear colors, and render-layer filtering
 - **Render Layers**: filter meshes, terrain, and sprites by camera/renderable layer masks for world views, first-person overlays, editor-only helpers, and debug cameras
 - **Renderer Culling**: automatic scene rendering applies per-camera frustum checks for primitives, terrain, sprites, and explicitly bounded mesh assets, with optional per-entity render distance limits
-- **Scene Picking**: gameplay-facing camera/cursor ray helpers and nearest-hit picking for visible/layered primitives plus explicitly bounded mesh assets
+- **Scene Picking**: gameplay-facing camera/cursor ray helpers, nearest-hit picking for visible/layered primitives plus explicitly bounded mesh assets, and a `PickingPlugin` that publishes hover/click state and events
 - **Ordered Render Passes**: plugins can register lightweight frame callbacks around stable built-in anchors for scene, text, app queue, and egui rendering
 - **Native Sprites**: engine-owned RGBA/PNG sprite assets plus billboard and UI sprite components for actors, props, weapons, and overlays
 - **Terrain + World Authoring**: heightfield terrain and configurable world descriptors for code-first maps
@@ -63,7 +63,7 @@ The workspace includes several examples demonstrating the engine's rendering cap
 ```bash
 cargo run -p hello_window         # Interactive lit scene
 cargo run -p physics_example      # In-house physics demo (falling/collision)
-cargo run -p minimal_game         # Minimal code-first game template
+cargo run -p minimal_game         # Minimal code-first game template with scene picking
 cargo run -p material_filter_example # Descriptor handle material rendering
 cargo run -p zombie_shooter       # FPS zombie shooter with sprites, terrain, UI, audio, and physics
 cargo run -p unlit_example        # Basic unlit rendering
@@ -86,7 +86,7 @@ Oxide Core uses a data-driven architecture powered by an Entity-Component-System
 
 ### 1. Start With Scene Authoring Plugins
 
-For code-first games, use `DefaultPlugins` plus `SceneAuthoringPlugins`. The engine will render `RenderMesh` entities automatically, cull bounded renderables per camera, and let small games avoid owning a `wgpu::RenderPipeline`, camera buffer, light buffer, depth texture, or primitive GPU mesh.
+For code-first games, use `DefaultPlugins` plus `SceneAuthoringPlugins`. The engine will render `RenderMesh` entities automatically, cull bounded renderables per camera, publish scene picking hover/click state, and let small games avoid owning a `wgpu::RenderPipeline`, camera buffer, light buffer, depth texture, or primitive GPU mesh.
 Plugins are unique by default; custom plugin authors can override `Plugin::name` for stable diagnostics and `Plugin::is_unique` for intentionally repeatable plugin types.
 
 ```rust
