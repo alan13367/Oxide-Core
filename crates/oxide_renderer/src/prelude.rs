@@ -20,6 +20,9 @@ pub use crate::mesh::{
 pub use crate::pipeline::{
     create_basic_pipeline, create_lit_pipeline, create_shader, create_unlit_pipeline,
 };
+pub use crate::post_process::{
+    FullscreenBlitPipeline, RenderTexture, RenderTextureDescriptor, FULLSCREEN_BLIT_SHADER,
+};
 pub use crate::shader::{
     builtin_shader_source, load_shader_source, load_shader_source_from_path, load_wgsl,
     BuiltinShader, ShaderSource, ShaderSourceError, BASIC_SHADER, FALLBACK_SHADER, LIT_SHADER,

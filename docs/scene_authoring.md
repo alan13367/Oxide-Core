@@ -56,6 +56,10 @@ app::<MyGame>()
 
 The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
 `RENDER_PASS_APP_QUEUE`, and `RENDER_PASS_EGUI`.
+For render-to-texture tools, minimaps, capture passes, and future
+post-processing, use `RenderTexture` as the sampled color target and
+`FullscreenBlitPipeline` for fullscreen composites instead of duplicating wgpu
+texture, sampler, bind group layout, and fullscreen triangle setup.
 
 ## Scene Components
 

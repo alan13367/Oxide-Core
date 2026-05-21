@@ -143,6 +143,9 @@ Register a pass with `add_render_pass`, `add_render_pass_before`, or
 `add_render_pass_after`. The callback receives the world and active
 `RenderFrame`; create long-lived GPU resources during startup or
 `AppStage::Prepare`, then encode only the frame work here.
+Use `RenderTexture` for sampled offscreen color targets and
+`FullscreenBlitPipeline` when a pass needs to composite a texture back into a
+target without creating app-specific fullscreen triangle boilerplate.
 
 ```rust
 fn queue_debug_overlay(world: &mut World, frame: &mut RenderFrame) {
@@ -172,6 +175,29 @@ passes remain visible in `RenderPassSchedule::pass_infos` but are skipped by the
 runner. Larger plugins can also toggle a whole render pass set with
 `disable_render_pass_set` and `enable_render_pass_set`, which is useful for
 turning capture, debug, or post-processing stacks on and off from editor UI.
+
+Long-lived post-process resources usually live as non-send resources:
+
+```rust
+struct BloomResources {
+    color: RenderTexture,
+    blit: FullscreenBlitPipeline,
+}
+
+fn prepare_bloom_resources(world: &mut World) {
+    if world.get_non_send_resource::<BloomResources>().is_some() {
+        return;
+    }
+    let renderer = &world.resource::<RendererResource>().renderer;
+    let color = RenderTexture::new(
+        &renderer.device,
+        RenderTextureDescriptor::new(renderer.width(), renderer.height(), renderer.format())
+            .with_label("Bloom Color"),
+    );
+    let blit = FullscreenBlitPipeline::new(&renderer.device, renderer.format());
+    world.insert_non_send_resource(BloomResources { color, blit });
+}
+```
 
 ```rust
 app::<MyGame>()

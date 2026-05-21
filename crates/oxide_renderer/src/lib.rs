@@ -10,6 +10,7 @@ pub mod gltf;
 pub mod material;
 pub mod mesh;
 pub mod pipeline;
+pub mod post_process;
 pub mod prelude;
 pub mod shader;
 pub mod surface;
