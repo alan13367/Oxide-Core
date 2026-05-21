@@ -21,6 +21,8 @@ pub const TRANSFORM_TWEEN_SYSTEM: &str = "oxide.animation.transform_tween";
 pub const TRANSFORM_ANIMATION_SYSTEM: &str = "oxide.animation.transform_clips";
 /// Stable label for the built-in transform animation blend system.
 pub const TRANSFORM_ANIMATION_BLEND_SYSTEM: &str = "oxide.animation.transform_blends";
+/// Stable label for the built-in transform animation state machine system.
+pub const TRANSFORM_ANIMATION_STATE_MACHINE_SYSTEM: &str = "oxide.animation.state_machine";
 /// Stable label for the built-in skin joint matrix update system.
 pub const SKIN_JOINT_MATRICES_SYSTEM: &str = "oxide.animation.skin_joint_matrices";
 /// Stable label for the built-in CPU skinned mesh upload system.
@@ -552,6 +554,190 @@ impl AnimationBlendPlayer {
     }
 }
 
+/// Named weighted animation state made of blend layers.
+#[derive(Clone, Debug)]
+pub struct AnimationState {
+    /// Stable state name used by [`AnimationStateMachine`].
+    pub name: String,
+    /// Blend layers sampled while this state is active.
+    pub layers: Vec<AnimationBlendLayer>,
+}
+
+impl AnimationState {
+    /// Creates a named animation state.
+    pub fn new(name: impl Into<String>, layers: impl Into<Vec<AnimationBlendLayer>>) -> Self {
+        Self {
+            name: name.into(),
+            layers: layers.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct AnimationStateTransition {
+    from: String,
+    to: String,
+    duration: Duration,
+    elapsed: Duration,
+}
+
+/// Component that drives transform animation from named states and transitions.
+#[derive(Component, Clone, Debug)]
+pub struct AnimationStateMachine {
+    states: HashMap<String, AnimationState>,
+    current: String,
+    transition: Option<AnimationStateTransition>,
+}
+
+impl AnimationStateMachine {
+    /// Creates a state machine with an initial state name.
+    pub fn new(initial: impl Into<String>) -> Self {
+        let initial = initial.into();
+        Self {
+            states: HashMap::new(),
+            current: initial,
+            transition: None,
+        }
+    }
+
+    /// Adds a state and returns the machine for builder-style setup.
+    pub fn with_state(mut self, state: AnimationState) -> Self {
+        self.add_state(state);
+        self
+    }
+
+    /// Adds or replaces a state.
+    pub fn add_state(&mut self, state: AnimationState) {
+        self.states.insert(state.name.clone(), state);
+    }
+
+    /// Returns the current state name.
+    pub fn current(&self) -> &str {
+        &self.current
+    }
+
+    /// Returns true when a timed transition is active.
+    pub fn is_transitioning(&self) -> bool {
+        self.transition.is_some()
+    }
+
+    /// Returns transition progress in the range `0.0..=1.0`.
+    pub fn transition_progress(&self) -> f32 {
+        let Some(transition) = &self.transition else {
+            return 1.0;
+        };
+        if transition.duration.is_zero() {
+            1.0
+        } else {
+            (transition.elapsed.as_secs_f32() / transition.duration.as_secs_f32()).clamp(0.0, 1.0)
+        }
+    }
+
+    /// Starts transitioning to `state` over `duration`.
+    ///
+    /// Returns false when the target state does not exist.
+    pub fn set_state(&mut self, state: impl AsRef<str>, duration: Duration) -> bool {
+        let state = state.as_ref();
+        if !self.states.contains_key(state) {
+            return false;
+        }
+        if self.current == state {
+            return true;
+        }
+
+        if duration.is_zero() {
+            self.current = state.to_string();
+            self.transition = None;
+        } else {
+            let from = self.current.clone();
+            self.current = state.to_string();
+            self.transition = Some(AnimationStateTransition {
+                from,
+                to: state.to_string(),
+                duration,
+                elapsed: Duration::ZERO,
+            });
+        }
+        true
+    }
+
+    /// Returns a state by name.
+    pub fn state(&self, name: &str) -> Option<&AnimationState> {
+        self.states.get(name)
+    }
+
+    fn sample(
+        &mut self,
+        delta: Duration,
+        clips: &TransformAnimationClipAssets,
+        fallback: Transform,
+    ) -> Option<Transform> {
+        let mut weighted_samples = Vec::new();
+        if let Some(transition) = &mut self.transition {
+            transition.elapsed += delta;
+            let progress = if transition.duration.is_zero() {
+                1.0
+            } else {
+                (transition.elapsed.as_secs_f32() / transition.duration.as_secs_f32())
+                    .clamp(0.0, 1.0)
+            };
+            let from = transition.from.clone();
+            let to = transition.to.clone();
+            let finished = progress >= 1.0;
+
+            self.sample_state(
+                &from,
+                1.0 - progress,
+                delta,
+                clips,
+                fallback,
+                &mut weighted_samples,
+            );
+            self.sample_state(&to, progress, delta, clips, fallback, &mut weighted_samples);
+
+            if finished {
+                self.transition = None;
+            }
+        } else {
+            let current = self.current.clone();
+            self.sample_state(&current, 1.0, delta, clips, fallback, &mut weighted_samples);
+        }
+
+        blend_transform_samples(&weighted_samples, fallback)
+    }
+
+    fn sample_state(
+        &mut self,
+        state: &str,
+        state_weight: f32,
+        delta: Duration,
+        clips: &TransformAnimationClipAssets,
+        fallback: Transform,
+        samples: &mut Vec<(Transform, f32)>,
+    ) {
+        if state_weight <= f32::EPSILON {
+            return;
+        }
+        let Some(state) = self.states.get_mut(state) else {
+            return;
+        };
+        for layer in &mut state.layers {
+            let layer_weight = layer.weight() * state_weight;
+            if layer_weight <= f32::EPSILON {
+                continue;
+            }
+            let Some(clip) = clips.assets.get(&layer.clip) else {
+                continue;
+            };
+            let sample_time = layer.advance(delta, clip.duration);
+            samples.push((
+                clip.sample_target(layer.target, sample_time, fallback),
+                layer_weight,
+            ));
+        }
+    }
+}
+
 fn advance_animation_time(
     elapsed: &mut Duration,
     playing: &mut bool,
@@ -885,6 +1071,20 @@ pub fn transform_animation_blend_system(
     }
 }
 
+/// System that advances [`AnimationStateMachine`] components.
+pub fn transform_animation_state_machine_system(
+    time: Res<Time>,
+    clips: Res<TransformAnimationClipAssets>,
+    mut query: Query<(&mut TransformComponent, &mut AnimationStateMachine)>,
+) {
+    let delta = time.delta;
+    for (transform, machine) in query.iter_mut() {
+        if let Some(sampled) = machine.sample(delta, &clips, transform.transform) {
+            transform.set_transform(sampled);
+        }
+    }
+}
+
 fn blend_transform_samples(samples: &[(Transform, f32)], fallback: Transform) -> Option<Transform> {
     let mut total_weight = 0.0;
     let mut position = Vec3::ZERO;
@@ -1091,6 +1291,12 @@ impl<T: App> Plugin<T> for AnimationPlugin {
             TRANSFORM_ANIMATION_BLEND_SYSTEM,
             TRANSFORM_ANIMATION_SYSTEM,
             transform_animation_blend_system,
+        );
+        app.add_labeled_system_after_mut(
+            AppStage::Update,
+            TRANSFORM_ANIMATION_STATE_MACHINE_SYSTEM,
+            TRANSFORM_ANIMATION_BLEND_SYSTEM,
+            transform_animation_state_machine_system,
         );
         app.add_labeled_system_after_mut(
             AppStage::PostUpdate,
@@ -1323,6 +1529,75 @@ mod tests {
         let transform = world.get::<TransformComponent>(entity).unwrap();
         assert_eq!(transform.transform.position, Vec3::new(0.0, 4.0, 0.0));
         assert!(transform.is_dirty);
+    }
+
+    #[test]
+    fn transform_animation_state_machine_transitions_between_states() {
+        let target = TransformAnimationTarget(9);
+        let idle_clip = TransformAnimationClip::new("idle", Duration::from_secs(1)).with_channel(
+            TransformAnimationChannel::Translation {
+                target,
+                interpolation: TransformAnimationInterpolation::Linear,
+                keyframes: vec![
+                    Vec3Keyframe {
+                        time: Duration::ZERO,
+                        value: Vec3::ZERO,
+                    },
+                    Vec3Keyframe {
+                        time: Duration::from_secs(1),
+                        value: Vec3::Y,
+                    },
+                ],
+            },
+        );
+        let run_clip = TransformAnimationClip::new("run", Duration::from_secs(1)).with_channel(
+            TransformAnimationChannel::Translation {
+                target,
+                interpolation: TransformAnimationInterpolation::Linear,
+                keyframes: vec![
+                    Vec3Keyframe {
+                        time: Duration::ZERO,
+                        value: Vec3::ZERO,
+                    },
+                    Vec3Keyframe {
+                        time: Duration::from_secs(1),
+                        value: Vec3::new(0.0, 9.0, 0.0),
+                    },
+                ],
+            },
+        );
+        let idle_handle = TransformAnimationClipHandle::new(20);
+        let run_handle = TransformAnimationClipHandle::new(21);
+        let mut world = World::new();
+        let mut time = Time::default();
+        time.set_delta_for_tests(Duration::from_millis(500));
+        world.insert_resource(time);
+        let mut clips = TransformAnimationClipAssets::default();
+        clips.assets.insert(idle_handle, idle_clip);
+        clips.assets.insert(run_handle, run_clip);
+        world.insert_resource(clips);
+        let mut machine = AnimationStateMachine::new("idle")
+            .with_state(AnimationState::new(
+                "idle",
+                vec![AnimationBlendLayer::new(idle_handle, target, 1.0)],
+            ))
+            .with_state(AnimationState::new(
+                "run",
+                vec![AnimationBlendLayer::new(run_handle, target, 1.0)],
+            ));
+        assert!(machine.set_state("run", Duration::from_secs(1)));
+        let entity = world.spawn((TransformComponent::default(), machine)).id();
+
+        let mut queue = CommandQueue::default();
+        let mut system = transform_animation_state_machine_system.into_system();
+        system.run(&mut world, &mut queue);
+
+        let transform = world.get::<TransformComponent>(entity).unwrap();
+        assert_eq!(transform.transform.position, Vec3::new(0.0, 2.5, 0.0));
+        let machine = world.get::<AnimationStateMachine>(entity).unwrap();
+        assert_eq!(machine.current(), "run");
+        assert!(machine.is_transitioning());
+        assert!((machine.transition_progress() - 0.5).abs() < f32::EPSILON);
     }
 
     #[test]

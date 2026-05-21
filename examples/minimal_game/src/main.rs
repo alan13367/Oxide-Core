@@ -40,6 +40,7 @@ struct MinimalGame {
     pulse_timer: Timer,
     scene_handle: Handle<SceneDescriptor>,
     scene_loaded: bool,
+    marker_animation: Option<Entity>,
 }
 
 impl App for MinimalGame {
@@ -85,6 +86,7 @@ impl App for MinimalGame {
             pulse_timer: Timer::repeating(Duration::from_secs(1)),
             scene_handle,
             scene_loaded: false,
+            marker_animation: None,
         }
     }
 
@@ -119,6 +121,7 @@ impl App for MinimalGame {
                             0.15,
                             Duration::from_millis(900),
                         );
+                        self.marker_animation = Some(marker);
                     }
                 }
                 self.world
@@ -161,6 +164,16 @@ impl App for MinimalGame {
             .world
             .resource::<AxisInput<GameAxis>>()
             .value(&GameAxis::MoveX);
+        if let Some(marker) = self.marker_animation {
+            if let Some(machine) = self.world.get_mut::<AnimationStateMachine>(marker) {
+                let state = if move_x.abs() > 0.01 {
+                    "strong"
+                } else {
+                    "subtle"
+                };
+                machine.set_state(state, Duration::from_millis(250));
+            }
+        }
 
         if let Some(ui) = self.world.get_resource_mut::<RuntimeUi>() {
             ui.clear();
@@ -260,15 +273,21 @@ fn add_blended_clip_y_pulse(world: &mut World, entity: Entity, height: f32, dura
             .assets
             .insert(strong_handle, strong_clip);
         world.entity_mut(entity).insert(target).insert(
-            AnimationBlendPlayer::new()
-                .with_layer(
-                    AnimationBlendLayer::new(subtle_handle, target, 0.4)
-                        .with_repeat(TweenRepeat::PingPong),
-                )
-                .with_layer(
-                    AnimationBlendLayer::new(strong_handle, target, 0.6)
-                        .with_repeat(TweenRepeat::PingPong),
-                ),
+            AnimationStateMachine::new("subtle")
+                .with_state(AnimationState::new(
+                    "subtle",
+                    vec![AnimationBlendLayer::new(subtle_handle, target, 1.0)
+                        .with_repeat(TweenRepeat::PingPong)],
+                ))
+                .with_state(AnimationState::new(
+                    "strong",
+                    vec![
+                        AnimationBlendLayer::new(subtle_handle, target, 0.35)
+                            .with_repeat(TweenRepeat::PingPong),
+                        AnimationBlendLayer::new(strong_handle, target, 0.65)
+                            .with_repeat(TweenRepeat::PingPong),
+                    ],
+                )),
         );
     }
 }

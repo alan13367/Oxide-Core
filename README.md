@@ -34,7 +34,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **System Ordering**: Label systems, group them into sets, and register before/after constraints inside app stages or standalone schedules
 - **Startup Schedule**: Register one-shot setup systems with normal ECS params through `AppStage::Startup`
 - **System-Requested Exit**: Gameplay and tooling systems can request clean shutdown through the `AppExit` resource
-- **Transform Animation**: ECS components and systems animate local transforms with tween playback, imported transform clips, and weighted clip blending, including looping, one-shot, and ping-pong playback
+- **Transform Animation**: ECS components and systems animate local transforms with tween playback, imported transform clips, weighted clip blending, and named state transitions, including looping, one-shot, and ping-pong playback
 - **Hierarchy Visibility**: Hide renderable entities or whole subtrees with `Visibility` and propagated `InheritedVisibility`
 - **Action + Axis Input Mapping**: Bind game-defined actions and movement axes to keyboard/mouse triggers with `ActionBindings`, `AxisBindings`, and sync systems
 - **Fixed-Step Scheduling**: Use `AppStage::FixedUpdate` with `FixedTime` for deterministic gameplay ticks inside the normal app runner
@@ -525,8 +525,9 @@ Imported glTF transform animation channels are converted into
 carry `GltfNodeRef` and `TransformAnimationTarget`, so gameplay can attach an
 `AnimationPlayer` with the corresponding clip handle and target ID without
 manually reconstructing node identity. `AnimationBlendPlayer` can blend multiple
-weighted clip layers on the same target for locomotion, aiming, and smooth
-state transitions.
+weighted clip layers on the same target for locomotion and aiming, while
+`AnimationStateMachine` switches between named clip-layer states with timed
+transitions.
 Imported glTF skins are converted into `SkeletonSkin` assets labeled by skin
 index. Skinned mesh nodes retain `GltfSkinRef` plus `SkinFilter`, and imported
 primitive joint/weight attributes are preserved alongside the mesh entry as

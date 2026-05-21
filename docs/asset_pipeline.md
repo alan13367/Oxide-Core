@@ -144,7 +144,9 @@ Spawned glTF nodes receive `GltfNodeRef` and `TransformAnimationTarget`
 components based on the source glTF node index, so gameplay can attach
 `AnimationPlayer` components to nodes using the same clip asset and target ID.
 For character controllers and state transitions, `AnimationBlendPlayer` can
-combine multiple weighted clip layers before transform propagation.
+combine multiple weighted clip layers before transform propagation, and
+`AnimationStateMachine` can transition between named layer sets without
+rebuilding gameplay components.
 Imported glTF skins are converted into `SkeletonSkin` assets and published with
 labels such as `skin_0`. The importer preserves joint node indices, inverse bind
 matrices, optional skeleton roots, and primitive `JOINTS_0`/`WEIGHTS_0`

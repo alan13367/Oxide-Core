@@ -2,14 +2,15 @@
 
 pub use crate::animation::{
     cpu_skinned_mesh_system, skin_joint_matrices_system, transform_animation_blend_system,
-    transform_animation_system, transform_tween_system, AnimationBlendLayer, AnimationBlendPlayer,
-    AnimationPlayer, AnimationPlugin, CpuSkinnedMesh, QuatKeyframe, SkeletonSkin,
-    SkeletonSkinAssets, SkeletonSkinHandle, SkinFilter, SkinJointMatrices,
-    TransformAnimationChannel, TransformAnimationClip, TransformAnimationClipAssets,
-    TransformAnimationClipHandle, TransformAnimationInterpolation, TransformAnimationProperty,
-    TransformAnimationTarget, TransformTween, TweenEasing, TweenRepeat, Vec3Keyframe,
-    CPU_SKINNED_MESH_SYSTEM, SKIN_JOINT_MATRICES_SYSTEM, TRANSFORM_ANIMATION_BLEND_SYSTEM,
-    TRANSFORM_ANIMATION_SYSTEM, TRANSFORM_TWEEN_SYSTEM,
+    transform_animation_state_machine_system, transform_animation_system, transform_tween_system,
+    AnimationBlendLayer, AnimationBlendPlayer, AnimationPlayer, AnimationPlugin, AnimationState,
+    AnimationStateMachine, CpuSkinnedMesh, QuatKeyframe, SkeletonSkin, SkeletonSkinAssets,
+    SkeletonSkinHandle, SkinFilter, SkinJointMatrices, TransformAnimationChannel,
+    TransformAnimationClip, TransformAnimationClipAssets, TransformAnimationClipHandle,
+    TransformAnimationInterpolation, TransformAnimationProperty, TransformAnimationTarget,
+    TransformTween, TweenEasing, TweenRepeat, Vec3Keyframe, CPU_SKINNED_MESH_SYSTEM,
+    SKIN_JOINT_MATRICES_SYSTEM, TRANSFORM_ANIMATION_BLEND_SYSTEM,
+    TRANSFORM_ANIMATION_STATE_MACHINE_SYSTEM, TRANSFORM_ANIMATION_SYSTEM, TRANSFORM_TWEEN_SYSTEM,
 };
 #[cfg(feature = "gltf-import")]
 pub use crate::app::GLTF_SCENE_ASSET_EVENTS_SYSTEM;
