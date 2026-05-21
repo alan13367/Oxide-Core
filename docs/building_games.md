@@ -428,6 +428,10 @@ fn record_spawn_pressure(mut diagnostics: ResMut<Diagnostics>, mut query: Query<
 For render-specific tooling, call `SceneRenderer::stats()` to inspect the last
 prepared frame's active camera views, visible/layer-matching renderable
 candidates, culled renderables, submitted instances, and draw calls.
+When `SceneRendererPlugin` is installed, the same values are recorded into
+`Diagnostics` with labels such as `SCENE_RENDERABLE_CANDIDATES`,
+`SCENE_CULLED_RENDERABLES`, and `SCENE_DRAW_CALLS`, and the built-in dev overlay
+shows the headline render counts.
 
 Editor and import tooling should call `SceneDescriptor::validate()` before
 publishing authored data. Native `.oxscene` loads also validate automatically,

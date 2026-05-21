@@ -5,7 +5,12 @@ mod gltf_hierarchy;
 mod oxscene;
 
 use crate::app::{App, AppBuilder, AppStage, Plugin, PluginGroup};
-use crate::diagnostics::{Diagnostics, FPS, FRAME_TIME_MS};
+use crate::diagnostics::{
+    Diagnostics, FPS, FRAME_TIME_MS, SCENE_CAMERA_VIEWS, SCENE_CUBE_INSTANCES,
+    SCENE_CULLED_RENDERABLES, SCENE_DRAW_CALLS, SCENE_MESH_HANDLE_INSTANCES,
+    SCENE_RENDERABLE_CANDIDATES, SCENE_SPHERE_INSTANCES, SCENE_SPRITE_INSTANCES,
+    SCENE_TERRAIN_INSTANCES,
+};
 use crate::ecs::{RendererResource, WindowResource, World};
 use crate::render::RenderFrame;
 use crate::ui::{
@@ -78,9 +83,30 @@ pub fn prepare_scene_renderer(world: &mut World) {
             )
         };
         scene_renderer.prepare(&device, &queue, world, aspect_ratio);
+        if let Some(diagnostics) = world.get_resource_mut::<Diagnostics>() {
+            record_scene_renderer_stats(diagnostics, scene_renderer.stats());
+        }
     }
 
     world.insert_non_send_resource(scene_renderer);
+}
+
+pub fn record_scene_renderer_stats(diagnostics: &mut Diagnostics, stats: SceneRendererStats) {
+    diagnostics.record(SCENE_CAMERA_VIEWS, stats.camera_views as f64);
+    diagnostics.record(
+        SCENE_RENDERABLE_CANDIDATES,
+        stats.renderable_candidates as f64,
+    );
+    diagnostics.record(SCENE_CULLED_RENDERABLES, stats.culled_renderables as f64);
+    diagnostics.record(SCENE_CUBE_INSTANCES, stats.cube_instances as f64);
+    diagnostics.record(SCENE_SPHERE_INSTANCES, stats.sphere_instances as f64);
+    diagnostics.record(
+        SCENE_MESH_HANDLE_INSTANCES,
+        stats.mesh_handle_instances as f64,
+    );
+    diagnostics.record(SCENE_TERRAIN_INSTANCES, stats.terrain_instances as f64);
+    diagnostics.record(SCENE_SPRITE_INSTANCES, stats.sprite_instances as f64);
+    diagnostics.record(SCENE_DRAW_CALLS, stats.draw_calls as f64);
 }
 
 pub fn queue_scene_renderer(world: &mut World, frame: &mut RenderFrame) {
@@ -158,6 +184,18 @@ pub fn show_scene_authoring_egui(world: &mut World, ctx: &egui::Context) {
             if let Some(fps) = diagnostics.latest(FPS) {
                 snapshot.fps = fps as f32;
             }
+            if let Some(camera_views) = diagnostics.latest(SCENE_CAMERA_VIEWS) {
+                snapshot.scene_camera_views = camera_views as u32;
+            }
+            if let Some(candidates) = diagnostics.latest(SCENE_RENDERABLE_CANDIDATES) {
+                snapshot.scene_renderable_candidates = candidates as u32;
+            }
+            if let Some(culled) = diagnostics.latest(SCENE_CULLED_RENDERABLES) {
+                snapshot.scene_culled_renderables = culled as u32;
+            }
+            if let Some(draw_calls) = diagnostics.latest(SCENE_DRAW_CALLS) {
+                snapshot.scene_draw_calls = draw_calls as u32;
+            }
         }
         overlay.show_egui(ctx, snapshot);
     }
@@ -174,5 +212,39 @@ impl<T: App> PluginGroup<T> for SceneAuthoringPlugins {
         app.add_plugin_mut(GameUiPlugin);
         app.add_plugin_mut(RuntimeUiPlugin);
         app.add_plugin_mut(DevOverlayPlugin);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn record_scene_renderer_stats_publishes_diagnostic_labels() {
+        let mut diagnostics = Diagnostics::default();
+        record_scene_renderer_stats(
+            &mut diagnostics,
+            SceneRendererStats {
+                camera_views: 2,
+                renderable_candidates: 10,
+                culled_renderables: 3,
+                cube_instances: 4,
+                sphere_instances: 5,
+                mesh_handle_instances: 6,
+                terrain_instances: 1,
+                sprite_instances: 7,
+                draw_calls: 8,
+            },
+        );
+
+        assert_eq!(diagnostics.latest(SCENE_CAMERA_VIEWS), Some(2.0));
+        assert_eq!(diagnostics.latest(SCENE_RENDERABLE_CANDIDATES), Some(10.0));
+        assert_eq!(diagnostics.latest(SCENE_CULLED_RENDERABLES), Some(3.0));
+        assert_eq!(diagnostics.latest(SCENE_CUBE_INSTANCES), Some(4.0));
+        assert_eq!(diagnostics.latest(SCENE_SPHERE_INSTANCES), Some(5.0));
+        assert_eq!(diagnostics.latest(SCENE_MESH_HANDLE_INSTANCES), Some(6.0));
+        assert_eq!(diagnostics.latest(SCENE_TERRAIN_INSTANCES), Some(1.0));
+        assert_eq!(diagnostics.latest(SCENE_SPRITE_INSTANCES), Some(7.0));
+        assert_eq!(diagnostics.latest(SCENE_DRAW_CALLS), Some(8.0));
     }
 }

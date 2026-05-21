@@ -13,6 +13,24 @@ pub const FRAME_TIME_MS: &str = "oxide.frame_time_ms";
 pub const FPS: &str = "oxide.fps";
 /// Frame delta time in seconds.
 pub const DELTA_SECONDS: &str = "oxide.delta_seconds";
+/// Active scene camera views prepared during the latest scene renderer frame.
+pub const SCENE_CAMERA_VIEWS: &str = "oxide.scene.camera_views";
+/// Visible, layer-matching scene renderables considered by the latest prepare.
+pub const SCENE_RENDERABLE_CANDIDATES: &str = "oxide.scene.renderable_candidates";
+/// Scene renderables skipped by frustum or distance culling.
+pub const SCENE_CULLED_RENDERABLES: &str = "oxide.scene.culled_renderables";
+/// Cube primitive instances submitted by the scene renderer.
+pub const SCENE_CUBE_INSTANCES: &str = "oxide.scene.cube_instances";
+/// Sphere primitive instances submitted by the scene renderer.
+pub const SCENE_SPHERE_INSTANCES: &str = "oxide.scene.sphere_instances";
+/// Mesh-handle instances submitted by the scene renderer.
+pub const SCENE_MESH_HANDLE_INSTANCES: &str = "oxide.scene.mesh_handle_instances";
+/// Terrain instances submitted by the scene renderer.
+pub const SCENE_TERRAIN_INSTANCES: &str = "oxide.scene.terrain_instances";
+/// Sprite instances submitted by the scene renderer.
+pub const SCENE_SPRITE_INSTANCES: &str = "oxide.scene.sprite_instances";
+/// Scene renderer draw calls queued during the latest frame.
+pub const SCENE_DRAW_CALLS: &str = "oxide.scene.draw_calls";
 
 /// A rolling scalar diagnostic stream.
 #[derive(Clone, Debug)]
@@ -176,6 +194,15 @@ pub fn initialize_diagnostics(world: &mut World, _window: &crate::window::Window
         diagnostics.register(FRAME_TIME_MS);
         diagnostics.register(FPS);
         diagnostics.register(DELTA_SECONDS);
+        diagnostics.register(SCENE_CAMERA_VIEWS);
+        diagnostics.register(SCENE_RENDERABLE_CANDIDATES);
+        diagnostics.register(SCENE_CULLED_RENDERABLES);
+        diagnostics.register(SCENE_CUBE_INSTANCES);
+        diagnostics.register(SCENE_SPHERE_INSTANCES);
+        diagnostics.register(SCENE_MESH_HANDLE_INSTANCES);
+        diagnostics.register(SCENE_TERRAIN_INSTANCES);
+        diagnostics.register(SCENE_SPRITE_INSTANCES);
+        diagnostics.register(SCENE_DRAW_CALLS);
         world.insert_resource(diagnostics);
     }
 }

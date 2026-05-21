@@ -362,7 +362,9 @@ extent; otherwise they remain visible and layer-filtered but conservatively
 uncullable.
 `SceneRenderer::stats()` reports the last prepared frame's camera view count,
 visible/layer-matching renderable candidates, cull count, submitted instance
-counts, and draw calls for overlays or editor diagnostics.
+counts, and draw calls for overlays or editor diagnostics. Engine integration
+records the same counters into `Diagnostics` using the `SCENE_*` diagnostic
+labels exported by the prelude.
 Texture labels such as `#image_0` or `#crate_albedo` resolve against
 `TextureImageAssets`; file paths such as `textures/crate.png` are loaded by the
 native scene asset pipeline and tracked as scene dependencies. Loaded `.oxmat`

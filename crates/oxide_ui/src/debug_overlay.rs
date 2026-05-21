@@ -20,6 +20,10 @@ pub struct DevOverlaySnapshot {
     pub resource_count: usize,
     pub frame_ms: f32,
     pub fps: f32,
+    pub scene_camera_views: u32,
+    pub scene_renderable_candidates: u32,
+    pub scene_culled_renderables: u32,
+    pub scene_draw_calls: u32,
 }
 
 impl DevOverlaySnapshot {
@@ -40,6 +44,10 @@ impl DevOverlaySnapshot {
             resource_count: world.resource_count(),
             frame_ms,
             fps,
+            scene_camera_views: 0,
+            scene_renderable_candidates: 0,
+            scene_culled_renderables: 0,
+            scene_draw_calls: 0,
         }
     }
 }
@@ -55,6 +63,17 @@ impl DevOverlay {
             ui.label(format!("Resources: {}", snapshot.resource_count));
             ui.label(format!("Frame: {:.2} ms", snapshot.frame_ms));
             ui.label(format!("FPS: {:.1}", snapshot.fps));
+            ui.separator();
+            ui.label(format!("Scene Cameras: {}", snapshot.scene_camera_views));
+            ui.label(format!(
+                "Scene Renderables: {}",
+                snapshot.scene_renderable_candidates
+            ));
+            ui.label(format!(
+                "Scene Culled: {}",
+                snapshot.scene_culled_renderables
+            ));
+            ui.label(format!("Scene Draw Calls: {}", snapshot.scene_draw_calls));
         });
     }
 }

@@ -444,6 +444,9 @@ metrics into the egui dev overlay.
 For render-specific tooling, `SceneRenderer::stats()` returns the last prepared
 frame's active camera view count, visible/layer-matching renderable candidates,
 culled renderable count, submitted instance counts, and draw calls.
+`SceneRendererPlugin` also records those counters into `Diagnostics` under
+labels such as `SCENE_CULLED_RENDERABLES` and `SCENE_DRAW_CALLS`, and the dev
+overlay displays the headline scene counts.
 
 ### 8. Action Input Mapping
 
