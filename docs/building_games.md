@@ -26,7 +26,8 @@ the engine prelude for normal game code.
 - Use `TransformAnimationClip`, `TransformAnimationClipAssets`, and
   `AnimationPlayer` for imported or authored transform clips. glTF nodes are
   spawned with `TransformAnimationTarget` values based on their source node
-  index.
+  index. Use `AnimationBlendPlayer` and `AnimationBlendLayer` when gameplay
+  needs weighted blends between clips, such as locomotion or aim offsets.
 - glTF skins are imported into `SkeletonSkinAssets`; skinned nodes receive
   `SkinFilter` and `GltfSkinRef` so character meshes have stable skin handles
   before GPU skinning is enabled. `AnimationPlugin` also computes
@@ -237,6 +238,17 @@ commands.spawn((
 ));
 ```
 
+Blend multiple clips on the same target with `AnimationBlendPlayer`:
+
+```rust
+commands.spawn((
+    TransformComponent::default(),
+    AnimationBlendPlayer::new()
+        .with_layer(AnimationBlendLayer::new(idle_clip, TransformAnimationTarget(0), 0.35))
+        .with_layer(AnimationBlendLayer::new(run_clip, TransformAnimationTarget(0), 0.65)),
+));
+```
+
 `Visibility` controls scene renderer collection for meshes, sprites, and
 terrain. Visibility propagates through `Parent`/`Children`, so hiding a parent
 hides its descendants:
@@ -275,7 +287,7 @@ Use `add_labeled_system`, `add_system_to_set`, `add_system_before`, and
 `add_system_after` when plugins or gameplay systems need stable ordering inside
 a stage. Before/after targets can reference either a system label or a set
 name. Built-in labels include `OXSCENE_SPAWN_SYSTEM`, `GLTF_SCENE_SPAWN_SYSTEM`,
-and `TRANSFORM_PROPAGATE_SYSTEM`.
+`TRANSFORM_ANIMATION_BLEND_SYSTEM`, and `TRANSFORM_PROPAGATE_SYSTEM`.
 
 Use `State<T>` for coarse game modes and `.run_if(...)` for mode-specific
 systems. `in_state(...)` gates normal steady-state work, while

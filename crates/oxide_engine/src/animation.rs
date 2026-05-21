@@ -19,6 +19,8 @@ use crate::ecs::{Entity, Query, RendererResource, Res, Time, World};
 pub const TRANSFORM_TWEEN_SYSTEM: &str = "oxide.animation.transform_tween";
 /// Stable label for the built-in transform animation clip playback system.
 pub const TRANSFORM_ANIMATION_SYSTEM: &str = "oxide.animation.transform_clips";
+/// Stable label for the built-in transform animation blend system.
+pub const TRANSFORM_ANIMATION_BLEND_SYSTEM: &str = "oxide.animation.transform_blends";
 /// Stable label for the built-in skin joint matrix update system.
 pub const SKIN_JOINT_MATRICES_SYSTEM: &str = "oxide.animation.skin_joint_matrices";
 /// Stable label for the built-in CPU skinned mesh upload system.
@@ -391,33 +393,200 @@ impl AnimationPlayer {
     }
 
     fn advance(&mut self, delta: Duration, clip_duration: Duration) -> Duration {
-        if self.playing && !self.finished {
-            self.elapsed += delta.mul_f32(self.speed);
-            if self.repeat == TweenRepeat::Once && self.elapsed >= clip_duration {
-                self.elapsed = clip_duration;
-                self.finished = true;
-                self.playing = false;
-            }
-        }
+        advance_animation_time(
+            &mut self.elapsed,
+            &mut self.playing,
+            &mut self.finished,
+            self.speed,
+            self.repeat,
+            delta,
+            clip_duration,
+        )
+    }
+}
 
-        if clip_duration.is_zero() || self.elapsed <= clip_duration {
-            self.elapsed
-        } else {
-            match self.repeat {
-                TweenRepeat::Once => clip_duration,
-                TweenRepeat::Loop => Duration::from_secs_f64(
-                    self.elapsed.as_secs_f64() % clip_duration.as_secs_f64(),
-                ),
-                TweenRepeat::PingPong => {
-                    let elapsed = self.elapsed.as_secs_f64();
-                    let duration = clip_duration.as_secs_f64();
-                    let cycle = (elapsed / duration).floor() as u64;
-                    let local = elapsed % duration;
-                    if cycle.is_multiple_of(2) {
-                        Duration::from_secs_f64(local)
-                    } else {
-                        Duration::from_secs_f64(duration - local)
-                    }
+/// Weighted transform animation clip layer used by [`AnimationBlendPlayer`].
+#[derive(Clone, Debug)]
+pub struct AnimationBlendLayer {
+    /// Clip asset handle to sample.
+    pub clip: TransformAnimationClipHandle,
+    /// Target channel ID to sample from the clip.
+    pub target: TransformAnimationTarget,
+    weight: f32,
+    elapsed: Duration,
+    speed: f32,
+    repeat: TweenRepeat,
+    playing: bool,
+    finished: bool,
+}
+
+impl AnimationBlendLayer {
+    /// Creates a looping blend layer for `clip` and `target`.
+    pub fn new(
+        clip: TransformAnimationClipHandle,
+        target: TransformAnimationTarget,
+        weight: f32,
+    ) -> Self {
+        Self {
+            clip,
+            target,
+            weight: weight.max(0.0),
+            elapsed: Duration::ZERO,
+            speed: 1.0,
+            repeat: TweenRepeat::Loop,
+            playing: true,
+            finished: false,
+        }
+    }
+
+    /// Sets repeat behavior.
+    pub fn with_repeat(mut self, repeat: TweenRepeat) -> Self {
+        self.repeat = repeat;
+        self
+    }
+
+    /// Sets playback speed. Negative values are clamped to zero.
+    pub fn with_speed(mut self, speed: f32) -> Self {
+        self.speed = speed.max(0.0);
+        self
+    }
+
+    /// Sets this layer's blend weight. Negative values are clamped to zero.
+    pub fn set_weight(&mut self, weight: f32) {
+        self.weight = weight.max(0.0);
+    }
+
+    /// Returns this layer's blend weight.
+    pub fn weight(&self) -> f32 {
+        self.weight
+    }
+
+    /// Returns elapsed playback time before repeat wrapping.
+    pub fn elapsed(&self) -> Duration {
+        self.elapsed
+    }
+
+    /// Returns true when playback is active.
+    pub fn is_playing(&self) -> bool {
+        self.playing
+    }
+
+    /// Returns true when one-shot playback has reached the end.
+    pub fn is_finished(&self) -> bool {
+        self.finished
+    }
+
+    /// Starts or resumes playback.
+    pub fn play(&mut self) {
+        self.playing = true;
+    }
+
+    /// Pauses playback.
+    pub fn pause(&mut self) {
+        self.playing = false;
+    }
+
+    /// Resets elapsed time and starts playback.
+    pub fn reset(&mut self) {
+        self.elapsed = Duration::ZERO;
+        self.finished = false;
+        self.playing = true;
+    }
+
+    fn advance(&mut self, delta: Duration, clip_duration: Duration) -> Duration {
+        advance_animation_time(
+            &mut self.elapsed,
+            &mut self.playing,
+            &mut self.finished,
+            self.speed,
+            self.repeat,
+            delta,
+            clip_duration,
+        )
+    }
+}
+
+/// Component that blends multiple transform animation clips on one entity.
+#[derive(Component, Clone, Debug, Default)]
+pub struct AnimationBlendPlayer {
+    layers: Vec<AnimationBlendLayer>,
+}
+
+impl AnimationBlendPlayer {
+    /// Creates an empty blend player.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates a blend player from initial layers.
+    pub fn with_layers(layers: impl Into<Vec<AnimationBlendLayer>>) -> Self {
+        Self {
+            layers: layers.into(),
+        }
+    }
+
+    /// Adds a layer and returns the player for builder-style setup.
+    pub fn with_layer(mut self, layer: AnimationBlendLayer) -> Self {
+        self.layers.push(layer);
+        self
+    }
+
+    /// Adds a layer to this player.
+    pub fn add_layer(&mut self, layer: AnimationBlendLayer) {
+        self.layers.push(layer);
+    }
+
+    /// Returns immutable access to blend layers.
+    pub fn layers(&self) -> &[AnimationBlendLayer] {
+        &self.layers
+    }
+
+    /// Returns mutable access to blend layers.
+    pub fn layers_mut(&mut self) -> &mut [AnimationBlendLayer] {
+        &mut self.layers
+    }
+
+    /// Returns true when no layers are configured.
+    pub fn is_empty(&self) -> bool {
+        self.layers.is_empty()
+    }
+}
+
+fn advance_animation_time(
+    elapsed: &mut Duration,
+    playing: &mut bool,
+    finished: &mut bool,
+    speed: f32,
+    repeat: TweenRepeat,
+    delta: Duration,
+    clip_duration: Duration,
+) -> Duration {
+    if *playing && !*finished {
+        *elapsed += delta.mul_f32(speed);
+        if repeat == TweenRepeat::Once && *elapsed >= clip_duration {
+            *elapsed = clip_duration;
+            *finished = true;
+            *playing = false;
+        }
+    }
+
+    if clip_duration.is_zero() || *elapsed <= clip_duration {
+        *elapsed
+    } else {
+        match repeat {
+            TweenRepeat::Once => clip_duration,
+            TweenRepeat::Loop => {
+                Duration::from_secs_f64(elapsed.as_secs_f64() % clip_duration.as_secs_f64())
+            }
+            TweenRepeat::PingPong => {
+                let elapsed = elapsed.as_secs_f64();
+                let duration = clip_duration.as_secs_f64();
+                let cycle = (elapsed / duration).floor() as u64;
+                let local = elapsed % duration;
+                if cycle.is_multiple_of(2) {
+                    Duration::from_secs_f64(local)
+                } else {
+                    Duration::from_secs_f64(duration - local)
                 }
             }
         }
@@ -685,6 +854,78 @@ pub fn transform_animation_system(
     }
 }
 
+/// System that advances and blends [`AnimationBlendPlayer`] layers.
+pub fn transform_animation_blend_system(
+    time: Res<Time>,
+    clips: Res<TransformAnimationClipAssets>,
+    mut query: Query<(&mut TransformComponent, &mut AnimationBlendPlayer)>,
+) {
+    let delta = time.delta;
+    for (transform, player) in query.iter_mut() {
+        let fallback = transform.transform;
+        let samples = player
+            .layers_mut()
+            .iter_mut()
+            .filter_map(|layer| {
+                if layer.weight() <= 0.0 {
+                    return None;
+                }
+                let clip = clips.assets.get(&layer.clip)?;
+                let sample_time = layer.advance(delta, clip.duration);
+                Some((
+                    clip.sample_target(layer.target, sample_time, fallback),
+                    layer.weight(),
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        if let Some(blended) = blend_transform_samples(&samples, fallback) {
+            transform.set_transform(blended);
+        }
+    }
+}
+
+fn blend_transform_samples(samples: &[(Transform, f32)], fallback: Transform) -> Option<Transform> {
+    let mut total_weight = 0.0;
+    let mut position = Vec3::ZERO;
+    let mut scale = Vec3::ZERO;
+    let mut rotation = Quat::IDENTITY;
+    let mut rotation_weight = 0.0;
+
+    for (sample, weight) in samples {
+        let weight = weight.max(0.0);
+        if weight <= f32::EPSILON {
+            continue;
+        }
+        position += sample.position * weight;
+        scale += sample.scale * weight;
+        total_weight += weight;
+
+        if rotation_weight <= f32::EPSILON {
+            rotation = sample.rotation;
+            rotation_weight = weight;
+        } else {
+            let t = weight / (rotation_weight + weight);
+            rotation = rotation.slerp(sample.rotation, t);
+            rotation_weight += weight;
+        }
+    }
+
+    if total_weight <= f32::EPSILON {
+        return None;
+    }
+
+    Some(Transform {
+        position: position / total_weight,
+        rotation: if rotation_weight <= f32::EPSILON {
+            fallback.rotation
+        } else {
+            rotation.normalize()
+        },
+        scale: scale / total_weight,
+    })
+}
+
 /// Updates [`SkinJointMatrices`] from current joint [`GlobalTransform`] values.
 pub fn skin_joint_matrices_system(world: &mut World) {
     if !world.contains_resource::<SkeletonSkinAssets>() {
@@ -844,6 +1085,12 @@ impl<T: App> Plugin<T> for AnimationPlugin {
             AppStage::Update,
             TRANSFORM_ANIMATION_SYSTEM,
             transform_animation_system,
+        );
+        app.add_labeled_system_after_mut(
+            AppStage::Update,
+            TRANSFORM_ANIMATION_BLEND_SYSTEM,
+            TRANSFORM_ANIMATION_SYSTEM,
+            transform_animation_blend_system,
         );
         app.add_labeled_system_after_mut(
             AppStage::PostUpdate,
@@ -1006,6 +1253,75 @@ mod tests {
 
         let transform = world.get::<TransformComponent>(entity).unwrap();
         assert_eq!(transform.transform.position, Vec3::new(0.0, 0.5, 0.0));
+        assert!(transform.is_dirty);
+    }
+
+    #[test]
+    fn transform_animation_blend_system_blends_weighted_clip_samples() {
+        let target = TransformAnimationTarget(8);
+        let low_clip = TransformAnimationClip::new("low", Duration::from_secs(1)).with_channel(
+            TransformAnimationChannel::Translation {
+                target,
+                interpolation: TransformAnimationInterpolation::Linear,
+                keyframes: vec![
+                    Vec3Keyframe {
+                        time: Duration::ZERO,
+                        value: Vec3::ZERO,
+                    },
+                    Vec3Keyframe {
+                        time: Duration::from_secs(1),
+                        value: Vec3::new(0.0, 2.0, 0.0),
+                    },
+                ],
+            },
+        );
+        let high_clip = TransformAnimationClip::new("high", Duration::from_secs(1)).with_channel(
+            TransformAnimationChannel::Translation {
+                target,
+                interpolation: TransformAnimationInterpolation::Linear,
+                keyframes: vec![
+                    Vec3Keyframe {
+                        time: Duration::ZERO,
+                        value: Vec3::ZERO,
+                    },
+                    Vec3Keyframe {
+                        time: Duration::from_secs(1),
+                        value: Vec3::new(0.0, 10.0, 0.0),
+                    },
+                ],
+            },
+        );
+        let low_handle = TransformAnimationClipHandle::new(10);
+        let high_handle = TransformAnimationClipHandle::new(11);
+        let mut world = World::new();
+        let mut time = Time::default();
+        time.set_delta_for_tests(Duration::from_millis(500));
+        world.insert_resource(time);
+        let mut clips = TransformAnimationClipAssets::default();
+        clips.assets.insert(low_handle, low_clip);
+        clips.assets.insert(high_handle, high_clip);
+        world.insert_resource(clips);
+        let entity = world
+            .spawn((
+                TransformComponent::default(),
+                AnimationBlendPlayer::new()
+                    .with_layer(
+                        AnimationBlendLayer::new(low_handle, target, 0.25)
+                            .with_repeat(TweenRepeat::Once),
+                    )
+                    .with_layer(
+                        AnimationBlendLayer::new(high_handle, target, 0.75)
+                            .with_repeat(TweenRepeat::Once),
+                    ),
+            ))
+            .id();
+
+        let mut queue = CommandQueue::default();
+        let mut system = transform_animation_blend_system.into_system();
+        system.run(&mut world, &mut queue);
+
+        let transform = world.get::<TransformComponent>(entity).unwrap();
+        assert_eq!(transform.transform.position, Vec3::new(0.0, 4.0, 0.0));
         assert!(transform.is_dirty);
     }
 

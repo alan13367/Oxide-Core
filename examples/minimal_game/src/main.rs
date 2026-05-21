@@ -113,7 +113,12 @@ impl App for MinimalGame {
                     if let Some(marker) =
                         first_entity_with_tag_in_instance(&mut self.world, scene_instance, "marker")
                     {
-                        add_clip_y_pulse(&mut self.world, marker, 0.15, Duration::from_millis(900));
+                        add_blended_clip_y_pulse(
+                            &mut self.world,
+                            marker,
+                            0.15,
+                            Duration::from_millis(900),
+                        );
                     }
                 }
                 self.world
@@ -176,7 +181,7 @@ impl App for MinimalGame {
             ui.label("axis", format!("Move axis: {move_x:.1}"));
             ui.label(
                 "controls",
-                "A/D axis, Space or button: spawn cube; tween + clip animation",
+                "A/D axis, Space or button: spawn cube; tween + blended clip animation",
             );
             ui.separator();
             ui.button("spawn", "Spawn Cube");
@@ -199,7 +204,7 @@ fn add_y_pulse(world: &mut World, entity: Entity, height: f32, duration: Duratio
     }
 }
 
-fn add_clip_y_pulse(world: &mut World, entity: Entity, height: f32, duration: Duration) {
+fn add_blended_clip_y_pulse(world: &mut World, entity: Entity, height: f32, duration: Duration) {
     if !world.contains_resource::<TransformAnimationClipAssets>() {
         world.insert_resource(TransformAnimationClipAssets::default());
     }
@@ -210,8 +215,9 @@ fn add_clip_y_pulse(world: &mut World, entity: Entity, height: f32, duration: Du
         let mut to = from;
         to.position.y += height;
         let target = TransformAnimationTarget(entity.index() as u64);
-        let handle = TransformAnimationClipHandle::new(10_000 + u64::from(entity.index()));
-        let clip = TransformAnimationClip::new("marker_bob", duration).with_channel(
+        let subtle_handle = TransformAnimationClipHandle::new(10_000 + u64::from(entity.index()));
+        let strong_handle = TransformAnimationClipHandle::new(20_000 + u64::from(entity.index()));
+        let subtle_clip = TransformAnimationClip::new("marker_bob_subtle", duration).with_channel(
             TransformAnimationChannel::Translation {
                 target,
                 interpolation: TransformAnimationInterpolation::Linear,
@@ -227,14 +233,43 @@ fn add_clip_y_pulse(world: &mut World, entity: Entity, height: f32, duration: Du
                 ],
             },
         );
+        let mut strong = from;
+        strong.position.y += height * 1.8;
+        let strong_clip = TransformAnimationClip::new("marker_bob_strong", duration).with_channel(
+            TransformAnimationChannel::Translation {
+                target,
+                interpolation: TransformAnimationInterpolation::Linear,
+                keyframes: vec![
+                    Vec3Keyframe {
+                        time: Duration::ZERO,
+                        value: from.position,
+                    },
+                    Vec3Keyframe {
+                        time: duration,
+                        value: strong.position,
+                    },
+                ],
+            },
+        );
         world
             .resource_mut::<TransformAnimationClipAssets>()
             .assets
-            .insert(handle, clip);
+            .insert(subtle_handle, subtle_clip);
         world
-            .entity_mut(entity)
-            .insert(target)
-            .insert(AnimationPlayer::new(handle, target).with_repeat(TweenRepeat::PingPong));
+            .resource_mut::<TransformAnimationClipAssets>()
+            .assets
+            .insert(strong_handle, strong_clip);
+        world.entity_mut(entity).insert(target).insert(
+            AnimationBlendPlayer::new()
+                .with_layer(
+                    AnimationBlendLayer::new(subtle_handle, target, 0.4)
+                        .with_repeat(TweenRepeat::PingPong),
+                )
+                .with_layer(
+                    AnimationBlendLayer::new(strong_handle, target, 0.6)
+                        .with_repeat(TweenRepeat::PingPong),
+                ),
+        );
     }
 }
 
