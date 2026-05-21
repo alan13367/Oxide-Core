@@ -355,9 +355,11 @@ from the library. Alpha-masked geometry uses depth writes with a fixed 0.5
 cutoff, while alpha-blended scene geometry is drawn after opaque geometry and
 sorted back-to-front by camera distance per material batch.
 Before batching, the scene renderer skips renderables outside the active
-camera's frustum when bounds are known. Imported mesh-handle entities should add
-`RenderBounds` when their asset pipeline does not provide an authored extent;
-otherwise they remain visible and layer-filtered but conservatively uncullable.
+camera's frustum when bounds are known. glTF mesh nodes receive computed
+`RenderBounds` from imported vertex positions. Custom mesh-handle entities
+should add `RenderBounds` when their asset pipeline does not provide an authored
+extent; otherwise they remain visible and layer-filtered but conservatively
+uncullable.
 Texture labels such as `#image_0` or `#crate_albedo` resolve against
 `TextureImageAssets`; file paths such as `textures/crate.png` are loaded by the
 native scene asset pipeline and tracked as scene dependencies. Loaded `.oxmat`

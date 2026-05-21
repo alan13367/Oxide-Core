@@ -41,9 +41,9 @@ the engine prelude for normal game code.
   without despawning it. `InheritedVisibility` is propagated automatically.
 - Use `RenderLayers` to filter meshes, terrain, and sprites per camera for
   first-person weapons, debug-only helpers, editor overlays, or alternate views.
-- Use `RenderBounds` on imported or procedural mesh entities so the scene
-  renderer can frustum-cull them before draw submission. Built-in primitives,
-  terrain, and sprites infer their bounds automatically. Add
+- Use `RenderBounds` on custom or procedural mesh entities so the scene renderer
+  can frustum-cull them before draw submission. Built-in primitives, terrain,
+  sprites, and glTF mesh nodes infer bounds automatically. Add
   `RenderCullDistance` when an entity should disappear beyond a specific camera
   distance.
 - Use `CameraRenderView` on camera entities when a game or tool has multiple

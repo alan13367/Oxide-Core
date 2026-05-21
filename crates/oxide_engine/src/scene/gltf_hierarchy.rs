@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use glam::Vec3;
+
 use crate::animation::{
     QuatKeyframe, SkeletonSkin, SkeletonSkinAssets, SkeletonSkinHandle, SkinFilter,
     TransformAnimationChannel, TransformAnimationClip, TransformAnimationClipAssets,
@@ -16,7 +18,7 @@ use crate::asset::{
     MaterialDescriptorAssets, MaterialDescriptorHandle, MaterialFilter, MeshCache, MeshFilter,
     MeshHandle, TextureImageAssets, TextureImageHandle,
 };
-use crate::scene::{MeshPrimitive, RenderMaterial, RenderMesh, SceneMaterialLibrary};
+use crate::scene::{MeshPrimitive, RenderBounds, RenderMaterial, RenderMesh, SceneMaterialLibrary};
 use oxide_ecs::entity::Entity;
 use oxide_ecs::world::World;
 use oxide_ecs::{Component, Resource};
@@ -219,6 +221,9 @@ fn spawn_gltf_node(
         {
             entity_builder.insert(MeshFilter::new(*mesh_handle));
         }
+        if let Some(bounds) = gltf_mesh_render_bounds(scene, mesh_index) {
+            entity_builder.insert(bounds);
+        }
         if let Some(material_index) = scene
             .mesh_material_indices
             .get(mesh_index)
@@ -263,6 +268,29 @@ fn spawn_gltf_node(
     }
 
     entity
+}
+
+fn gltf_mesh_render_bounds(scene: &GltfScene, mesh_index: usize) -> Option<RenderBounds> {
+    scene.meshes.get(mesh_index).and_then(|(_, mesh)| {
+        render_bounds_from_positions(
+            mesh.vertices.iter().map(|vertex| {
+                Vec3::new(vertex.position[0], vertex.position[1], vertex.position[2])
+            }),
+        )
+    })
+}
+
+fn render_bounds_from_positions(positions: impl IntoIterator<Item = Vec3>) -> Option<RenderBounds> {
+    let mut positions = positions
+        .into_iter()
+        .filter(|position| position.is_finite());
+    let first = positions.next()?;
+    let (min, max) = positions.fold((first, first), |(min, max), position| {
+        (min.min(position), max.max(position))
+    });
+    let center = (min + max) * 0.5;
+    let radius = (max - center).length();
+    Some(RenderBounds::sphere(center, radius))
 }
 
 /// Queues an already requested glTF scene handle for spawn-on-resolve.
@@ -1022,6 +1050,19 @@ mod tests {
             world.get::<MeshFilter>(roots[0]).map(|filter| filter.mesh),
             Some(mesh_handle)
         );
+    }
+
+    #[test]
+    fn gltf_mesh_bounds_are_computed_from_imported_positions() {
+        let bounds = render_bounds_from_positions([
+            Vec3::new(-2.0, -1.0, 1.0),
+            Vec3::new(4.0, 3.0, 5.0),
+            Vec3::new(f32::NAN, 0.0, 0.0),
+        ])
+        .unwrap();
+
+        assert_eq!(bounds.center, Vec3::new(1.0, 1.0, 3.0));
+        assert_eq!(bounds.radius, Vec3::new(3.0, 2.0, 2.0).length());
     }
 
     #[test]
