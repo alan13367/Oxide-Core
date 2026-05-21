@@ -304,10 +304,15 @@ commands.spawn((
 commands.spawn((
     TransformComponent::default(),
     RenderMesh::new(MeshPrimitive::Cube, RenderMaterial::default()),
+    RenderBounds::from_radius(2.0),
     RenderLayers::layer(1),
     RenderCullDistance::new(80.0),
 ));
 ```
+
+The same culling metadata can be authored in `.oxscene` files with
+`render_bounds` and `render_cull_distance`, and prefab instances can override
+those fields per placement.
 
 Use `add_labeled_system`, `add_system_to_set`, `add_system_before`, and
 `add_system_after` when plugins or gameplay systems need stable ordering inside

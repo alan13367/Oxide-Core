@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    MeshPrimitive, RenderLayers, RenderMaterial, RenderMesh, SceneMaterialLibrary, SpriteBillboard,
-    SpriteDepthMode, SpriteFacing, SpriteId,
+    MeshPrimitive, RenderBounds, RenderCullDistance, RenderLayers, RenderMaterial, RenderMesh,
+    SceneMaterialLibrary, SpriteBillboard, SpriteDepthMode, SpriteFacing, SpriteId,
 };
 
 pub const OXSCENE_FORMAT: &str = "oxide.oxscene";
@@ -680,6 +680,12 @@ pub struct SceneEntityDescriptor {
     /// Optional raw `RenderLayers` mask for camera/renderable filtering.
     #[serde(default)]
     pub render_layers: Option<u32>,
+    /// Optional local-space render bounds for culling imported or procedural meshes.
+    #[serde(default)]
+    pub render_bounds: Option<SceneRenderBoundsDescriptor>,
+    /// Optional maximum camera distance before the renderer skips this entity.
+    #[serde(default)]
+    pub render_cull_distance: Option<f32>,
     #[serde(flatten)]
     pub kind: SceneEntityKind,
     /// Child entities attached under this entity with local transforms.
@@ -695,6 +701,8 @@ impl Default for SceneEntityDescriptor {
             transform: SceneTransform::default(),
             visible: true,
             render_layers: None,
+            render_bounds: None,
+            render_cull_distance: None,
             kind: SceneEntityKind::Empty,
             children: Vec::new(),
         }
@@ -782,9 +790,41 @@ pub struct ScenePrefabOverride {
     /// Optional replacement render layer mask.
     #[serde(default)]
     pub render_layers: Option<u32>,
+    /// Optional replacement local-space render bounds.
+    #[serde(default)]
+    pub render_bounds: Option<SceneRenderBoundsDescriptor>,
+    /// Optional replacement maximum camera culling distance.
+    #[serde(default)]
+    pub render_cull_distance: Option<f32>,
     /// Optional replacement mesh material.
     #[serde(default)]
     pub material: Option<SceneMaterialDescriptor>,
+}
+
+/// Local-space bounding sphere stored in scene descriptors.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SceneRenderBoundsDescriptor {
+    /// Local-space center of the renderable bounds.
+    #[serde(default)]
+    pub center: [f32; 3],
+    /// Local-space sphere radius.
+    #[serde(default)]
+    pub radius: f32,
+}
+
+impl From<SceneRenderBoundsDescriptor> for RenderBounds {
+    fn from(value: SceneRenderBoundsDescriptor) -> Self {
+        RenderBounds::sphere(vec3(value.center), value.radius)
+    }
+}
+
+impl From<RenderBounds> for SceneRenderBoundsDescriptor {
+    fn from(value: RenderBounds) -> Self {
+        Self {
+            center: value.center.to_array(),
+            radius: value.radius,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -1343,6 +1383,10 @@ fn scene_entity_descriptor_from_world(
         render_layers: world
             .get::<RenderLayers>(entity)
             .map(|layers| layers.mask()),
+        render_bounds: world.get::<RenderBounds>(entity).copied().map(Into::into),
+        render_cull_distance: world
+            .get::<RenderCullDistance>(entity)
+            .map(|distance| distance.max_distance),
         kind: scene_entity_kind_from_world(world, entity)?,
         children: children
             .into_iter()
@@ -1765,6 +1809,12 @@ fn spawn_scene_entity(
     if let Some(mask) = descriptor.render_layers {
         entity_mut.insert(RenderLayers::from_mask(mask));
     }
+    if let Some(bounds) = descriptor.render_bounds {
+        entity_mut.insert(RenderBounds::from(bounds));
+    }
+    if let Some(max_distance) = descriptor.render_cull_distance {
+        entity_mut.insert(RenderCullDistance::new(max_distance));
+    }
 
     let entity = entity_mut.id();
     context
@@ -1912,6 +1962,12 @@ fn apply_prefab_override(
     }
     if let Some(render_layers) = prefab_override.render_layers {
         descriptor.render_layers = Some(render_layers);
+    }
+    if let Some(render_bounds) = prefab_override.render_bounds {
+        descriptor.render_bounds = Some(render_bounds);
+    }
+    if let Some(render_cull_distance) = prefab_override.render_cull_distance {
+        descriptor.render_cull_distance = Some(render_cull_distance);
     }
     if let (SceneEntityKind::Mesh { material, .. }, Some(override_material)) =
         (&mut descriptor.kind, &prefab_override.material)
@@ -2255,12 +2311,16 @@ mod tests {
             Tags::new(["encounter", "edited"]),
             Visibility::Hidden,
             RenderLayers::layer(2),
+            RenderBounds::sphere(Vec3::new(0.0, 0.5, 0.0), 2.0),
+            RenderCullDistance::new(75.0),
+        ));
+        world.entity_mut(root).insert(
             RenderMesh::new(
                 MeshPrimitive::Cube,
                 RenderMaterial::Named("crate".to_string()),
             )
             .with_tint([0.2, 0.4, 0.6, 1.0]),
-        ));
+        );
         let child = world
             .spawn((
                 Name("Marker".to_string()),
@@ -2286,6 +2346,14 @@ mod tests {
             root_descriptor.render_layers,
             Some(RenderLayers::layer(2).mask())
         );
+        assert_eq!(
+            root_descriptor.render_bounds,
+            Some(SceneRenderBoundsDescriptor {
+                center: [0.0, 0.5, 0.0],
+                radius: 2.0,
+            })
+        );
+        assert_eq!(root_descriptor.render_cull_distance, Some(75.0));
         let SceneEntityKind::Mesh {
             primitive,
             material,
@@ -3043,6 +3111,11 @@ mod tests {
                 transform: Some(SceneTransform::from_position([0.0, 2.0, 0.0])),
                 visible: Some(false),
                 render_layers: Some(RenderLayers::layer(4).mask()),
+                render_bounds: Some(SceneRenderBoundsDescriptor {
+                    center: [0.0, 1.0, 0.0],
+                    radius: 3.0,
+                }),
+                render_cull_distance: Some(40.0),
                 material: Some(SceneMaterialDescriptor {
                     reference: Some("materials.highlight".to_string()),
                     color: [1.0, 0.2, 0.1, 1.0],
@@ -3062,6 +3135,14 @@ mod tests {
         assert_eq!(
             world.get::<RenderLayers>(top),
             Some(&RenderLayers::layer(4))
+        );
+        assert_eq!(
+            world.get::<RenderBounds>(top),
+            Some(&RenderBounds::sphere(Vec3::Y, 3.0))
+        );
+        assert_eq!(
+            world.get::<RenderCullDistance>(top),
+            Some(&RenderCullDistance::new(40.0))
         );
 
         let mesh = world.get::<RenderMesh>(top).unwrap();
@@ -3151,6 +3232,40 @@ mod tests {
         assert_eq!(
             world.get::<RenderLayers>(roots[0]),
             Some(&RenderLayers::layer(2))
+        );
+    }
+
+    #[test]
+    fn scene_entities_spawn_render_culling_metadata() {
+        let scene = SceneDescriptor {
+            dependencies: Vec::new(),
+            materials: Vec::new(),
+            prefabs: Vec::new(),
+            entities: vec![SceneEntityDescriptor {
+                name: Some("Culled Mesh".to_string()),
+                render_bounds: Some(SceneRenderBoundsDescriptor {
+                    center: [0.0, 1.5, 0.0],
+                    radius: 4.0,
+                }),
+                render_cull_distance: Some(120.0),
+                kind: SceneEntityKind::Mesh {
+                    primitive: SceneMeshPrimitive::Cube,
+                    material: SceneMaterialDescriptor::default(),
+                },
+                ..Default::default()
+            }],
+        };
+
+        let mut world = World::new();
+        let roots = spawn_scene_descriptor(&mut world, &scene);
+        assert_eq!(roots.len(), 1);
+        assert_eq!(
+            world.get::<RenderBounds>(roots[0]),
+            Some(&RenderBounds::sphere(Vec3::new(0.0, 1.5, 0.0), 4.0))
+        );
+        assert_eq!(
+            world.get::<RenderCullDistance>(roots[0]),
+            Some(&RenderCullDistance::new(120.0))
         );
     }
 

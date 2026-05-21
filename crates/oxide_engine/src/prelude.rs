@@ -103,13 +103,13 @@ pub use crate::scene::{
     SceneEntityPath, SceneEntitySummary, SceneExportError, SceneGizmoLine, SceneGizmoLines,
     SceneInstanceId, SceneInstanceIndex, SceneInstanceRegistry, SceneMaterialDescriptor,
     SceneMaterialLibrary, SceneMeshPrimitive, ScenePickHit, ScenePickRay, ScenePrefabDescriptor,
-    ScenePrefabOverride, SceneRenderer, SceneRendererPlugin, SceneRendererStats, SceneSpawnResult,
-    SceneSpriteDepthMode, SceneSpriteDescriptor, SceneSpriteFacing, SceneTransform,
-    SceneValidationDiagnostic, SceneValidationError, SceneWorldDescriptor, SceneWorldSpawnResult,
-    SpawnedOxScenes, SpawnedSceneInstance, SpriteAssets, SpriteBillboard, SpriteDepthMode,
-    SpriteFacing, SpriteId, SpriteImage, SpriteImageError, Tags, Terrain, TerrainDescriptor,
-    TerrainWaveDescriptor, TransformComponent, Visibility, WorldObjectDescriptor, OXSCENE_FORMAT,
-    OXSCENE_VERSION,
+    ScenePrefabOverride, SceneRenderBoundsDescriptor, SceneRenderer, SceneRendererPlugin,
+    SceneRendererStats, SceneSpawnResult, SceneSpriteDepthMode, SceneSpriteDescriptor,
+    SceneSpriteFacing, SceneTransform, SceneValidationDiagnostic, SceneValidationError,
+    SceneWorldDescriptor, SceneWorldSpawnResult, SpawnedOxScenes, SpawnedSceneInstance,
+    SpriteAssets, SpriteBillboard, SpriteDepthMode, SpriteFacing, SpriteId, SpriteImage,
+    SpriteImageError, Tags, Terrain, TerrainDescriptor, TerrainWaveDescriptor, TransformComponent,
+    Visibility, WorldObjectDescriptor, OXSCENE_FORMAT, OXSCENE_VERSION,
 };
 #[cfg(feature = "gltf-import")]
 pub use crate::scene::{

@@ -108,12 +108,14 @@ instantiate them with `"type": "prefab"`. Prefab instances spawn as empty root
 entities; the prefab contents are attached as children so translating, rotating,
 or scaling the instance root moves the whole reusable object. Instances can also
 provide `overrides` for named prefab children when one placement needs a
-different child transform, visibility, render layer, or mesh material without
-duplicating the whole prefab.
+different child transform, visibility, render layer, render bounds, cull
+distance, or mesh material without duplicating the whole prefab.
 Scene entities also support a `visible` field; setting it to `false` spawns
 `Visibility::Hidden` and hides that entity's subtree from the scene renderer
 without despawning it. Add `render_layers` with a raw bit mask when authored
-entities should only render through cameras on matching layers.
+entities should only render through cameras on matching layers. Add
+`render_bounds` as `{ "center": [x, y, z], "radius": r }` and
+`render_cull_distance` when authored custom meshes need explicit culling data.
 Camera entities also support `order`, `active`, `viewport`, and `clear_color`
 fields for ordered multi-camera views, normalized target rectangles, and frame
 clear behavior. The first active view clears the frame; later views load the
