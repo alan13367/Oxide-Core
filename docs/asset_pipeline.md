@@ -132,9 +132,15 @@ reference a glTF base-color, normal, or packed metallic-roughness texture keep
 virtual texture references like `#image_0`; these virtual references are ignored
 by filesystem dependency tracking because they point at labeled sub-assets from
 the same imported container, not separate files. Packed metallic-roughness
-textures also publish an Oxide-owned roughness grayscale image labeled
-`image_N_roughness` from the glTF roughness green channel, matching the automatic
-renderer's roughness-map contract.
+textures also publish Oxide-owned metallic and roughness grayscale images
+labeled `image_N_metallic` and `image_N_roughness` from the glTF blue and green
+channels, matching the automatic renderer's material-map contract.
+
+Imported glTF animation samplers are converted into Oxide
+`TransformAnimationClip` assets and published with labels such as `animation_0`.
+Spawned glTF nodes receive `GltfNodeRef` and `TransformAnimationTarget`
+components based on the source glTF node index, so gameplay can attach
+`AnimationPlayer` components to nodes using the same clip asset and target ID.
 
 The automatic scene renderer can draw `MeshFilter` entities directly from
 `MeshCache`. When a handle-based mesh entity also carries `RenderMesh`, the
@@ -147,8 +153,8 @@ meshes without duplicating geometry. `TextureImageAssets` also
 maintains a label lookup, and the scene renderer uploads labeled images into a
 small material texture cache. A material albedo reference such as `#image_0`
 binds that uploaded texture for the relevant material batch; normal and
-roughness references are bound into the same material texture set when present,
-while missing slots use a neutral normal map or white fallback texture.
+metallic/roughness references are bound into the same material texture set when
+present, while missing slots use a neutral normal map or white fallback texture.
 
 Spawned entities from the async glTF flow receive `GltfSceneInstance` with the
 source scene handle. If the same handle is queued again after

@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use oxide_ecs::Component;
+use glam::{Quat, Vec3};
+use oxide_asset::{Assets, Handle};
+use oxide_ecs::{Component, Resource};
 use oxide_math::transform::Transform;
 use oxide_transform::TransformComponent;
 
@@ -11,6 +13,307 @@ use crate::ecs::{Query, Res, Time, World};
 
 /// Stable label for the built-in transform tween update system.
 pub const TRANSFORM_TWEEN_SYSTEM: &str = "oxide.animation.transform_tween";
+/// Stable label for the built-in transform animation clip playback system.
+pub const TRANSFORM_ANIMATION_SYSTEM: &str = "oxide.animation.transform_clips";
+
+/// Typed handle for transform animation clips.
+pub type TransformAnimationClipHandle = Handle<TransformAnimationClip>;
+
+/// Resource storing imported or authored transform animation clips.
+#[derive(Resource, Default)]
+pub struct TransformAnimationClipAssets {
+    /// Handle-indexed transform animation clip storage.
+    pub assets: Assets<TransformAnimationClip>,
+}
+
+/// Stable target identity for transform animation tracks.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TransformAnimationTarget(pub u64);
+
+/// Interpolation curve for transform animation keyframes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TransformAnimationInterpolation {
+    /// Linearly interpolates vectors and spherically interpolates rotations.
+    #[default]
+    Linear,
+    /// Holds the previous keyframe value until the next keyframe is reached.
+    Step,
+}
+
+/// Transform property animated by a clip channel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransformAnimationProperty {
+    /// Local translation channel.
+    Translation,
+    /// Local rotation channel.
+    Rotation,
+    /// Local scale channel.
+    Scale,
+}
+
+/// Translation or scale keyframe.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Vec3Keyframe {
+    /// Timestamp relative to the start of the clip.
+    pub time: Duration,
+    /// Keyframe translation or scale value.
+    pub value: Vec3,
+}
+
+/// Rotation keyframe.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct QuatKeyframe {
+    /// Timestamp relative to the start of the clip.
+    pub time: Duration,
+    /// Keyframe rotation value.
+    pub value: Quat,
+}
+
+/// A single transform animation channel targeting one entity target ID.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TransformAnimationChannel {
+    /// Local translation keyframes for one target.
+    Translation {
+        /// Entity target identifier animated by this channel.
+        target: TransformAnimationTarget,
+        /// Interpolation used between keyframes.
+        interpolation: TransformAnimationInterpolation,
+        /// Ordered translation keyframes.
+        keyframes: Vec<Vec3Keyframe>,
+    },
+    /// Local rotation keyframes for one target.
+    Rotation {
+        /// Entity target identifier animated by this channel.
+        target: TransformAnimationTarget,
+        /// Interpolation used between keyframes.
+        interpolation: TransformAnimationInterpolation,
+        /// Ordered rotation keyframes.
+        keyframes: Vec<QuatKeyframe>,
+    },
+    /// Local scale keyframes for one target.
+    Scale {
+        /// Entity target identifier animated by this channel.
+        target: TransformAnimationTarget,
+        /// Interpolation used between keyframes.
+        interpolation: TransformAnimationInterpolation,
+        /// Ordered scale keyframes.
+        keyframes: Vec<Vec3Keyframe>,
+    },
+}
+
+impl TransformAnimationChannel {
+    /// Returns the target identifier animated by this channel.
+    pub fn target(&self) -> TransformAnimationTarget {
+        match self {
+            Self::Translation { target, .. }
+            | Self::Rotation { target, .. }
+            | Self::Scale { target, .. } => *target,
+        }
+    }
+
+    /// Returns the transform property animated by this channel.
+    pub fn property(&self) -> TransformAnimationProperty {
+        match self {
+            Self::Translation { .. } => TransformAnimationProperty::Translation,
+            Self::Rotation { .. } => TransformAnimationProperty::Rotation,
+            Self::Scale { .. } => TransformAnimationProperty::Scale,
+        }
+    }
+}
+
+/// Lightweight transform animation clip made of independent transform channels.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TransformAnimationClip {
+    /// Human-readable clip name or imported label.
+    pub name: String,
+    /// Clip duration.
+    pub duration: Duration,
+    /// Transform channels contained by this clip.
+    pub channels: Vec<TransformAnimationChannel>,
+}
+
+impl TransformAnimationClip {
+    /// Creates an empty transform animation clip.
+    pub fn new(name: impl Into<String>, duration: Duration) -> Self {
+        Self {
+            name: name.into(),
+            duration,
+            channels: Vec::new(),
+        }
+    }
+
+    /// Adds a channel to the clip.
+    pub fn with_channel(mut self, channel: TransformAnimationChannel) -> Self {
+        self.channels.push(channel);
+        self
+    }
+
+    /// Samples the clip for one target, using `fallback` for properties with no channel.
+    pub fn sample_target(
+        &self,
+        target: TransformAnimationTarget,
+        time: Duration,
+        fallback: Transform,
+    ) -> Transform {
+        let local_time = self.local_time(time);
+        let mut sampled = fallback;
+        for channel in self
+            .channels
+            .iter()
+            .filter(|channel| channel.target() == target)
+        {
+            match channel {
+                TransformAnimationChannel::Translation {
+                    interpolation,
+                    keyframes,
+                    ..
+                } => {
+                    if let Some(value) =
+                        sample_vec3_keyframes(keyframes, *interpolation, local_time)
+                    {
+                        sampled.position = value;
+                    }
+                }
+                TransformAnimationChannel::Rotation {
+                    interpolation,
+                    keyframes,
+                    ..
+                } => {
+                    if let Some(value) =
+                        sample_quat_keyframes(keyframes, *interpolation, local_time)
+                    {
+                        sampled.rotation = value;
+                    }
+                }
+                TransformAnimationChannel::Scale {
+                    interpolation,
+                    keyframes,
+                    ..
+                } => {
+                    if let Some(value) =
+                        sample_vec3_keyframes(keyframes, *interpolation, local_time)
+                    {
+                        sampled.scale = value;
+                    }
+                }
+            }
+        }
+        sampled
+    }
+
+    fn local_time(&self, time: Duration) -> Duration {
+        if self.duration.is_zero() || time <= self.duration {
+            return time;
+        }
+        Duration::from_secs_f64(time.as_secs_f64() % self.duration.as_secs_f64())
+    }
+}
+
+/// Component that plays a transform animation clip on an entity.
+#[derive(Component, Clone, Debug)]
+pub struct AnimationPlayer {
+    /// Clip asset handle to sample.
+    pub clip: TransformAnimationClipHandle,
+    /// Target channel ID to sample from the clip.
+    pub target: TransformAnimationTarget,
+    elapsed: Duration,
+    speed: f32,
+    repeat: TweenRepeat,
+    playing: bool,
+    finished: bool,
+}
+
+impl AnimationPlayer {
+    /// Creates a looping player for `clip` and `target`.
+    pub fn new(clip: TransformAnimationClipHandle, target: TransformAnimationTarget) -> Self {
+        Self {
+            clip,
+            target,
+            elapsed: Duration::ZERO,
+            speed: 1.0,
+            repeat: TweenRepeat::Loop,
+            playing: true,
+            finished: false,
+        }
+    }
+
+    /// Sets repeat behavior.
+    pub fn with_repeat(mut self, repeat: TweenRepeat) -> Self {
+        self.repeat = repeat;
+        self
+    }
+
+    /// Sets playback speed. Negative values are clamped to zero.
+    pub fn with_speed(mut self, speed: f32) -> Self {
+        self.speed = speed.max(0.0);
+        self
+    }
+
+    /// Returns elapsed playback time before repeat wrapping.
+    pub fn elapsed(&self) -> Duration {
+        self.elapsed
+    }
+
+    /// Returns true when playback is active.
+    pub fn is_playing(&self) -> bool {
+        self.playing
+    }
+
+    /// Returns true when one-shot playback has reached the end.
+    pub fn is_finished(&self) -> bool {
+        self.finished
+    }
+
+    /// Starts or resumes playback.
+    pub fn play(&mut self) {
+        self.playing = true;
+    }
+
+    /// Pauses playback.
+    pub fn pause(&mut self) {
+        self.playing = false;
+    }
+
+    /// Resets elapsed time and starts playback.
+    pub fn reset(&mut self) {
+        self.elapsed = Duration::ZERO;
+        self.finished = false;
+        self.playing = true;
+    }
+
+    fn advance(&mut self, delta: Duration, clip_duration: Duration) -> Duration {
+        if self.playing && !self.finished {
+            self.elapsed += delta.mul_f32(self.speed);
+            if self.repeat == TweenRepeat::Once && self.elapsed >= clip_duration {
+                self.elapsed = clip_duration;
+                self.finished = true;
+                self.playing = false;
+            }
+        }
+
+        if clip_duration.is_zero() || self.elapsed <= clip_duration {
+            self.elapsed
+        } else {
+            match self.repeat {
+                TweenRepeat::Once => clip_duration,
+                TweenRepeat::Loop => Duration::from_secs_f64(
+                    self.elapsed.as_secs_f64() % clip_duration.as_secs_f64(),
+                ),
+                TweenRepeat::PingPong => {
+                    let elapsed = self.elapsed.as_secs_f64();
+                    let duration = clip_duration.as_secs_f64();
+                    let cycle = (elapsed / duration).floor() as u64;
+                    let local = elapsed % duration;
+                    if cycle.is_multiple_of(2) {
+                        Duration::from_secs_f64(local)
+                    } else {
+                        Duration::from_secs_f64(duration - local)
+                    }
+                }
+            }
+        }
+    }
+}
 
 /// Interpolation curve used by [`TransformTween`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -188,6 +491,63 @@ fn sample_transform(from: Transform, to: Transform, t: f32) -> Transform {
     }
 }
 
+fn sample_vec3_keyframes(
+    keyframes: &[Vec3Keyframe],
+    interpolation: TransformAnimationInterpolation,
+    time: Duration,
+) -> Option<Vec3> {
+    let first = keyframes.first()?;
+    if time <= first.time {
+        return Some(first.value);
+    }
+    for window in keyframes.windows(2) {
+        let [from, to] = window else {
+            continue;
+        };
+        if time <= to.time {
+            if interpolation == TransformAnimationInterpolation::Step || to.time <= from.time {
+                return Some(from.value);
+            }
+            let t = duration_lerp_factor(from.time, to.time, time);
+            return Some(from.value.lerp(to.value, t));
+        }
+    }
+    keyframes.last().map(|keyframe| keyframe.value)
+}
+
+fn sample_quat_keyframes(
+    keyframes: &[QuatKeyframe],
+    interpolation: TransformAnimationInterpolation,
+    time: Duration,
+) -> Option<Quat> {
+    let first = keyframes.first()?;
+    if time <= first.time {
+        return Some(first.value);
+    }
+    for window in keyframes.windows(2) {
+        let [from, to] = window else {
+            continue;
+        };
+        if time <= to.time {
+            if interpolation == TransformAnimationInterpolation::Step || to.time <= from.time {
+                return Some(from.value);
+            }
+            let t = duration_lerp_factor(from.time, to.time, time);
+            return Some(from.value.slerp(to.value, t));
+        }
+    }
+    keyframes.last().map(|keyframe| keyframe.value)
+}
+
+fn duration_lerp_factor(from: Duration, to: Duration, time: Duration) -> f32 {
+    let span = (to - from).as_secs_f32();
+    if span <= f32::EPSILON {
+        0.0
+    } else {
+        ((time - from).as_secs_f32() / span).clamp(0.0, 1.0)
+    }
+}
+
 /// System that advances [`TransformTween`] components using the frame [`Time`].
 pub fn transform_tween_system(
     time: Res<Time>,
@@ -196,6 +556,23 @@ pub fn transform_tween_system(
     let delta = time.delta;
     for (transform, tween) in query.iter_mut() {
         transform.set_transform(tween.tick(delta));
+    }
+}
+
+/// System that advances [`AnimationPlayer`] components using frame [`Time`].
+pub fn transform_animation_system(
+    time: Res<Time>,
+    clips: Res<TransformAnimationClipAssets>,
+    mut query: Query<(&mut TransformComponent, &mut AnimationPlayer)>,
+) {
+    let delta = time.delta;
+    for (transform, player) in query.iter_mut() {
+        let Some(clip) = clips.assets.get(&player.clip) else {
+            continue;
+        };
+        let sample_time = player.advance(delta, clip.duration);
+        let sampled = clip.sample_target(player.target, sample_time, transform.transform);
+        transform.set_transform(sampled);
     }
 }
 
@@ -210,12 +587,20 @@ impl<T: App> Plugin<T> for AnimationPlugin {
             TRANSFORM_TWEEN_SYSTEM,
             transform_tween_system,
         );
+        app.add_labeled_system_mut(
+            AppStage::Update,
+            TRANSFORM_ANIMATION_SYSTEM,
+            transform_animation_system,
+        );
     }
 }
 
 fn initialize_animation_resources(world: &mut World, _window: &crate::window::Window) {
     if !world.contains_resource::<Time>() {
         world.init_resource::<Time>();
+    }
+    if !world.contains_resource::<TransformAnimationClipAssets>() {
+        world.insert_resource(TransformAnimationClipAssets::default());
     }
 }
 
@@ -281,5 +666,78 @@ mod tests {
         assert!(!tween.is_playing());
         assert_eq!(tween.progress(), 1.0);
         assert_eq!(tween.sample().position, Vec3::X);
+    }
+
+    #[test]
+    fn transform_animation_clip_samples_target_channels() {
+        let target = TransformAnimationTarget(7);
+        let clip = TransformAnimationClip::new("move", Duration::from_secs(1)).with_channel(
+            TransformAnimationChannel::Translation {
+                target,
+                interpolation: TransformAnimationInterpolation::Linear,
+                keyframes: vec![
+                    Vec3Keyframe {
+                        time: Duration::ZERO,
+                        value: Vec3::ZERO,
+                    },
+                    Vec3Keyframe {
+                        time: Duration::from_secs(1),
+                        value: Vec3::new(10.0, 0.0, 0.0),
+                    },
+                ],
+            },
+        );
+
+        let sampled = clip.sample_target(
+            target,
+            Duration::from_millis(250),
+            Transform::from_position(Vec3::Y),
+        );
+
+        assert_eq!(sampled.position, Vec3::new(2.5, 0.0, 0.0));
+        assert_eq!(sampled.scale, Vec3::ONE);
+    }
+
+    #[test]
+    fn transform_animation_system_updates_player_transform() {
+        let target = TransformAnimationTarget(3);
+        let clip = TransformAnimationClip::new("rise", Duration::from_secs(1)).with_channel(
+            TransformAnimationChannel::Translation {
+                target,
+                interpolation: TransformAnimationInterpolation::Linear,
+                keyframes: vec![
+                    Vec3Keyframe {
+                        time: Duration::ZERO,
+                        value: Vec3::ZERO,
+                    },
+                    Vec3Keyframe {
+                        time: Duration::from_secs(1),
+                        value: Vec3::Y,
+                    },
+                ],
+            },
+        );
+        let handle = TransformAnimationClipHandle::new(99);
+        let mut world = World::new();
+        let mut time = Time::default();
+        time.set_delta_for_tests(Duration::from_millis(500));
+        world.insert_resource(time);
+        let mut clips = TransformAnimationClipAssets::default();
+        clips.assets.insert(handle, clip);
+        world.insert_resource(clips);
+        let entity = world
+            .spawn((
+                TransformComponent::default(),
+                AnimationPlayer::new(handle, target).with_repeat(TweenRepeat::Once),
+            ))
+            .id();
+
+        let mut queue = CommandQueue::default();
+        let mut system = transform_animation_system.into_system();
+        system.run(&mut world, &mut queue);
+
+        let transform = world.get::<TransformComponent>(entity).unwrap();
+        assert_eq!(transform.transform.position, Vec3::new(0.0, 0.5, 0.0));
+        assert!(transform.is_dirty);
     }
 }

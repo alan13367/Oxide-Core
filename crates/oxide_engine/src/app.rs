@@ -12,7 +12,7 @@ use winit::{
     window::WindowId,
 };
 
-use crate::animation::AnimationPlugin;
+use crate::animation::{AnimationPlugin, TransformAnimationClip, TransformAnimationClipAssets};
 #[cfg(feature = "gltf-import")]
 use crate::asset::GltfSceneAssets;
 use crate::asset::{
@@ -31,8 +31,8 @@ use crate::render::{
 };
 #[cfg(feature = "gltf-import")]
 use crate::scene::{
-    gltf_scene_spawn_system, GltfSceneImageHandles, GltfSceneMaterialHandles, GltfSceneMeshHandles,
-    PendingGltfSceneSpawns, SpawnedGltfScenes,
+    gltf_scene_spawn_system, GltfSceneAnimationHandles, GltfSceneImageHandles,
+    GltfSceneMaterialHandles, GltfSceneMeshHandles, PendingGltfSceneSpawns, SpawnedGltfScenes,
 };
 use crate::scene::{
     oxscene_spawn_system, prepare_scene_renderer, queue_scene_renderer, resize_scene_renderer,
@@ -103,6 +103,9 @@ pub const MESH_ASSET_EVENTS_SYSTEM: &str = "oxide.asset.events.meshes";
 pub const MATERIAL_DESCRIPTOR_ASSET_EVENTS_SYSTEM: &str = "oxide.asset.events.material_descriptors";
 /// Stable label for publishing texture image asset change events.
 pub const TEXTURE_IMAGE_ASSET_EVENTS_SYSTEM: &str = "oxide.asset.events.texture_images";
+/// Stable label for publishing transform animation clip asset change events.
+pub const TRANSFORM_ANIMATION_CLIP_ASSET_EVENTS_SYSTEM: &str =
+    "oxide.asset.events.transform_animation_clips";
 /// Stable label for the built-in native `.oxscene` spawn system.
 pub const OXSCENE_SPAWN_SYSTEM: &str = "oxide.scene.oxscene_spawn";
 /// Stable label for the built-in glTF hierarchy spawn system.
@@ -284,6 +287,12 @@ fn install_builtin_asset_event_systems<T: App>(app: &mut AppBuilder<T>) {
         ASSET_EVENT_ANCHOR,
         publish_asset_change_events::<TextureImage, TextureImageAssets>,
     );
+    app.add_labeled_system_after_mut(
+        AppStage::PreUpdate,
+        TRANSFORM_ANIMATION_CLIP_ASSET_EVENTS_SYSTEM,
+        ASSET_EVENT_ANCHOR,
+        publish_asset_change_events::<TransformAnimationClip, TransformAnimationClipAssets>,
+    );
     #[cfg(feature = "gltf-import")]
     app.add_labeled_system_after_mut(
         AppStage::PreUpdate,
@@ -320,10 +329,14 @@ fn initialize_asset_resources(world: &mut World, _window: &Window) {
     if !world.contains_resource::<TextureImageAssets>() {
         world.insert_resource(TextureImageAssets::default());
     }
+    if !world.contains_resource::<TransformAnimationClipAssets>() {
+        world.insert_resource(TransformAnimationClipAssets::default());
+    }
     world.init_resource::<Events<AssetChange<MaterialPipeline>>>();
     world.init_resource::<Events<AssetChange<Mesh3D>>>();
     world.init_resource::<Events<AssetChange<MaterialDescriptor>>>();
     world.init_resource::<Events<AssetChange<TextureImage>>>();
+    world.init_resource::<Events<AssetChange<TransformAnimationClip>>>();
     if !world.contains_resource::<SceneDescriptorAssets>() {
         world.insert_resource(SceneDescriptorAssets::default());
     }
@@ -353,6 +366,9 @@ fn initialize_asset_resources(world: &mut World, _window: &Window) {
         }
         if !world.contains_resource::<GltfSceneImageHandles>() {
             world.insert_resource(GltfSceneImageHandles::default());
+        }
+        if !world.contains_resource::<GltfSceneAnimationHandles>() {
+            world.insert_resource(GltfSceneAnimationHandles::default());
         }
     }
 }

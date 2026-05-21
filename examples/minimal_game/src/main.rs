@@ -113,7 +113,7 @@ impl App for MinimalGame {
                     if let Some(marker) =
                         first_entity_with_tag_in_instance(&mut self.world, scene_instance, "marker")
                     {
-                        add_y_pulse(&mut self.world, marker, 0.15, Duration::from_millis(900));
+                        add_clip_y_pulse(&mut self.world, marker, 0.15, Duration::from_millis(900));
                     }
                 }
                 self.world
@@ -176,7 +176,7 @@ impl App for MinimalGame {
             ui.label("axis", format!("Move axis: {move_x:.1}"));
             ui.label(
                 "controls",
-                "A/D axis, Space or button: spawn cube; scene root tweens",
+                "A/D axis, Space or button: spawn cube; tween + clip animation",
             );
             ui.separator();
             ui.button("spawn", "Spawn Cube");
@@ -196,6 +196,45 @@ fn add_y_pulse(world: &mut World, entity: Entity, height: f32, duration: Duratio
         world.entity_mut(entity).insert(
             TransformTween::ping_pong(from, to, duration).with_easing(TweenEasing::SmoothStep),
         );
+    }
+}
+
+fn add_clip_y_pulse(world: &mut World, entity: Entity, height: f32, duration: Duration) {
+    if !world.contains_resource::<TransformAnimationClipAssets>() {
+        world.insert_resource(TransformAnimationClipAssets::default());
+    }
+    if let Some(from) = world
+        .get::<TransformComponent>(entity)
+        .map(|transform| transform.transform)
+    {
+        let mut to = from;
+        to.position.y += height;
+        let target = TransformAnimationTarget(entity.index() as u64);
+        let handle = TransformAnimationClipHandle::new(10_000 + u64::from(entity.index()));
+        let clip = TransformAnimationClip::new("marker_bob", duration).with_channel(
+            TransformAnimationChannel::Translation {
+                target,
+                interpolation: TransformAnimationInterpolation::Linear,
+                keyframes: vec![
+                    Vec3Keyframe {
+                        time: Duration::ZERO,
+                        value: from.position,
+                    },
+                    Vec3Keyframe {
+                        time: duration,
+                        value: to.position,
+                    },
+                ],
+            },
+        );
+        world
+            .resource_mut::<TransformAnimationClipAssets>()
+            .assets
+            .insert(handle, clip);
+        world
+            .entity_mut(entity)
+            .insert(target)
+            .insert(AnimationPlayer::new(handle, target).with_repeat(TweenRepeat::PingPong));
     }
 }
 

@@ -7,7 +7,10 @@ pub use crate::descriptor::{
     OxMaterialDocument, ShaderDescriptor, OXMAT_FORMAT, OXMAT_VERSION,
 };
 #[cfg(feature = "gltf-import")]
-pub use crate::gltf::{load_gltf, GltfError, GltfNode, GltfScene};
+pub use crate::gltf::{
+    load_gltf, GltfAnimationChannel, GltfAnimationClip, GltfAnimationCurve,
+    GltfAnimationInterpolation, GltfError, GltfNode, GltfQuatKeyframe, GltfScene, GltfVec3Keyframe,
+};
 pub use crate::material::{get_material_bind_group_layout, MaterialError, MaterialPipeline};
 pub use crate::mesh::{
     cube_indices, cube_vertices, sphere_indices, sphere_vertices, triangle_vertices, Mesh, Mesh3D,

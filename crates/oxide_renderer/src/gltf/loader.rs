@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use glam::{Quat, Vec3};
+use gltf::animation::util::ReadOutputs;
 use gltf::buffer::Data;
 use gltf::image::Format;
 use gltf::mesh::Mode;
@@ -37,15 +38,81 @@ pub struct GltfScene {
     pub materials: Vec<(String, MaterialDescriptor)>,
     /// Loaded CPU-side images with their labels.
     pub images: Vec<(String, TextureImage)>,
+    /// Imported transform animation clips with their labels.
+    pub animations: Vec<(String, GltfAnimationClip)>,
     /// Material index for each loaded mesh, aligned with [`Self::meshes`].
     pub mesh_material_indices: Vec<Option<usize>>,
     /// Node hierarchy information for spawning entities.
     pub nodes: Vec<GltfNode>,
 }
 
+/// Imported glTF transform animation clip.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GltfAnimationClip {
+    /// Imported animation label.
+    pub name: String,
+    /// Clip duration in seconds.
+    pub duration_seconds: f32,
+    /// Transform animation channels in this clip.
+    pub channels: Vec<GltfAnimationChannel>,
+}
+
+/// A single imported glTF animation channel targeting one node transform property.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GltfAnimationChannel {
+    /// Source glTF node index targeted by this channel.
+    pub target_node: usize,
+    /// Sampler interpolation mode.
+    pub interpolation: GltfAnimationInterpolation,
+    /// Keyframed transform property values.
+    pub curve: GltfAnimationCurve,
+}
+
+/// Interpolation mode declared by a glTF animation sampler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GltfAnimationInterpolation {
+    /// Linear vector interpolation or spherical rotation interpolation.
+    Linear,
+    /// Hold the previous keyframe value.
+    Step,
+    /// Cubic spline sampler. Oxide currently imports this as a declared mode.
+    CubicSpline,
+}
+
+/// Keyframed transform property values for an imported animation channel.
+#[derive(Clone, Debug, PartialEq)]
+pub enum GltfAnimationCurve {
+    /// Local translation keyframes.
+    Translations(Vec<GltfVec3Keyframe>),
+    /// Local rotation keyframes.
+    Rotations(Vec<GltfQuatKeyframe>),
+    /// Local scale keyframes.
+    Scales(Vec<GltfVec3Keyframe>),
+}
+
+/// Imported vector keyframe for glTF translation or scale channels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GltfVec3Keyframe {
+    /// Timestamp in seconds.
+    pub time_seconds: f32,
+    /// Keyframe value.
+    pub value: Vec3,
+}
+
+/// Imported quaternion keyframe for glTF rotation channels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GltfQuatKeyframe {
+    /// Timestamp in seconds.
+    pub time_seconds: f32,
+    /// Keyframe value.
+    pub value: Quat,
+}
+
 /// Represents a node in the glTF hierarchy.
 #[derive(Clone, Debug)]
 pub struct GltfNode {
+    /// Original glTF node index.
+    pub node_index: usize,
     /// Name of the node (if available).
     pub name: Option<String>,
     /// Index of the mesh (if this node has a mesh).
@@ -64,6 +131,7 @@ impl Default for GltfNode {
     fn default() -> Self {
         Self {
             name: None,
+            node_index: 0,
             mesh_index: None,
             translation: Vec3::ZERO,
             rotation: Quat::IDENTITY,
@@ -91,6 +159,7 @@ pub fn load_gltf(
     let dependencies = gltf_document_dependencies(path, &document);
     let materials = extract_materials(&document);
     let images = extract_images(&document, images)?;
+    let animations = extract_animations(&document, &buffers);
 
     // Extract meshes
     let mut meshes = Vec::new();
@@ -117,6 +186,7 @@ pub fn load_gltf(
         meshes,
         materials,
         images,
+        animations,
         mesh_material_indices,
         nodes,
     })
@@ -250,6 +320,111 @@ fn extract_images(
         })
 }
 
+fn extract_animations(
+    document: &gltf::Document,
+    buffers: &[Data],
+) -> Vec<(String, GltfAnimationClip)> {
+    document
+        .animations()
+        .enumerate()
+        .filter_map(|(idx, animation)| {
+            let name = format!("animation_{idx}");
+            let mut channels = Vec::new();
+            let mut duration_seconds = 0.0_f32;
+
+            for channel in animation.channels() {
+                let sampler = channel.sampler();
+                let reader =
+                    channel.reader(|buffer| buffers.get(buffer.index()).map(|data| &*data.0));
+                let Some(inputs) = reader.read_inputs() else {
+                    continue;
+                };
+                let times = inputs.collect::<Vec<_>>();
+                let Some(outputs) = reader.read_outputs() else {
+                    continue;
+                };
+                let interpolation = match sampler.interpolation() {
+                    gltf::animation::Interpolation::Linear => GltfAnimationInterpolation::Linear,
+                    gltf::animation::Interpolation::Step => GltfAnimationInterpolation::Step,
+                    gltf::animation::Interpolation::CubicSpline => {
+                        GltfAnimationInterpolation::CubicSpline
+                    }
+                };
+                let target_node = channel.target().node().index();
+                let curve = match outputs {
+                    ReadOutputs::Translations(values) => {
+                        let keyframes = times
+                            .iter()
+                            .copied()
+                            .zip(values)
+                            .map(|(time_seconds, value)| GltfVec3Keyframe {
+                                time_seconds,
+                                value: Vec3::from_array(value),
+                            })
+                            .collect::<Vec<_>>();
+                        if keyframes.is_empty() {
+                            continue;
+                        }
+                        duration_seconds =
+                            duration_seconds.max(keyframes.last().unwrap().time_seconds);
+                        GltfAnimationCurve::Translations(keyframes)
+                    }
+                    ReadOutputs::Rotations(values) => {
+                        let keyframes = times
+                            .iter()
+                            .copied()
+                            .zip(values.into_f32())
+                            .map(|(time_seconds, value)| GltfQuatKeyframe {
+                                time_seconds,
+                                value: Quat::from_xyzw(value[0], value[1], value[2], value[3]),
+                            })
+                            .collect::<Vec<_>>();
+                        if keyframes.is_empty() {
+                            continue;
+                        }
+                        duration_seconds =
+                            duration_seconds.max(keyframes.last().unwrap().time_seconds);
+                        GltfAnimationCurve::Rotations(keyframes)
+                    }
+                    ReadOutputs::Scales(values) => {
+                        let keyframes = times
+                            .iter()
+                            .copied()
+                            .zip(values)
+                            .map(|(time_seconds, value)| GltfVec3Keyframe {
+                                time_seconds,
+                                value: Vec3::from_array(value),
+                            })
+                            .collect::<Vec<_>>();
+                        if keyframes.is_empty() {
+                            continue;
+                        }
+                        duration_seconds =
+                            duration_seconds.max(keyframes.last().unwrap().time_seconds);
+                        GltfAnimationCurve::Scales(keyframes)
+                    }
+                    ReadOutputs::MorphTargetWeights(_) => continue,
+                };
+
+                channels.push(GltfAnimationChannel {
+                    target_node,
+                    interpolation,
+                    curve,
+                });
+            }
+
+            (!channels.is_empty()).then_some((
+                name.clone(),
+                GltfAnimationClip {
+                    name,
+                    duration_seconds,
+                    channels,
+                },
+            ))
+        })
+        .collect()
+}
+
 fn gltf_metallic_roughness_image_sources(document: &gltf::Document) -> Vec<usize> {
     let mut sources: Vec<_> = document
         .materials()
@@ -368,16 +543,16 @@ fn extract_nodes(document: &gltf::Document, meshes: &[(String, Mesh3D)]) -> Vec<
     match scene {
         Some(scene) => scene
             .nodes()
-            .enumerate()
-            .map(|(idx, node)| convert_node(idx, &node, meshes))
+            .map(|node| convert_node(&node, meshes))
             .collect(),
         None => Vec::new(),
     }
 }
 
 /// Converts a glTF node to our GltfNode type.
-fn convert_node(node_idx: usize, node: &gltf::Node, meshes: &[(String, Mesh3D)]) -> GltfNode {
+fn convert_node(node: &gltf::Node, meshes: &[(String, Mesh3D)]) -> GltfNode {
     let (t, r, s) = node.transform().decomposed();
+    let node_index = node.index();
 
     // Find mesh index if this node has a mesh
     let mesh_index = node.mesh().map(|mesh| {
@@ -390,15 +565,15 @@ fn convert_node(node_idx: usize, node: &gltf::Node, meshes: &[(String, Mesh3D)])
     });
 
     GltfNode {
-        name: Some(format!("node_{}", node_idx)),
+        node_index,
+        name: Some(format!("node_{node_index}")),
         mesh_index,
         translation: Vec3::new(t[0], t[1], t[2]),
         rotation: Quat::from_xyzw(r[0], r[1], r[2], r[3]),
         scale: Vec3::new(s[0], s[1], s[2]),
         children: node
             .children()
-            .enumerate()
-            .map(|(idx, child)| convert_node(idx, &child, meshes))
+            .map(|child| convert_node(&child, meshes))
             .collect(),
     }
 }
@@ -502,6 +677,45 @@ mod tests {
                 PathBuf::from("assets/models/textures/albedo.png"),
             ]
         );
+    }
+
+    #[test]
+    fn gltf_animations_extract_transform_channels() {
+        let raw = br#"{
+            "asset": { "version": "2.0" },
+            "buffers": [{ "byteLength": 32 }],
+            "bufferViews": [
+                { "buffer": 0, "byteOffset": 0, "byteLength": 8 },
+                { "buffer": 0, "byteOffset": 8, "byteLength": 24 }
+            ],
+            "accessors": [
+                { "bufferView": 0, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0.0], "max": [1.0] },
+                { "bufferView": 1, "componentType": 5126, "count": 2, "type": "VEC3" }
+            ],
+            "nodes": [{}],
+            "animations": [{
+                "samplers": [{ "input": 0, "output": 1, "interpolation": "LINEAR" }],
+                "channels": [{ "sampler": 0, "target": { "node": 0, "path": "translation" } }]
+            }]
+        }"#;
+        let gltf = gltf::Gltf::from_slice(raw).unwrap();
+        let mut bytes = Vec::new();
+        for value in [0.0_f32, 1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+
+        let clips = extract_animations(&gltf.document, &[Data(bytes)]);
+
+        assert_eq!(clips.len(), 1);
+        assert_eq!(clips[0].0, "animation_0");
+        assert_eq!(clips[0].1.duration_seconds, 1.0);
+        assert_eq!(clips[0].1.channels.len(), 1);
+        let GltfAnimationCurve::Translations(keyframes) = &clips[0].1.channels[0].curve else {
+            panic!("expected translation channel");
+        };
+        assert_eq!(clips[0].1.channels[0].target_node, 0);
+        assert_eq!(keyframes[0].value, Vec3::ZERO);
+        assert_eq!(keyframes[1].value, Vec3::new(2.0, 0.0, 0.0));
     }
 
     #[test]

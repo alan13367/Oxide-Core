@@ -3,7 +3,13 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
+use crate::animation::{
+    QuatKeyframe, TransformAnimationChannel, TransformAnimationClip, TransformAnimationClipAssets,
+    TransformAnimationClipHandle, TransformAnimationInterpolation, TransformAnimationTarget,
+    Vec3Keyframe,
+};
 use crate::asset::{
     load_gltf_async, reload_gltf_async, AssetServerResource, GltfSceneAssets, Handle,
     MaterialDescriptorAssets, MaterialDescriptorHandle, MaterialFilter, MeshCache, MeshFilter,
@@ -13,7 +19,9 @@ use crate::scene::{MeshPrimitive, RenderMaterial, RenderMesh, SceneMaterialLibra
 use oxide_ecs::entity::Entity;
 use oxide_ecs::world::World;
 use oxide_ecs::{Component, Resource};
-use oxide_renderer::gltf::{GltfNode, GltfScene};
+use oxide_renderer::gltf::{
+    GltfAnimationClip, GltfAnimationCurve, GltfAnimationInterpolation, GltfNode, GltfScene,
+};
 use oxide_transform::{
     attach_child, detach_child, Children, GlobalTransform, Parent, TransformComponent,
 };
@@ -31,6 +39,12 @@ pub struct GltfMeshRef {
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GltfMaterialRef {
     pub material_index: usize,
+}
+
+/// Component storing the source glTF node index for animation and tooling.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GltfNodeRef {
+    pub node_index: usize,
 }
 
 /// Component tagging entities spawned from a loaded glTF scene handle.
@@ -75,6 +89,12 @@ pub struct GltfSceneMaterialHandles {
 #[derive(Resource, Default)]
 pub struct GltfSceneImageHandles {
     pub handles_by_scene: HashMap<u64, Vec<TextureImageHandle>>,
+}
+
+/// Resource storing glTF animation clip handles keyed by scene-handle ID.
+#[derive(Resource, Default)]
+pub struct GltfSceneAnimationHandles {
+    pub handles_by_scene: HashMap<u64, Vec<TransformAnimationClipHandle>>,
 }
 
 /// Spawns glTF nodes into ECS while preserving the node hierarchy.
@@ -147,6 +167,10 @@ fn spawn_gltf_node(
     scene_handle: Option<Handle<GltfScene>>,
 ) -> Entity {
     let mut entity_builder = world.spawn((
+        GltfNodeRef {
+            node_index: node.node_index,
+        },
+        TransformAnimationTarget(node.node_index as u64),
         TransformComponent::new(Transform {
             position: node.translation,
             rotation: node.rotation,
@@ -240,6 +264,12 @@ pub fn request_gltf_scene_spawn(
     if !world.contains_resource::<GltfSceneImageHandles>() {
         world.insert_resource(GltfSceneImageHandles::default());
     }
+    if !world.contains_resource::<GltfSceneAnimationHandles>() {
+        world.insert_resource(GltfSceneAnimationHandles::default());
+    }
+    if !world.contains_resource::<TransformAnimationClipAssets>() {
+        world.insert_resource(TransformAnimationClipAssets::default());
+    }
 
     let handle = {
         let server = world.resource_mut::<AssetServerResource>();
@@ -264,6 +294,12 @@ pub fn reload_gltf_scene_path(
     }
     if !world.contains_resource::<GltfSceneAssets>() {
         world.insert_resource(GltfSceneAssets::default());
+    }
+    if !world.contains_resource::<GltfSceneAnimationHandles>() {
+        world.insert_resource(GltfSceneAnimationHandles::default());
+    }
+    if !world.contains_resource::<TransformAnimationClipAssets>() {
+        world.insert_resource(TransformAnimationClipAssets::default());
     }
 
     let handle = {
@@ -363,6 +399,12 @@ pub fn gltf_scene_spawn_system(world: &mut World) {
     if !world.contains_resource::<GltfSceneImageHandles>() {
         world.insert_resource(GltfSceneImageHandles::default());
     }
+    if !world.contains_resource::<GltfSceneAnimationHandles>() {
+        world.insert_resource(GltfSceneAnimationHandles::default());
+    }
+    if !world.contains_resource::<TransformAnimationClipAssets>() {
+        world.insert_resource(TransformAnimationClipAssets::default());
+    }
 
     let completed = {
         let server = world.resource_mut::<AssetServerResource>();
@@ -383,6 +425,8 @@ pub fn gltf_scene_spawn_system(world: &mut World) {
                     let mesh_handles = register_gltf_scene_meshes(world, handle, &mut scene);
                     let image_handles = register_gltf_scene_images(world, handle, &mut scene);
                     let material_handles = register_gltf_scene_materials(world, handle, &mut scene);
+                    let animation_handles =
+                        register_gltf_scene_animations(world, handle, &mut scene);
                     world
                         .resource_mut::<GltfSceneAssets>()
                         .assets
@@ -404,6 +448,12 @@ pub fn gltf_scene_spawn_system(world: &mut World) {
                             .resource_mut::<GltfSceneImageHandles>()
                             .handles_by_scene
                             .insert(handle.id(), image_handles);
+                    }
+                    if !animation_handles.is_empty() {
+                        world
+                            .resource_mut::<GltfSceneAnimationHandles>()
+                            .handles_by_scene
+                            .insert(handle.id(), animation_handles);
                     }
                     ready_handles.push(handle);
                 }
@@ -585,6 +635,93 @@ fn register_gltf_scene_materials(
     material_handles
 }
 
+fn register_gltf_scene_animations(
+    world: &mut World,
+    handle: Handle<GltfScene>,
+    scene: &mut GltfScene,
+) -> Vec<TransformAnimationClipHandle> {
+    if scene.animations.is_empty() {
+        return Vec::new();
+    }
+
+    let mut animation_assets = world
+        .remove_resource::<TransformAnimationClipAssets>()
+        .unwrap_or_default();
+    let mut animation_handles = Vec::with_capacity(scene.animations.len());
+    {
+        let server = world.resource_mut::<AssetServerResource>();
+        let scene_source = server.server.asset_source(&handle);
+        for (animation_name, clip) in scene.animations.iter().cloned() {
+            let clip = transform_animation_clip_from_gltf(clip);
+            let animation_handle = if let Some(source) = &scene_source {
+                server.server.insert_loaded_labeled_path(
+                    &mut animation_assets.assets,
+                    source.path().to_path_buf(),
+                    Some(animation_name.as_str()),
+                    clip,
+                )
+            } else {
+                let animation_handle = server.server.allocate_handle();
+                animation_assets.assets.insert(animation_handle, clip);
+                animation_handle
+            };
+            animation_handles.push(animation_handle);
+        }
+    }
+    world.insert_resource(animation_assets);
+    animation_handles
+}
+
+fn transform_animation_clip_from_gltf(clip: GltfAnimationClip) -> TransformAnimationClip {
+    let duration = Duration::from_secs_f32(clip.duration_seconds.max(0.0));
+    let mut converted = TransformAnimationClip::new(clip.name, duration);
+    for channel in clip.channels {
+        let target = TransformAnimationTarget(channel.target_node as u64);
+        let interpolation = match channel.interpolation {
+            GltfAnimationInterpolation::Linear => TransformAnimationInterpolation::Linear,
+            GltfAnimationInterpolation::Step => TransformAnimationInterpolation::Step,
+            GltfAnimationInterpolation::CubicSpline => TransformAnimationInterpolation::Linear,
+        };
+        let channel = match channel.curve {
+            GltfAnimationCurve::Translations(keyframes) => TransformAnimationChannel::Translation {
+                target,
+                interpolation,
+                keyframes: keyframes
+                    .into_iter()
+                    .map(|keyframe| Vec3Keyframe {
+                        time: Duration::from_secs_f32(keyframe.time_seconds.max(0.0)),
+                        value: keyframe.value,
+                    })
+                    .collect(),
+            },
+            GltfAnimationCurve::Rotations(keyframes) => TransformAnimationChannel::Rotation {
+                target,
+                interpolation,
+                keyframes: keyframes
+                    .into_iter()
+                    .map(|keyframe| QuatKeyframe {
+                        time: Duration::from_secs_f32(keyframe.time_seconds.max(0.0)),
+                        value: keyframe.value,
+                    })
+                    .collect(),
+            },
+            GltfAnimationCurve::Scales(keyframes) => TransformAnimationChannel::Scale {
+                target,
+                interpolation,
+                keyframes: keyframes
+                    .into_iter()
+                    .map(|keyframe| Vec3Keyframe {
+                        time: Duration::from_secs_f32(keyframe.time_seconds.max(0.0)),
+                        value: keyframe.value,
+                    })
+                    .collect(),
+            },
+        };
+        converted.channels.push(channel);
+    }
+    converted
+}
+
 fn despawn_gltf_scene_entities(world: &mut World, handle: Handle<GltfScene>) -> Vec<Entity> {
     let entities = {
         let mut query = world.query::<(Entity, &GltfSceneInstance)>();
@@ -660,8 +797,10 @@ mod tests {
             meshes: Vec::new(),
             materials: Vec::new(),
             images: Vec::new(),
+            animations: Vec::new(),
             mesh_material_indices: Vec::new(),
             nodes: vec![GltfNode {
+                node_index: 0,
                 name: Some(name.to_string()),
                 mesh_index: None,
                 translation,
@@ -681,14 +820,17 @@ mod tests {
             meshes: Vec::new(),
             materials: Vec::new(),
             images: Vec::new(),
+            animations: Vec::new(),
             mesh_material_indices: Vec::new(),
             nodes: vec![GltfNode {
+                node_index: 0,
                 name: Some("root".to_string()),
                 mesh_index: None,
                 translation: Vec3::new(1.0, 0.0, 0.0),
                 rotation: Quat::IDENTITY,
                 scale: Vec3::ONE,
                 children: vec![GltfNode {
+                    node_index: 0,
                     name: Some("child".to_string()),
                     mesh_index: Some(0),
                     translation: Vec3::new(0.0, 2.0, 0.0),
@@ -710,6 +852,14 @@ mod tests {
         let parent = world.get::<Parent>(child).unwrap();
         assert_eq!(parent.0, root);
         assert!(world.get::<GltfMeshRef>(child).is_some());
+        assert_eq!(
+            world.get::<GltfNodeRef>(child),
+            Some(&GltfNodeRef { node_index: 0 })
+        );
+        assert_eq!(
+            world.get::<TransformAnimationTarget>(child),
+            Some(&TransformAnimationTarget(0))
+        );
     }
 
     #[test]
@@ -722,8 +872,10 @@ mod tests {
             meshes: Vec::new(),
             materials: Vec::new(),
             images: Vec::new(),
+            animations: Vec::new(),
             mesh_material_indices: Vec::new(),
             nodes: vec![GltfNode {
+                node_index: 0,
                 name: Some("mesh_node".to_string()),
                 mesh_index: Some(0),
                 translation: Vec3::ZERO,
@@ -760,8 +912,10 @@ mod tests {
                 test_material("imported_blue", [0.0, 0.0, 1.0, 1.0]),
             )],
             images: Vec::new(),
+            animations: Vec::new(),
             mesh_material_indices: vec![Some(0)],
             nodes: vec![GltfNode {
+                node_index: 0,
                 name: Some("material_node".to_string()),
                 mesh_index: Some(0),
                 translation: Vec3::ZERO,
@@ -815,8 +969,10 @@ mod tests {
             meshes: Vec::new(),
             materials: Vec::new(),
             images: Vec::new(),
+            animations: Vec::new(),
             mesh_material_indices: Vec::new(),
             nodes: vec![GltfNode {
+                node_index: 0,
                 name: Some("root".to_string()),
                 mesh_index: None,
                 translation: Vec3::ZERO,
@@ -964,6 +1120,7 @@ mod tests {
                 test_material("imported_red", [1.0, 0.0, 0.0, 1.0]),
             )],
             images: Vec::new(),
+            animations: Vec::new(),
             mesh_material_indices: vec![Some(0)],
             nodes: Vec::new(),
         };
@@ -1024,6 +1181,7 @@ mod tests {
                 "image_0".to_string(),
                 TextureImage::from_rgba(1, 1, vec![255, 0, 0, 255]).unwrap(),
             )],
+            animations: Vec::new(),
             mesh_material_indices: Vec::new(),
             nodes: Vec::new(),
         };
@@ -1047,6 +1205,69 @@ mod tests {
                 .map(|image| (image.width, image.height, image.rgba.as_slice())),
             Some((1, 1, [255, 0, 0, 255].as_slice()))
         );
+    }
+
+    #[test]
+    fn gltf_animations_register_as_labeled_transform_clip_assets() {
+        let mut world = World::new();
+        world.insert_resource(AssetServerResource::default());
+        world.insert_resource(TransformAnimationClipAssets::default());
+
+        let handle = {
+            let server = world.resource_mut::<AssetServerResource>();
+            server
+                .server
+                .register_loaded_path::<GltfScene>("assets/models/level.gltf")
+        };
+        let mut scene = GltfScene {
+            dependencies: Vec::new(),
+            meshes: Vec::new(),
+            materials: Vec::new(),
+            images: Vec::new(),
+            animations: vec![(
+                "animation_0".to_string(),
+                GltfAnimationClip {
+                    name: "animation_0".to_string(),
+                    duration_seconds: 1.0,
+                    channels: vec![oxide_renderer::gltf::GltfAnimationChannel {
+                        target_node: 4,
+                        interpolation: GltfAnimationInterpolation::Linear,
+                        curve: GltfAnimationCurve::Translations(vec![
+                            oxide_renderer::gltf::GltfVec3Keyframe {
+                                time_seconds: 0.0,
+                                value: Vec3::ZERO,
+                            },
+                            oxide_renderer::gltf::GltfVec3Keyframe {
+                                time_seconds: 1.0,
+                                value: Vec3::X,
+                            },
+                        ]),
+                    }],
+                },
+            )],
+            mesh_material_indices: Vec::new(),
+            nodes: Vec::new(),
+        };
+
+        let handles = register_gltf_scene_animations(&mut world, handle, &mut scene);
+
+        assert_eq!(handles.len(), 1);
+        assert_eq!(
+            world
+                .resource::<AssetServerResource>()
+                .server
+                .asset_label(&handles[0]),
+            Some("animation_0")
+        );
+        let clip = world
+            .resource::<TransformAnimationClipAssets>()
+            .assets
+            .get(&handles[0])
+            .expect("animation clip should be published");
+        assert_eq!(clip.name, "animation_0");
+        assert_eq!(clip.duration, Duration::from_secs(1));
+        assert_eq!(clip.channels.len(), 1);
+        assert_eq!(clip.channels[0].target(), TransformAnimationTarget(4));
     }
 
     fn run_gltf_spawn_until_ready(world: &mut World, handle: Handle<GltfScene>) {

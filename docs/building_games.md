@@ -23,6 +23,10 @@ the engine prelude for normal game code.
   systems that should advance at a stable tick rate independent of rendering.
 - Use `TransformTween` for lightweight transform animation with one-shot,
   looping, or ping-pong playback. `DefaultPlugins` installs `AnimationPlugin`.
+- Use `TransformAnimationClip`, `TransformAnimationClipAssets`, and
+  `AnimationPlayer` for imported or authored transform clips. glTF nodes are
+  spawned with `TransformAnimationTarget` values based on their source node
+  index.
 - Use `Visibility::Hidden` to hide a renderable entity or hierarchy subtree
   without despawning it. `InheritedVisibility` is propagated automatically.
 - Use `RenderLayers` to filter meshes, terrain, and sprites per camera for
@@ -214,6 +218,15 @@ commands.spawn((
         Duration::from_secs(2),
     )
     .with_easing(TweenEasing::SmoothStep),
+));
+```
+
+Imported or authored transform clips can be sampled through `AnimationPlayer`:
+
+```rust
+commands.spawn((
+    TransformComponent::default(),
+    AnimationPlayer::new(clip_handle, TransformAnimationTarget(0)),
 ));
 ```
 

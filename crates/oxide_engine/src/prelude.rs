@@ -1,8 +1,11 @@
 //! Oxide Core engine prelude
 
 pub use crate::animation::{
-    transform_tween_system, AnimationPlugin, TransformTween, TweenEasing, TweenRepeat,
-    TRANSFORM_TWEEN_SYSTEM,
+    transform_animation_system, transform_tween_system, AnimationPlayer, AnimationPlugin,
+    QuatKeyframe, TransformAnimationChannel, TransformAnimationClip, TransformAnimationClipAssets,
+    TransformAnimationClipHandle, TransformAnimationInterpolation, TransformAnimationProperty,
+    TransformAnimationTarget, TransformTween, TweenEasing, TweenRepeat, Vec3Keyframe,
+    TRANSFORM_ANIMATION_SYSTEM, TRANSFORM_TWEEN_SYSTEM,
 };
 #[cfg(feature = "gltf-import")]
 pub use crate::app::GLTF_SCENE_ASSET_EVENTS_SYSTEM;
@@ -12,7 +15,8 @@ pub use crate::app::{
     Render, RenderPlugin, Startup, TransformPlugin, Update, GLTF_SCENE_SPAWN_SYSTEM,
     MATERIAL_ASSET_EVENTS_SYSTEM, MATERIAL_DESCRIPTOR_ASSET_EVENTS_SYSTEM,
     MATERIAL_DESCRIPTOR_ASSET_SYSTEM, MESH_ASSET_EVENTS_SYSTEM, OXSCENE_SPAWN_SYSTEM,
-    TEXTURE_IMAGE_ASSET_EVENTS_SYSTEM, TRANSFORM_PROPAGATE_SYSTEM, VISIBILITY_PROPAGATE_SYSTEM,
+    TEXTURE_IMAGE_ASSET_EVENTS_SYSTEM, TRANSFORM_ANIMATION_CLIP_ASSET_EVENTS_SYSTEM,
+    TRANSFORM_PROPAGATE_SYSTEM, VISIBILITY_PROPAGATE_SYSTEM,
 };
 #[cfg(feature = "gltf-import")]
 pub use crate::asset::{load_gltf_async, reload_gltf_async, GltfSceneAssets};
@@ -101,9 +105,9 @@ pub use crate::scene::{
     gltf_scene_spawn_system, queue_gltf_scene_spawn, reload_changed_gltf_scenes,
     reload_gltf_scene_path, request_gltf_scene_spawn, spawn_gltf_scene_hierarchy,
     spawn_gltf_scene_hierarchy_with_assets, spawn_gltf_scene_hierarchy_with_meshes,
-    take_spawned_scene_roots, GltfMaterialRef, GltfMeshRef, GltfSceneImageHandles,
-    GltfSceneInstance, GltfSceneMaterialHandles, GltfSceneMeshHandles, PendingGltfSceneSpawns,
-    SpawnedGltfScenes,
+    take_spawned_scene_roots, GltfMaterialRef, GltfMeshRef, GltfNodeRef, GltfSceneAnimationHandles,
+    GltfSceneImageHandles, GltfSceneInstance, GltfSceneMaterialHandles, GltfSceneMeshHandles,
+    PendingGltfSceneSpawns, SpawnedGltfScenes,
 };
 pub use crate::time::{Timer, TimerMode};
 pub use crate::ui::{
