@@ -66,11 +66,12 @@ Scene documents can declare relative or absolute dependency paths in
 so changes to referenced material, sprite, or imported data files can invalidate
 the scene without app code manually updating the `AssetServer`.
 The native scene loader also records non-virtual `albedo_texture`,
-`normal_texture`, and `roughness_texture` paths from top-level scene materials,
-inline mesh materials, prefab materials, and prefab material overrides. Those
-image files are loaded into `TextureImageAssets` with their authored labels, so
-a scene material can use `"albedo_texture": "textures/crate.png"` without a
-separate `.oxmat` descriptor.
+`normal_texture`, `metallic_texture`, and `roughness_texture` paths from
+top-level scene materials, inline mesh materials, prefab materials, and prefab
+material overrides. Those image files are loaded into `TextureImageAssets` with
+their authored labels, so a scene material can use
+`"albedo_texture": "textures/crate.png"` without a separate `.oxmat`
+descriptor.
 
 `examples/minimal_game` demonstrates this path with
 `assets/scenes/starter.oxscene`.
@@ -166,11 +167,12 @@ Use `request_material_descriptor_load(server, path)` to asynchronously load a
 `MaterialDescriptorAssets`. `DefaultPlugins` installs
 `material_descriptor_asset_system`, which publishes ready descriptors and
 records dependencies for file shaders and texture paths. Non-virtual
-albedo/normal/roughness texture paths are loaded into `TextureImageAssets` using
-the authored texture path as a label, which lets renderer systems bind them
-through the same material texture cache used for glTF image labels. The automatic
-scene renderer binds albedo, normal, and roughness slots together and falls back
-to a neutral normal map or white texture for missing slots. Loaded descriptors are
+albedo/normal/metallic/roughness texture paths are loaded into
+`TextureImageAssets` using the authored texture path as a label, which lets
+renderer systems bind them through the same material texture cache used for glTF
+image labels. The automatic scene renderer binds albedo, normal, metallic, and
+roughness slots together and falls back to a neutral normal map or white texture
+for missing slots. Loaded descriptors are
 also registered into `SceneMaterialLibrary` by `MaterialDescriptor::name`, so
 `RenderMaterial::Named("stone".to_string())` can resolve through the automatic
 scene renderer. Entities can also store `MaterialFilter` to render directly from

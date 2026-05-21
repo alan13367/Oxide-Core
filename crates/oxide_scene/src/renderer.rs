@@ -66,9 +66,12 @@ var albedo_texture: texture_2d<f32>;
 var normal_texture: texture_2d<f32>;
 
 @group(2) @binding(2)
-var roughness_texture: texture_2d<f32>;
+var metallic_texture: texture_2d<f32>;
 
 @group(2) @binding(3)
+var roughness_texture: texture_2d<f32>;
+
+@group(2) @binding(4)
 var material_sampler: sampler;
 
 struct VertexInput {
@@ -96,7 +99,7 @@ struct VertexOutput {
     @location(7) roughness_factor: f32,
     @location(8) metallic_factor: f32,
     @location(9) emissive_color: vec3<f32>,
-    @location(10) texture_flags: vec3<f32>,
+    @location(10) texture_flags: vec4<f32>,
 };
 
 @vertex
@@ -115,7 +118,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     output.roughness_factor = input.material.w;
     output.metallic_factor = input.material_factors.x;
     output.emissive_color = input.material_factors.yzw;
-    output.texture_flags = input.texture_flags.xyz;
+    output.texture_flags = input.texture_flags;
     return output;
 }
 
@@ -147,9 +150,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let normal_sample = textureSample(normal_texture, material_sampler, input.uv).xyz;
     let normal = select(base_normal, normal_from_map(base_normal, input.world_position, input.uv, normal_sample), input.texture_flags.y > 0.5);
     let view_dir = normalize(camera.position.xyz - input.world_position);
+    let metallic_sample = textureSample(metallic_texture, material_sampler, input.uv).r;
     let roughness_sample = textureSample(roughness_texture, material_sampler, input.uv).r;
     let roughness = clamp(input.roughness_factor * mix(1.0, roughness_sample, input.texture_flags.z), 0.04, 1.0);
-    let metallic = clamp(input.metallic_factor, 0.0, 1.0);
+    let metallic = clamp(input.metallic_factor * mix(1.0, metallic_sample, input.texture_flags.w), 0.0, 1.0);
     var lighting = lights.ambient_color_intensity.rgb * lights.ambient_color_intensity.a;
     var specular_lighting = vec3<f32>(0.0);
 
@@ -349,7 +353,7 @@ impl SceneInstanceRaw {
                 f32::from(material.albedo_texture.is_some()),
                 f32::from(material.normal_texture.is_some()),
                 f32::from(material.roughness_texture.is_some()),
-                0.0,
+                f32::from(material.metallic_texture.is_some()),
             ],
         }
     }
@@ -365,6 +369,7 @@ struct MaterialBatchKey {
     identity: String,
     albedo_texture: Option<String>,
     normal_texture: Option<String>,
+    metallic_texture: Option<String>,
     roughness_texture: Option<String>,
 }
 
@@ -430,6 +435,7 @@ impl MaterialBatchKey {
                 alpha_mode,
                 albedo_texture,
                 normal_texture,
+                metallic_texture,
                 roughness_texture,
             } => Self {
                 mode: material_mode(*shader, *material_type),
@@ -438,10 +444,11 @@ impl MaterialBatchKey {
                 roughness_factor: material_factor_key(*roughness_factor),
                 emissive_color: emissive_color.map(material_factor_key),
                 identity: format!(
-                    "builtin:{shader:?}:{material_type:?}:{name}:{base_color:?}:{metallic_factor:?}:{roughness_factor:?}:{emissive_color:?}:{alpha_mode:?}:{albedo_texture:?}:{normal_texture:?}:{roughness_texture:?}"
+                    "builtin:{shader:?}:{material_type:?}:{name}:{base_color:?}:{metallic_factor:?}:{roughness_factor:?}:{emissive_color:?}:{alpha_mode:?}:{albedo_texture:?}:{normal_texture:?}:{metallic_texture:?}:{roughness_texture:?}"
                 ),
                 albedo_texture: albedo_texture.clone(),
                 normal_texture: normal_texture.clone(),
+                metallic_texture: metallic_texture.clone(),
                 roughness_texture: roughness_texture.clone(),
             },
             RenderMaterial::Named(name) => Self {
@@ -453,6 +460,7 @@ impl MaterialBatchKey {
                 identity: format!("named:{name}"),
                 albedo_texture: None,
                 normal_texture: None,
+                metallic_texture: None,
                 roughness_texture: None,
             },
         }
@@ -580,13 +588,14 @@ struct MaterialTexture {
 struct MaterialTextureSetKey {
     albedo: Option<String>,
     normal: Option<String>,
+    metallic: Option<String>,
     roughness: Option<String>,
 }
 
 #[derive(Debug)]
 struct MaterialTextureSet {
     bind_group: wgpu::BindGroup,
-    revisions: [u64; 3],
+    revisions: [u64; 4],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -600,12 +609,16 @@ impl MaterialTextureSetKey {
         Self {
             albedo: material_texture_label(material.albedo_texture.as_deref()),
             normal: material_texture_label(material.normal_texture.as_deref()),
+            metallic: material_texture_label(material.metallic_texture.as_deref()),
             roughness: material_texture_label(material.roughness_texture.as_deref()),
         }
     }
 
     fn is_empty(&self) -> bool {
-        self.albedo.is_none() && self.normal.is_none() && self.roughness.is_none()
+        self.albedo.is_none()
+            && self.normal.is_none()
+            && self.metallic.is_none()
+            && self.roughness.is_none()
     }
 }
 
@@ -788,6 +801,7 @@ impl SceneRenderer {
             &material_texture_layout,
             &fallback_material_texture,
             &fallback_normal_texture,
+            &fallback_material_texture,
             &fallback_material_texture,
             "Scene Fallback Material Texture Set",
         );
@@ -1403,6 +1417,8 @@ impl SceneRenderer {
                 self.material_texture_or_fallback(key.albedo.as_deref(), MaterialFallback::White);
             let normal =
                 self.material_texture_or_fallback(key.normal.as_deref(), MaterialFallback::Normal);
+            let metallic =
+                self.material_texture_or_fallback(key.metallic.as_deref(), MaterialFallback::White);
             let roughness = self
                 .material_texture_or_fallback(key.roughness.as_deref(), MaterialFallback::White);
             create_material_texture_set_bind_group(
@@ -1410,6 +1426,7 @@ impl SceneRenderer {
                 &self.material_texture_layout,
                 albedo,
                 normal,
+                metallic,
                 roughness,
                 "Scene Material Texture Set",
             )
@@ -1438,11 +1455,13 @@ impl SceneRenderer {
         }
     }
 
-    fn material_texture_set_revisions(&self, key: &MaterialTextureSetKey) -> [u64; 3] {
+    fn material_texture_set_revisions(&self, key: &MaterialTextureSetKey) -> [u64; 4] {
         [
             self.material_texture_or_fallback(key.albedo.as_deref(), MaterialFallback::White)
                 .revision,
             self.material_texture_or_fallback(key.normal.as_deref(), MaterialFallback::Normal)
+                .revision,
+            self.material_texture_or_fallback(key.metallic.as_deref(), MaterialFallback::White)
                 .revision,
             self.material_texture_or_fallback(key.roughness.as_deref(), MaterialFallback::White)
                 .revision,
@@ -1826,6 +1845,16 @@ fn create_material_texture_bind_group_layout(
             wgpu::BindGroupLayoutEntry {
                 binding: 3,
                 visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
@@ -1860,6 +1889,7 @@ fn create_material_texture_set_bind_group(
     layout: &wgpu::BindGroupLayout,
     albedo: &MaterialTexture,
     normal: &MaterialTexture,
+    metallic: &MaterialTexture,
     roughness: &MaterialTexture,
     label: &str,
 ) -> wgpu::BindGroup {
@@ -1877,10 +1907,14 @@ fn create_material_texture_set_bind_group(
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::TextureView(&roughness._texture.view),
+                resource: wgpu::BindingResource::TextureView(&metallic._texture.view),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
+                resource: wgpu::BindingResource::TextureView(&roughness._texture.view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
                 resource: wgpu::BindingResource::Sampler(&albedo._texture.sampler),
             },
         ],
@@ -2519,6 +2553,7 @@ mod tests {
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: None,
             normal_texture: None,
+            metallic_texture: None,
             roughness_texture: None,
         };
 
@@ -2541,6 +2576,7 @@ mod tests {
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: None,
             normal_texture: None,
+            metallic_texture: None,
             roughness_texture: None,
         };
 
@@ -2571,6 +2607,7 @@ mod tests {
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: Some("#image_0".to_string()),
             normal_texture: Some("#normal_0".to_string()),
+            metallic_texture: Some("#metallic_0".to_string()),
             roughness_texture: Some("#roughness_0".to_string()),
         });
         let second = MaterialBatchKey::from_material(&RenderMaterial::Builtin {
@@ -2584,14 +2621,16 @@ mod tests {
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: Some("#image_1".to_string()),
             normal_texture: Some("#normal_1".to_string()),
+            metallic_texture: Some("#metallic_1".to_string()),
             roughness_texture: Some("#roughness_1".to_string()),
         });
 
         assert_ne!(first, second);
         assert_eq!(first.albedo_texture.as_deref(), Some("#image_0"));
+        assert_eq!(first.metallic_texture.as_deref(), Some("#metallic_0"));
         let instance = SceneInstanceRaw::new(Mat4::IDENTITY, [1.0; 4], first);
         assert_eq!(instance.material[1], 1.0);
-        assert_eq!(instance.texture_flags, [1.0, 1.0, 1.0, 0.0]);
+        assert_eq!(instance.texture_flags, [1.0, 1.0, 1.0, 1.0]);
     }
 
     #[test]
@@ -2610,6 +2649,7 @@ mod tests {
                 alpha_mode: AlphaMode::Opaque,
                 albedo_texture: None,
                 normal_texture: None,
+                metallic_texture: None,
                 roughness_texture: None,
             },
         );
@@ -2625,7 +2665,7 @@ mod tests {
         assert_eq!(resolved.mode, MaterialMode::Unlit);
         assert_eq!(
             resolved.identity,
-            "builtin:Unlit:Unlit:matte:[0.5, 0.75, 1.0, 1.0]:0.0:0.5:[0.0, 0.0, 0.0]:Opaque:None:None:None"
+            "builtin:Unlit:Unlit:matte:[0.5, 0.75, 1.0, 1.0]:0.0:0.5:[0.0, 0.0, 0.0]:Opaque:None:None:None:None"
         );
     }
 
@@ -2642,6 +2682,7 @@ mod tests {
             alpha_mode: AlphaMode::Mask,
             albedo_texture: None,
             normal_texture: None,
+            metallic_texture: None,
             roughness_texture: None,
         };
 
@@ -2668,6 +2709,7 @@ mod tests {
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: None,
             normal_texture: None,
+            metallic_texture: None,
             roughness_texture: None,
         };
 
@@ -2711,6 +2753,7 @@ mod tests {
                 alpha_mode: AlphaMode::Opaque,
                 albedo_texture: None,
                 normal_texture: None,
+                metallic_texture: None,
                 roughness_texture: None,
             },
         );
@@ -2746,6 +2789,7 @@ mod tests {
                 alpha_mode: AlphaMode::Blend,
                 albedo_texture: Some("#image_0".to_string()),
                 normal_texture: Some("#normal_0".to_string()),
+                metallic_texture: Some("#metallic_0".to_string()),
                 roughness_texture: Some("#roughness_0".to_string()),
             },
         );
@@ -2766,6 +2810,7 @@ mod tests {
                         alpha_mode: AlphaMode::Opaque,
                         albedo_texture: None,
                         normal_texture: None,
+                        metallic_texture: None,
                         roughness_texture: None,
                     },
                 ),
@@ -2782,6 +2827,10 @@ mod tests {
         assert_eq!(
             material.normal_texture_with_library(None),
             Some("#normal_0")
+        );
+        assert_eq!(
+            material.metallic_texture_with_library(None),
+            Some("#metallic_0")
         );
         assert_eq!(
             material.roughness_texture_with_library(None),

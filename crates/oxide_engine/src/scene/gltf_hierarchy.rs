@@ -649,6 +649,7 @@ mod tests {
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: Some("#image_0".to_string()),
             normal_texture: Some("#image_1".to_string()),
+            metallic_texture: Some("#image_2_metallic".to_string()),
             roughness_texture: Some("#image_2_roughness".to_string()),
         }
     }
@@ -993,6 +994,10 @@ mod tests {
             .unwrap();
         assert_eq!(material.albedo_texture.as_deref(), Some("#image_0"));
         assert_eq!(material.normal_texture.as_deref(), Some("#image_1"));
+        assert_eq!(
+            material.metallic_texture.as_deref(),
+            Some("#image_2_metallic")
+        );
         assert_eq!(
             material.roughness_texture.as_deref(),
             Some("#image_2_roughness")

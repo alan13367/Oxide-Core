@@ -949,6 +949,11 @@ pub struct SceneMaterialDescriptor {
     /// world position and UV derivatives.
     #[serde(default)]
     pub normal_texture: Option<String>,
+    /// Optional label or path-like reference for the material's metallic texture.
+    ///
+    /// The sampled red channel is multiplied with `metallic_factor`.
+    #[serde(default)]
+    pub metallic_texture: Option<String>,
     /// Optional label or path-like reference for the material's roughness texture.
     ///
     /// The sampled red channel is multiplied with `roughness_factor`.
@@ -969,6 +974,7 @@ impl Default for SceneMaterialDescriptor {
             alpha_mode: SceneAlphaMode::Opaque,
             albedo_texture: None,
             normal_texture: None,
+            metallic_texture: None,
             roughness_texture: None,
         }
     }
@@ -990,6 +996,7 @@ impl From<SceneMaterialDescriptor> for RenderMaterial {
             alpha_mode: value.alpha_mode.into(),
             albedo_texture: value.albedo_texture,
             normal_texture: value.normal_texture,
+            metallic_texture: value.metallic_texture,
             roughness_texture: value.roughness_texture,
         }
     }
@@ -1458,6 +1465,7 @@ fn scene_material_descriptor_from_render_material(
             alpha_mode,
             albedo_texture,
             normal_texture,
+            metallic_texture,
             roughness_texture,
             ..
         } => {
@@ -1482,6 +1490,7 @@ fn scene_material_descriptor_from_render_material(
                 alpha_mode: (*alpha_mode).into(),
                 albedo_texture: albedo_texture.clone(),
                 normal_texture: normal_texture.clone(),
+                metallic_texture: metallic_texture.clone(),
                 roughness_texture: roughness_texture.clone(),
             })
         }
@@ -2043,6 +2052,12 @@ fn validate_scene_material(
             "material normal textures must not be empty",
         ));
     }
+    if matches!(material.metallic_texture.as_deref(), Some(texture) if texture.trim().is_empty()) {
+        diagnostics.push(SceneValidationDiagnostic::new(
+            format!("{path}.metallic_texture"),
+            "material metallic textures must not be empty",
+        ));
+    }
     if matches!(material.roughness_texture.as_deref(), Some(texture) if texture.trim().is_empty()) {
         diagnostics.push(SceneValidationDiagnostic::new(
             format!("{path}.roughness_texture"),
@@ -2385,6 +2400,7 @@ mod tests {
                         alpha_mode: oxide_renderer::descriptor::AlphaMode::Opaque,
                         albedo_texture: None,
                         normal_texture: None,
+                        metallic_texture: None,
                         roughness_texture: None,
                     },
                 ),
@@ -2421,6 +2437,7 @@ mod tests {
                         alpha_mode: oxide_renderer::descriptor::AlphaMode::Mask,
                         albedo_texture: Some("#crate_albedo".to_string()),
                         normal_texture: Some("#crate_normal".to_string()),
+                        metallic_texture: Some("#crate_metallic".to_string()),
                         roughness_texture: Some("#crate_roughness".to_string()),
                     },
                 )
@@ -2442,6 +2459,10 @@ mod tests {
         assert_eq!(material.alpha_mode, SceneAlphaMode::Mask);
         assert_eq!(material.albedo_texture.as_deref(), Some("#crate_albedo"));
         assert_eq!(material.normal_texture.as_deref(), Some("#crate_normal"));
+        assert_eq!(
+            material.metallic_texture.as_deref(),
+            Some("#crate_metallic")
+        );
         assert_eq!(
             material.roughness_texture.as_deref(),
             Some("#crate_roughness")
@@ -3343,6 +3364,7 @@ mod tests {
                             "emissive_color": [0.04, 0.02, 0.0],
                             "albedo_texture": "#crate_albedo",
                             "normal_texture": "#crate_normal",
+                            "metallic_texture": "#crate_metallic",
                             "roughness_texture": "#crate_roughness"
                         }
                     ],
@@ -3365,6 +3387,7 @@ mod tests {
                                 "shader": "unlit",
                                 "albedo_texture": "#inline_albedo",
                                 "normal_texture": "#inline_normal",
+                                "metallic_texture": "#inline_metallic",
                                 "roughness_texture": "#inline_roughness"
                             }
                         }
@@ -3385,6 +3408,10 @@ mod tests {
             Some("#crate_normal")
         );
         assert_eq!(
+            scene.materials[0].metallic_texture.as_deref(),
+            Some("#crate_metallic")
+        );
+        assert_eq!(
             scene.materials[0].roughness_texture.as_deref(),
             Some("#crate_roughness")
         );
@@ -3398,6 +3425,10 @@ mod tests {
         assert_eq!(material.albedo_texture.as_deref(), Some("#inline_albedo"));
         assert_eq!(material.normal_texture.as_deref(), Some("#inline_normal"));
         assert_eq!(
+            material.metallic_texture.as_deref(),
+            Some("#inline_metallic")
+        );
+        assert_eq!(
             material.roughness_texture.as_deref(),
             Some("#inline_roughness")
         );
@@ -3409,6 +3440,10 @@ mod tests {
         assert_eq!(
             render_material.normal_texture_with_library(None),
             Some("#inline_normal")
+        );
+        assert_eq!(
+            render_material.metallic_texture_with_library(None),
+            Some("#inline_metallic")
         );
         assert_eq!(
             render_material.roughness_texture_with_library(None),
@@ -3689,6 +3724,7 @@ mod tests {
                     name: "blank_texture".to_string(),
                     albedo_texture: Some("   ".to_string()),
                     normal_texture: Some("   ".to_string()),
+                    metallic_texture: Some("   ".to_string()),
                     roughness_texture: Some("   ".to_string()),
                     ..Default::default()
                 },
@@ -3723,6 +3759,10 @@ mod tests {
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.path == "materials[3].normal_texture"
                 && diagnostic.message == "material normal textures must not be empty"
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "materials[3].metallic_texture"
+                && diagnostic.message == "material metallic textures must not be empty"
         }));
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.path == "materials[3].roughness_texture"

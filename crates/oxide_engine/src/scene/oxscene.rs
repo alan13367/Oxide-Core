@@ -336,6 +336,7 @@ fn collect_scene_material_texture(material: &SceneMaterialDescriptor, textures: 
     for texture in [
         material.albedo_texture.as_ref(),
         material.normal_texture.as_ref(),
+        material.metallic_texture.as_ref(),
         material.roughness_texture.as_ref(),
     ]
     .into_iter()
@@ -622,6 +623,7 @@ mod tests {
                 shader: SceneBuiltinShader::Lit,
                 albedo_texture: Some("textures/crate.png".to_string()),
                 normal_texture: Some("textures/crate_n.png".to_string()),
+                metallic_texture: Some("textures/crate_m.png".to_string()),
                 roughness_texture: Some("textures/crate_r.png".to_string()),
                 ..Default::default()
             }],
@@ -657,6 +659,7 @@ mod tests {
                 PathBuf::from("assets/scenes/materials/stone.oxmat"),
                 PathBuf::from("assets/scenes/sprites/hud.png"),
                 PathBuf::from("assets/scenes/textures/crate.png"),
+                PathBuf::from("assets/scenes/textures/crate_m.png"),
                 PathBuf::from("assets/scenes/textures/crate_n.png"),
                 PathBuf::from("assets/scenes/textures/crate_r.png"),
                 PathBuf::from("assets/scenes/textures/prefab.png"),
@@ -674,6 +677,7 @@ mod tests {
                         material: SceneMaterialDescriptor {
                             albedo_texture: Some("textures/entity.png".to_string()),
                             normal_texture: Some("textures/entity_n.png".to_string()),
+                            metallic_texture: Some("textures/entity_m.png".to_string()),
                             roughness_texture: Some("textures/entity_r.png".to_string()),
                             ..Default::default()
                         },
@@ -688,6 +692,7 @@ mod tests {
                             material: Some(SceneMaterialDescriptor {
                                 albedo_texture: Some("textures/override.png".to_string()),
                                 normal_texture: Some("textures/override_n.png".to_string()),
+                                metallic_texture: Some("textures/override_m.png".to_string()),
                                 roughness_texture: Some("textures/override_r.png".to_string()),
                                 ..Default::default()
                             }),
@@ -705,6 +710,7 @@ mod tests {
                         material: SceneMaterialDescriptor {
                             albedo_texture: Some("textures/prefab.png".to_string()),
                             normal_texture: Some("textures/prefab_n.png".to_string()),
+                            metallic_texture: Some("textures/prefab_m.png".to_string()),
                             roughness_texture: Some("textures/prefab_r.png".to_string()),
                             ..Default::default()
                         },
@@ -725,6 +731,10 @@ mod tests {
                     PathBuf::from("assets/scenes/textures/entity.png")
                 ),
                 (
+                    "textures/entity_m.png".to_string(),
+                    PathBuf::from("assets/scenes/textures/entity_m.png")
+                ),
+                (
                     "textures/entity_n.png".to_string(),
                     PathBuf::from("assets/scenes/textures/entity_n.png")
                 ),
@@ -737,6 +747,10 @@ mod tests {
                     PathBuf::from("assets/scenes/textures/override.png")
                 ),
                 (
+                    "textures/override_m.png".to_string(),
+                    PathBuf::from("assets/scenes/textures/override_m.png")
+                ),
+                (
                     "textures/override_n.png".to_string(),
                     PathBuf::from("assets/scenes/textures/override_n.png")
                 ),
@@ -747,6 +761,10 @@ mod tests {
                 (
                     "textures/prefab.png".to_string(),
                     PathBuf::from("assets/scenes/textures/prefab.png")
+                ),
+                (
+                    "textures/prefab_m.png".to_string(),
+                    PathBuf::from("assets/scenes/textures/prefab_m.png")
                 ),
                 (
                     "textures/prefab_n.png".to_string(),

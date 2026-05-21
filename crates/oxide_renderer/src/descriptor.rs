@@ -64,6 +64,9 @@ pub struct MaterialDescriptor {
     /// Path to the normal map texture file.
     #[serde(default)]
     pub normal_texture: Option<String>,
+    /// Path to the metallic texture file.
+    #[serde(default)]
+    pub metallic_texture: Option<String>,
     /// Path to the roughness texture file.
     #[serde(default)]
     pub roughness_texture: Option<String>,
@@ -366,6 +369,7 @@ mod tests {
             alpha_mode: AlphaMode::Mask,
             albedo_texture: None,
             normal_texture: None,
+            metallic_texture: None,
             roughness_texture: None,
         };
 

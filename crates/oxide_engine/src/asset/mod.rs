@@ -495,6 +495,13 @@ pub fn material_descriptor_dependencies(
         dependencies.push(resolve_descriptor_dependency(base.as_ref(), path));
     }
     if let Some(path) = descriptor
+        .metallic_texture
+        .as_ref()
+        .filter(|path| !is_virtual_texture_ref(path))
+    {
+        dependencies.push(resolve_descriptor_dependency(base.as_ref(), path));
+    }
+    if let Some(path) = descriptor
         .roughness_texture
         .as_ref()
         .filter(|path| !is_virtual_texture_ref(path))
@@ -531,6 +538,7 @@ fn material_descriptor_texture_sources(
     for texture in [
         descriptor.albedo_texture.as_ref(),
         descriptor.normal_texture.as_ref(),
+        descriptor.metallic_texture.as_ref(),
         descriptor.roughness_texture.as_ref(),
     ]
     .into_iter()
@@ -623,6 +631,7 @@ mod tests {
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: Some("textures/stone.png".to_string()),
             normal_texture: Some("textures/stone_n.png".to_string()),
+            metallic_texture: Some("textures/stone_m.png".to_string()),
             roughness_texture: Some("textures/stone_r.png".to_string()),
         };
 
@@ -634,6 +643,7 @@ mod tests {
             vec![
                 PathBuf::from("assets/materials/shaders/stone.wgsl"),
                 PathBuf::from("assets/materials/textures/stone.png"),
+                PathBuf::from("assets/materials/textures/stone_m.png"),
                 PathBuf::from("assets/materials/textures/stone_n.png"),
                 PathBuf::from("assets/materials/textures/stone_r.png"),
             ]
@@ -656,6 +666,7 @@ mod tests {
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: Some("#image_0".to_string()),
             normal_texture: None,
+            metallic_texture: None,
             roughness_texture: None,
         };
 
@@ -806,15 +817,18 @@ mod tests {
         let material_path = root.join("textured.oxmat");
         let albedo_path = root.join("albedo.png");
         let normal_path = root.join("normal.png");
+        let metallic_path = root.join("metallic.png");
         let roughness_path = root.join("roughness.png");
         write_png_1x1(&albedo_path);
         write_png_1x1(&normal_path);
+        write_png_1x1(&metallic_path);
         write_png_1x1(&roughness_path);
         write_material_with_texture_slots(
             &material_path,
             "Textured",
             "albedo.png",
             "normal.png",
+            "metallic.png",
             "roughness.png",
         );
 
@@ -837,6 +851,7 @@ mod tests {
                 assert_eq!(image.rgba.as_slice(), &[255, 0, 0, 255]);
                 let texture_assets = world.resource::<TextureImageAssets>();
                 assert!(texture_assets.get_labeled("normal.png").is_some());
+                assert!(texture_assets.get_labeled("metallic.png").is_some());
                 assert!(texture_assets.get_labeled("roughness.png").is_some());
                 let server = &world.resource::<AssetServerResource>().server;
                 assert!(server
@@ -844,6 +859,9 @@ mod tests {
                     .is_some());
                 assert!(server
                     .handle_for_path::<TextureImage>(&normal_path)
+                    .is_some());
+                assert!(server
+                    .handle_for_path::<TextureImage>(&metallic_path)
                     .is_some());
                 assert!(server
                     .handle_for_path::<TextureImage>(&roughness_path)
@@ -1057,6 +1075,7 @@ mod tests {
         name: &str,
         albedo: &str,
         normal: &str,
+        metallic: &str,
         roughness: &str,
     ) {
         fs::write(
@@ -1073,6 +1092,7 @@ mod tests {
                         "fallback_shader": "lit",
                         "albedo_texture": "{albedo}",
                         "normal_texture": "{normal}",
+                        "metallic_texture": "{metallic}",
                         "roughness_texture": "{roughness}"
                     }}
                 }}"#

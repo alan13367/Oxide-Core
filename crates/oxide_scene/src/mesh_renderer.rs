@@ -245,6 +245,7 @@ pub enum RenderMaterial {
         alpha_mode: AlphaMode,
         albedo_texture: Option<String>,
         normal_texture: Option<String>,
+        metallic_texture: Option<String>,
         roughness_texture: Option<String>,
     },
     Named(String),
@@ -263,6 +264,7 @@ impl Default for RenderMaterial {
             alpha_mode: AlphaMode::Opaque,
             albedo_texture: None,
             normal_texture: None,
+            metallic_texture: None,
             roughness_texture: None,
         }
     }
@@ -287,6 +289,7 @@ impl RenderMaterial {
             alpha_mode: descriptor.alpha_mode,
             albedo_texture: descriptor.albedo_texture.clone(),
             normal_texture: descriptor.normal_texture.clone(),
+            metallic_texture: descriptor.metallic_texture.clone(),
             roughness_texture: descriptor.roughness_texture.clone(),
         }
     }
@@ -351,6 +354,25 @@ impl RenderMaterial {
             Self::Builtin {
                 roughness_texture, ..
             } => roughness_texture.as_deref(),
+            Self::Named(_) => None,
+        }
+    }
+
+    /// Returns the optional metallic texture reference resolved through a material library.
+    pub fn metallic_texture_with_library<'a>(
+        &'a self,
+        library: Option<&'a SceneMaterialLibrary>,
+    ) -> Option<&'a str> {
+        if let Self::Named(name) = self {
+            if let Some(resolved) = library.and_then(|library| library.get(name)) {
+                return resolved.metallic_texture_with_library(None);
+            }
+        }
+
+        match self {
+            Self::Builtin {
+                metallic_texture, ..
+            } => metallic_texture.as_deref(),
             Self::Named(_) => None,
         }
     }

@@ -38,6 +38,7 @@ impl App for MaterialFilterExample {
                 alpha_mode: AlphaMode::Opaque,
                 albedo_texture: None,
                 normal_texture: None,
+                metallic_texture: None,
                 roughness_texture: None,
             },
         );
