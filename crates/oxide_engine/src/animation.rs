@@ -1,20 +1,23 @@
 //! Lightweight animation systems for gameplay-facing transform tweens.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use glam::{Mat4, Quat, Vec3};
 use oxide_asset::{Assets, Handle};
 use oxide_ecs::{Component, Resource};
 use oxide_math::transform::Transform;
-use oxide_transform::TransformComponent;
+use oxide_transform::{GlobalTransform, TransformComponent};
 
-use crate::app::{App, AppBuilder, AppStage, Plugin};
-use crate::ecs::{Query, Res, Time, World};
+use crate::app::{App, AppBuilder, AppStage, Plugin, TRANSFORM_PROPAGATE_SYSTEM};
+use crate::ecs::{Entity, Query, Res, Time, World};
 
 /// Stable label for the built-in transform tween update system.
 pub const TRANSFORM_TWEEN_SYSTEM: &str = "oxide.animation.transform_tween";
 /// Stable label for the built-in transform animation clip playback system.
 pub const TRANSFORM_ANIMATION_SYSTEM: &str = "oxide.animation.transform_clips";
+/// Stable label for the built-in skin joint matrix update system.
+pub const SKIN_JOINT_MATRICES_SYSTEM: &str = "oxide.animation.skin_joint_matrices";
 
 /// Typed handle for transform animation clips.
 pub type TransformAnimationClipHandle = Handle<TransformAnimationClip>;
@@ -81,6 +84,30 @@ impl SkinFilter {
     /// Creates a skin filter from a skin handle.
     pub fn new(skin: SkeletonSkinHandle) -> Self {
         Self { skin }
+    }
+}
+
+/// Component storing the current joint matrices for a skinned entity.
+#[derive(Component, Clone, Debug, Default, PartialEq)]
+pub struct SkinJointMatrices {
+    /// Joint matrices aligned with the entity's [`SkeletonSkin`] asset.
+    pub matrices: Vec<Mat4>,
+}
+
+impl SkinJointMatrices {
+    /// Creates joint matrices from precomputed values.
+    pub fn new(matrices: Vec<Mat4>) -> Self {
+        Self { matrices }
+    }
+
+    /// Returns the number of joint matrices.
+    pub fn len(&self) -> usize {
+        self.matrices.len()
+    }
+
+    /// Returns true when no joint matrices are stored.
+    pub fn is_empty(&self) -> bool {
+        self.matrices.is_empty()
     }
 }
 
@@ -634,6 +661,64 @@ pub fn transform_animation_system(
     }
 }
 
+/// Updates [`SkinJointMatrices`] from current joint [`GlobalTransform`] values.
+pub fn skin_joint_matrices_system(world: &mut World) {
+    if !world.contains_resource::<SkeletonSkinAssets>() {
+        return;
+    }
+
+    let target_globals = {
+        let mut query = world.query::<(&TransformAnimationTarget, &GlobalTransform)>();
+        query
+            .iter(world)
+            .map(|(target, global)| (*target, global.matrix))
+            .collect::<HashMap<_, _>>()
+    };
+    if target_globals.is_empty() {
+        return;
+    }
+
+    let skinned_entities = {
+        let mut query = world.query::<(Entity, &SkinFilter)>();
+        query
+            .iter(world)
+            .filter_map(|(entity, filter)| {
+                world
+                    .get::<GlobalTransform>(entity)
+                    .map(|global| (entity, *filter, global.matrix))
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let skin_assets = world.resource::<SkeletonSkinAssets>();
+    let mut updates = Vec::new();
+    for (entity, filter, model_matrix) in skinned_entities {
+        let Some(skin) = skin_assets.assets.get(&filter.skin) else {
+            continue;
+        };
+        let inverse_model = model_matrix.inverse();
+        let matrices = skin
+            .joints
+            .iter()
+            .enumerate()
+            .map(|(index, joint)| {
+                let inverse_bind = skin
+                    .inverse_bind_matrices
+                    .get(index)
+                    .copied()
+                    .unwrap_or(Mat4::IDENTITY);
+                let joint_matrix = target_globals.get(joint).copied().unwrap_or(Mat4::IDENTITY);
+                inverse_model * joint_matrix * inverse_bind
+            })
+            .collect::<Vec<_>>();
+        updates.push((entity, SkinJointMatrices::new(matrices)));
+    }
+
+    for (entity, matrices) in updates {
+        world.entity_mut(entity).insert(matrices);
+    }
+}
+
 /// Plugin that installs transform tween animation support.
 pub struct AnimationPlugin;
 
@@ -649,6 +734,12 @@ impl<T: App> Plugin<T> for AnimationPlugin {
             AppStage::Update,
             TRANSFORM_ANIMATION_SYSTEM,
             transform_animation_system,
+        );
+        app.add_labeled_system_after_mut(
+            AppStage::PostUpdate,
+            SKIN_JOINT_MATRICES_SYSTEM,
+            TRANSFORM_PROPAGATE_SYSTEM,
+            skin_joint_matrices_system,
         );
     }
 }
@@ -800,5 +891,39 @@ mod tests {
         let transform = world.get::<TransformComponent>(entity).unwrap();
         assert_eq!(transform.transform.position, Vec3::new(0.0, 0.5, 0.0));
         assert!(transform.is_dirty);
+    }
+
+    #[test]
+    fn skin_joint_matrices_system_builds_model_relative_joint_matrices() {
+        let skin_handle = SkeletonSkinHandle::new(5);
+        let joint_target = TransformAnimationTarget(42);
+        let mut skin_assets = SkeletonSkinAssets::default();
+        skin_assets.assets.insert(
+            skin_handle,
+            SkeletonSkin::new("arm", vec![joint_target], vec![Mat4::IDENTITY]),
+        );
+        let mut world = World::new();
+        world.insert_resource(skin_assets);
+        let skinned = world
+            .spawn((
+                SkinFilter::new(skin_handle),
+                GlobalTransform::from_matrix(Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0))),
+            ))
+            .id();
+        world.spawn((
+            joint_target,
+            GlobalTransform::from_matrix(Mat4::from_translation(Vec3::new(2.0, 3.0, 0.0))),
+        ));
+
+        skin_joint_matrices_system(&mut world);
+
+        let matrices = world
+            .get::<SkinJointMatrices>(skinned)
+            .expect("skin matrices should be inserted");
+        assert_eq!(matrices.len(), 1);
+        assert_eq!(
+            matrices.matrices[0].transform_point3(Vec3::ZERO),
+            Vec3::new(0.0, 3.0, 0.0)
+        );
     }
 }

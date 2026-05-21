@@ -1,11 +1,12 @@
 //! Oxide Core engine prelude
 
 pub use crate::animation::{
-    transform_animation_system, transform_tween_system, AnimationPlayer, AnimationPlugin,
-    QuatKeyframe, SkeletonSkin, SkeletonSkinAssets, SkeletonSkinHandle, SkinFilter,
-    TransformAnimationChannel, TransformAnimationClip, TransformAnimationClipAssets,
-    TransformAnimationClipHandle, TransformAnimationInterpolation, TransformAnimationProperty,
-    TransformAnimationTarget, TransformTween, TweenEasing, TweenRepeat, Vec3Keyframe,
+    skin_joint_matrices_system, transform_animation_system, transform_tween_system,
+    AnimationPlayer, AnimationPlugin, QuatKeyframe, SkeletonSkin, SkeletonSkinAssets,
+    SkeletonSkinHandle, SkinFilter, SkinJointMatrices, TransformAnimationChannel,
+    TransformAnimationClip, TransformAnimationClipAssets, TransformAnimationClipHandle,
+    TransformAnimationInterpolation, TransformAnimationProperty, TransformAnimationTarget,
+    TransformTween, TweenEasing, TweenRepeat, Vec3Keyframe, SKIN_JOINT_MATRICES_SYSTEM,
     TRANSFORM_ANIMATION_SYSTEM, TRANSFORM_TWEEN_SYSTEM,
 };
 #[cfg(feature = "gltf-import")]

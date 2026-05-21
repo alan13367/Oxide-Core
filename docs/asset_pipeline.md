@@ -146,7 +146,9 @@ labels such as `skin_0`. The importer preserves joint node indices, inverse bind
 matrices, optional skeleton roots, and primitive `JOINTS_0`/`WEIGHTS_0`
 attributes as Oxide-owned data. Spawned skinned nodes receive `GltfSkinRef` and
 `SkinFilter`, which gives the future GPU skinning path stable handles without
-changing authoring code.
+changing authoring code. `skin_joint_matrices_system` updates `SkinJointMatrices`
+from `SkeletonSkin`, `SkinFilter`, `TransformAnimationTarget`, and
+`GlobalTransform` after hierarchy propagation.
 
 The automatic scene renderer can draw `MeshFilter` entities directly from
 `MeshCache`. When a handle-based mesh entity also carries `RenderMesh`, the

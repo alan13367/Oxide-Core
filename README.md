@@ -528,7 +528,9 @@ manually reconstructing node identity.
 Imported glTF skins are converted into `SkeletonSkin` assets labeled by skin
 index. Skinned mesh nodes retain `GltfSkinRef` plus `SkinFilter`, and imported
 primitive joint/weight attributes are preserved alongside the mesh entry as
-groundwork for GPU skinning.
+groundwork for GPU skinning. `AnimationPlugin` updates `SkinJointMatrices`
+after transform propagation so the current joint pose is available to skinning
+renderers.
 
 ### 10. Physics Plugin Integration
 
