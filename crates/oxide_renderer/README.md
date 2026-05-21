@@ -8,5 +8,5 @@ Low-level rendering abstraction for the Oxide Core game engine.
 
 `Mesh3D` owns GPU buffers plus CPU-side vertex/index mirrors. Imported glTF
 primitives can preserve `MeshSkinning` joint/weight attributes, and the renderer
-crate exposes a small software skinning helper for future dynamic upload and GPU
-palette paths.
+crate exposes a small software skinning helper used by engine-side dynamic mesh
+uploads and future GPU palette paths.

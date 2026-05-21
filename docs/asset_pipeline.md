@@ -115,7 +115,7 @@ scene through `handles_for_changed_path::<GltfScene>(...)`. Oxide then
 publishes each imported mesh into `MeshCache` as a labeled `Mesh3D` asset using
 the glTF source path plus the mesh label emitted by the importer. `Mesh3D`
 retains CPU-side vertices and indices, and glTF primitives with `JOINTS_0` /
-`WEIGHTS_0` also retain `MeshSkinning` data for software skinning or future GPU
+`WEIGHTS_0` also retain `MeshSkinning` data for software skinning and future GPU
 palette uploads. Spawned nodes keep the lightweight `GltfMeshRef` index and
 also receive `MeshFilter` when a stable mesh handle is available.
 
@@ -152,6 +152,10 @@ receive `GltfSkinRef` and `SkinFilter`, which gives the future GPU skinning path
 stable handles without changing authoring code. `skin_joint_matrices_system`
 updates `SkinJointMatrices` from `SkeletonSkin`, `SkinFilter`,
 `TransformAnimationTarget`, and `GlobalTransform` after hierarchy propagation.
+When renderer resources are present, `cpu_skinned_mesh_system` writes those
+software-skinned vertices into a dynamic `CpuSkinnedMesh` runtime handle so the
+existing scene renderer can draw animated skinned meshes without a separate
+shader path.
 
 The automatic scene renderer can draw `MeshFilter` entities directly from
 `MeshCache`. When a handle-based mesh entity also carries `RenderMesh`, the

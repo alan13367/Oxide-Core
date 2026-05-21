@@ -92,6 +92,20 @@ impl Mesh3D {
             .as_ref()
             .map(|skinning| skin_vertices(&self.vertices, skinning, joint_matrices))
     }
+
+    /// Writes replacement vertices into the existing GPU vertex buffer.
+    ///
+    /// Returns false when the replacement vertex count does not match the mesh
+    /// buffer allocation.
+    pub fn write_vertices(&mut self, queue: &wgpu::Queue, vertices: &[Vertex3D]) -> bool {
+        if vertices.len() != self.vertices.len() {
+            return false;
+        }
+        queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(vertices));
+        self.vertices.clear();
+        self.vertices.extend_from_slice(vertices);
+        true
+    }
 }
 
 pub struct Mesh {

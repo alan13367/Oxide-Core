@@ -528,11 +528,11 @@ manually reconstructing node identity.
 Imported glTF skins are converted into `SkeletonSkin` assets labeled by skin
 index. Skinned mesh nodes retain `GltfSkinRef` plus `SkinFilter`, and imported
 primitive joint/weight attributes are preserved alongside the mesh entry as
-groundwork for GPU skinning. `Mesh3D` keeps CPU-side vertices, indices, and
-optional `MeshSkinning` data, and can produce software-skinned vertices from a
-joint matrix palette. `AnimationPlugin` updates `SkinJointMatrices` after
-transform propagation so the current joint pose is available to skinning
-renderers.
+groundwork for skinning. `Mesh3D` keeps CPU-side vertices, indices, and optional
+`MeshSkinning` data, and can produce software-skinned vertices from a joint
+matrix palette. `AnimationPlugin` updates `SkinJointMatrices` after transform
+propagation, then `cpu_skinned_mesh_system` writes a dynamic runtime mesh for
+the existing scene renderer when renderer resources are available.
 
 ### 10. Physics Plugin Integration
 

@@ -7,10 +7,13 @@ use glam::{Mat4, Quat, Vec3};
 use oxide_asset::{Assets, Handle};
 use oxide_ecs::{Component, Resource};
 use oxide_math::transform::Transform;
+use oxide_renderer::mesh::Mesh3D;
+use oxide_scene::{MeshCache, MeshFilter, MeshHandle};
 use oxide_transform::{GlobalTransform, TransformComponent};
 
 use crate::app::{App, AppBuilder, AppStage, Plugin, TRANSFORM_PROPAGATE_SYSTEM};
-use crate::ecs::{Entity, Query, Res, Time, World};
+use crate::asset::AssetServerResource;
+use crate::ecs::{Entity, Query, RendererResource, Res, Time, World};
 
 /// Stable label for the built-in transform tween update system.
 pub const TRANSFORM_TWEEN_SYSTEM: &str = "oxide.animation.transform_tween";
@@ -18,6 +21,8 @@ pub const TRANSFORM_TWEEN_SYSTEM: &str = "oxide.animation.transform_tween";
 pub const TRANSFORM_ANIMATION_SYSTEM: &str = "oxide.animation.transform_clips";
 /// Stable label for the built-in skin joint matrix update system.
 pub const SKIN_JOINT_MATRICES_SYSTEM: &str = "oxide.animation.skin_joint_matrices";
+/// Stable label for the built-in CPU skinned mesh upload system.
+pub const CPU_SKINNED_MESH_SYSTEM: &str = "oxide.animation.cpu_skinned_mesh";
 
 /// Typed handle for transform animation clips.
 pub type TransformAnimationClipHandle = Handle<TransformAnimationClip>;
@@ -108,6 +113,25 @@ impl SkinJointMatrices {
     /// Returns true when no joint matrices are stored.
     pub fn is_empty(&self) -> bool {
         self.matrices.is_empty()
+    }
+}
+
+/// Runtime mesh indirection for CPU-skinned renderable entities.
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub struct CpuSkinnedMesh {
+    /// Original mesh containing bind-pose vertices and skinning attributes.
+    pub source_mesh: MeshHandle,
+    /// Dynamic mesh handle written with the current skinned vertices.
+    pub runtime_mesh: MeshHandle,
+}
+
+impl CpuSkinnedMesh {
+    /// Creates a runtime CPU skinning link.
+    pub fn new(source_mesh: MeshHandle, runtime_mesh: MeshHandle) -> Self {
+        Self {
+            source_mesh,
+            runtime_mesh,
+        }
     }
 }
 
@@ -719,6 +743,92 @@ pub fn skin_joint_matrices_system(world: &mut World) {
     }
 }
 
+/// Updates dynamic mesh buffers for entities with CPU skinning data.
+pub fn cpu_skinned_mesh_system(world: &mut World) {
+    if !world.contains_resource::<AssetServerResource>()
+        || !world.contains_resource::<RendererResource>()
+        || !world.contains_resource::<MeshCache>()
+    {
+        return;
+    }
+
+    let (device, queue) = {
+        let renderer = &world.resource::<RendererResource>().renderer;
+        (renderer.device.clone(), renderer.queue.clone())
+    };
+
+    let jobs = {
+        let mut query = world.query::<(Entity, &MeshFilter)>();
+        query
+            .iter(world)
+            .filter_map(|(entity, mesh_filter)| {
+                let matrices = world.get::<SkinJointMatrices>(entity)?;
+                let existing = world.get::<CpuSkinnedMesh>(entity).cloned();
+                let source_mesh = existing
+                    .as_ref()
+                    .map(|skinned| skinned.source_mesh)
+                    .unwrap_or(mesh_filter.mesh);
+                Some((
+                    entity,
+                    source_mesh,
+                    existing.map(|skinned| skinned.runtime_mesh),
+                    matrices.matrices.clone(),
+                ))
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let mut updates = Vec::new();
+    for (entity, source_mesh, existing_runtime_mesh, joint_matrices) in jobs {
+        let Some((skinned_vertices, indices)) = ({
+            let mesh_cache = world.resource::<MeshCache>();
+            let Some(source) = mesh_cache.get(source_mesh) else {
+                continue;
+            };
+            let Some(skinned_vertices) = source.skinned_vertices(&joint_matrices) else {
+                continue;
+            };
+            Some((skinned_vertices, source.indices.clone()))
+        }) else {
+            continue;
+        };
+        let runtime_mesh = existing_runtime_mesh.unwrap_or_else(|| {
+            world
+                .resource_mut::<AssetServerResource>()
+                .server
+                .allocate_handle::<Mesh3D>()
+        });
+
+        {
+            let mesh_cache = world.resource_mut::<MeshCache>();
+            let runtime_asset = mesh_cache.assets_mut().get_mut(&runtime_mesh);
+            let updated = runtime_asset
+                .map(|mesh| mesh.write_vertices(&queue, &skinned_vertices))
+                .unwrap_or(false);
+            if !updated {
+                mesh_cache.insert(
+                    runtime_mesh,
+                    Mesh3D::create(
+                        &device,
+                        &skinned_vertices,
+                        &indices,
+                        Some("CPU Skinned Mesh"),
+                    ),
+                );
+            }
+        }
+
+        updates.push((entity, CpuSkinnedMesh::new(source_mesh, runtime_mesh)));
+    }
+
+    for (entity, skinned_mesh) in updates {
+        world
+            .entity_mut(entity)
+            .insert(MeshFilter::new(skinned_mesh.runtime_mesh))
+            .insert(skinned_mesh);
+    }
+}
+
 /// Plugin that installs transform tween animation support.
 pub struct AnimationPlugin;
 
@@ -740,6 +850,12 @@ impl<T: App> Plugin<T> for AnimationPlugin {
             SKIN_JOINT_MATRICES_SYSTEM,
             TRANSFORM_PROPAGATE_SYSTEM,
             skin_joint_matrices_system,
+        );
+        app.add_labeled_system_after_mut(
+            AppStage::PostUpdate,
+            CPU_SKINNED_MESH_SYSTEM,
+            SKIN_JOINT_MATRICES_SYSTEM,
+            cpu_skinned_mesh_system,
         );
     }
 }
