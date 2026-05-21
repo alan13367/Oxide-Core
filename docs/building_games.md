@@ -314,6 +314,11 @@ The same culling metadata can be authored in `.oxscene` files with
 `render_bounds` and `render_cull_distance`, and prefab instances can override
 those fields per placement.
 
+Use `viewport_pick_ray`, `pick_scene`, or `pick_scene_from_viewport` for
+gameplay selection. Picking respects `Visibility` and `RenderLayers`, uses exact
+unit primitive intersections for `RenderMesh`, and uses `RenderBounds` for
+mesh-handle/imported entities.
+
 Use `add_labeled_system`, `add_system_to_set`, `add_system_before`, and
 `add_system_after` when plugins or gameplay systems need stable ordering inside
 a stage. Before/after targets can reference either a system label or a set

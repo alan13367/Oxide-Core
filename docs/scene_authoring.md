@@ -367,6 +367,9 @@ visible/layer-matching renderable candidates, cull count, submitted instance
 counts, and draw calls for overlays or editor diagnostics. Engine integration
 records the same counters into `Diagnostics` using the `SCENE_*` diagnostic
 labels exported by the prelude.
+The same visibility, layer, and bounds metadata is used by gameplay picking via
+`pick_scene` and `pick_scene_from_viewport`, so authored culling bounds also
+make imported mesh-handle entities pickable.
 Texture labels such as `#image_0` or `#crate_albedo` resolve against
 `TextureImageAssets`; file paths such as `textures/crate.png` are loaded by the
 native scene asset pipeline and tracked as scene dependencies. Loaded `.oxmat`

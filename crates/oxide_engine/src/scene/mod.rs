@@ -20,9 +20,8 @@ use crate::ui::{
 use crate::window::Window;
 
 pub use oxide_editor::{
-    apply_gizmo_drag, pick_render_mesh, show_scene_editor_egui, viewport_pick_ray,
-    with_scene_editor, GizmoAxis, SceneEditor, SceneEditorTool, SceneEntitySummary, ScenePickHit,
-    ScenePickRay,
+    apply_gizmo_drag, pick_render_mesh, show_scene_editor_egui, with_scene_editor, GizmoAxis,
+    SceneEditor, SceneEditorTool, SceneEntitySummary,
 };
 pub use oxide_scene::*;
 

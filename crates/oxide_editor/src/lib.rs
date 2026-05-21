@@ -1,6 +1,6 @@
 //! Runtime scene editor model and egui surface.
 
-use glam::{Mat4, Vec2, Vec3, Vec4};
+use glam::{Mat4, Vec2, Vec3};
 use oxide_camera::CameraComponent;
 use oxide_ecs::entity::Entity;
 use oxide_ecs::world::World;
@@ -9,8 +9,9 @@ use oxide_input::MouseInput;
 use oxide_light::{AmbientLight, DirectionalLight, PointLight};
 use oxide_math::transform::Transform;
 use oxide_scene::{
-    Children, GlobalTransform, MeshPrimitive, Name, Parent, RenderMaterial, RenderMesh,
-    SceneGizmoLines, TransformComponent,
+    pick_scene, viewport_pick_ray, Children, GlobalTransform, MeshPrimitive, Name, Parent,
+    RenderLayers, RenderMaterial, RenderMesh, SceneGizmoLines, ScenePickHit, ScenePickRay,
+    TransformComponent,
 };
 use oxide_ui::{DevOverlay, DevOverlaySnapshot, RuntimeUi};
 
@@ -60,18 +61,6 @@ struct GizmoDrag {
     entity: Entity,
     start_cursor: Vec2,
     start_transform: Transform,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ScenePickRay {
-    pub origin: Vec3,
-    pub direction: Vec3,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ScenePickHit {
-    pub entity: Entity,
-    pub distance: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -527,44 +516,8 @@ fn axis_button(ui: &mut egui::Ui, active: &mut GizmoAxis, axis: GizmoAxis, label
     }
 }
 
-pub fn viewport_pick_ray(
-    camera: &oxide_math::prelude::Camera,
-    cursor: Vec2,
-    viewport_size: [f32; 2],
-) -> Option<ScenePickRay> {
-    if viewport_size[0] <= 0.0 || viewport_size[1] <= 0.0 {
-        return None;
-    }
-
-    let ndc_x = (cursor.x / viewport_size[0]) * 2.0 - 1.0;
-    let ndc_y = 1.0 - (cursor.y / viewport_size[1]) * 2.0;
-    let view_proj = camera.view_projection_matrix(viewport_size[0] / viewport_size[1]);
-    let inv = view_proj.inverse();
-    let near = unproject(inv, Vec3::new(ndc_x, ndc_y, -1.0));
-    let far = unproject(inv, Vec3::new(ndc_x, ndc_y, 1.0));
-    let direction = (far - near).normalize_or_zero();
-
-    (direction != Vec3::ZERO).then_some(ScenePickRay {
-        origin: camera.position,
-        direction,
-    })
-}
-
 pub fn pick_render_mesh(world: &mut World, ray: ScenePickRay) -> Option<ScenePickHit> {
-    let mut query = world.query::<(Entity, &RenderMesh)>();
-    let entities: Vec<(Entity, MeshPrimitive)> = query
-        .iter(world)
-        .map(|(entity, mesh)| (entity, mesh.primitive))
-        .collect();
-
-    entities
-        .into_iter()
-        .filter_map(|(entity, primitive)| {
-            let model = entity_model_matrix(world, entity);
-            intersect_primitive(ray, model, primitive)
-                .map(|distance| ScenePickHit { entity, distance })
-        })
-        .min_by(|a, b| a.distance.total_cmp(&b.distance))
+    pick_scene(world, ray, RenderLayers::all())
 }
 
 pub fn apply_gizmo_drag(
@@ -608,11 +561,6 @@ fn active_camera(world: &mut World) -> Option<CameraComponent> {
     query.iter(world).next().copied()
 }
 
-fn unproject(inv_view_proj: Mat4, ndc: Vec3) -> Vec3 {
-    let point = inv_view_proj * Vec4::new(ndc.x, ndc.y, ndc.z, 1.0);
-    point.truncate() / point.w
-}
-
 fn entity_model_matrix(world: &World, entity: Entity) -> Mat4 {
     if let Some(global) = world.get::<GlobalTransform>(entity) {
         global.matrix
@@ -621,73 +569,6 @@ fn entity_model_matrix(world: &World, entity: Entity) -> Mat4 {
     } else {
         Mat4::IDENTITY
     }
-}
-
-fn intersect_primitive(ray: ScenePickRay, model: Mat4, primitive: MeshPrimitive) -> Option<f32> {
-    let inv_model = model.inverse();
-    let local_origin = inv_model.transform_point3(ray.origin);
-    let local_direction = inv_model
-        .transform_vector3(ray.direction)
-        .normalize_or_zero();
-    if local_direction == Vec3::ZERO {
-        return None;
-    }
-
-    let local_t = match primitive {
-        MeshPrimitive::Cube => intersect_unit_cube(local_origin, local_direction),
-        MeshPrimitive::Sphere { .. } => intersect_unit_sphere(local_origin, local_direction),
-    }?;
-    let local_hit = local_origin + local_direction * local_t;
-    let world_hit = model.transform_point3(local_hit);
-    Some((world_hit - ray.origin).length())
-}
-
-fn intersect_unit_sphere(origin: Vec3, direction: Vec3) -> Option<f32> {
-    let a = direction.length_squared();
-    let b = 2.0 * origin.dot(direction);
-    let c = origin.length_squared() - 0.25;
-    let discriminant = b * b - 4.0 * a * c;
-    if discriminant < 0.0 {
-        return None;
-    }
-
-    let sqrt = discriminant.sqrt();
-    let near = (-b - sqrt) / (2.0 * a);
-    let far = (-b + sqrt) / (2.0 * a);
-    [near, far]
-        .into_iter()
-        .filter(|t| *t >= 0.0)
-        .min_by(|a, b| a.total_cmp(b))
-}
-
-fn intersect_unit_cube(origin: Vec3, direction: Vec3) -> Option<f32> {
-    let mut t_min = 0.0f32;
-    let mut t_max = f32::INFINITY;
-
-    for axis in 0..3 {
-        let origin_axis = origin[axis];
-        let direction_axis = direction[axis];
-        if direction_axis.abs() < f32::EPSILON {
-            if !(-0.5..=0.5).contains(&origin_axis) {
-                return None;
-            }
-            continue;
-        }
-
-        let inv = 1.0 / direction_axis;
-        let mut t0 = (-0.5 - origin_axis) * inv;
-        let mut t1 = (0.5 - origin_axis) * inv;
-        if t0 > t1 {
-            std::mem::swap(&mut t0, &mut t1);
-        }
-        t_min = t_min.max(t0);
-        t_max = t_max.min(t1);
-        if t_max < t_min {
-            return None;
-        }
-    }
-
-    Some(t_min)
 }
 
 fn axis_vector(axis: GizmoAxis) -> Vec3 {

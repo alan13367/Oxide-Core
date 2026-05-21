@@ -3,6 +3,7 @@
 mod descriptor;
 mod gizmo;
 mod mesh_renderer;
+mod picking;
 mod renderer;
 mod sprite;
 mod terrain;
@@ -15,6 +16,7 @@ pub use oxide_transform::{
     visibility_propagate_system, Children, GlobalTransform, HierarchyCommandsExt,
     InheritedVisibility, Parent, TransformComponent, Visibility,
 };
+pub use picking::*;
 pub use renderer::*;
 pub use sprite::*;
 pub use terrain::*;

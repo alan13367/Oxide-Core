@@ -20,6 +20,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Camera Render Views**: ordered multi-camera scene rendering with active flags, normalized viewports, per-camera clear colors, and render-layer filtering
 - **Render Layers**: filter meshes, terrain, and sprites by camera/renderable layer masks for world views, first-person overlays, editor-only helpers, and debug cameras
 - **Renderer Culling**: automatic scene rendering applies per-camera frustum checks for primitives, terrain, sprites, and explicitly bounded mesh assets, with optional per-entity render distance limits
+- **Scene Picking**: gameplay-facing camera/cursor ray helpers and nearest-hit picking for visible/layered primitives plus explicitly bounded mesh assets
 - **Ordered Render Passes**: plugins can register lightweight frame callbacks around stable built-in anchors for scene, text, app queue, and egui rendering
 - **Native Sprites**: engine-owned RGBA/PNG sprite assets plus billboard and UI sprite components for actors, props, weapons, and overlays
 - **Terrain + World Authoring**: heightfield terrain and configurable world descriptors for code-first maps
