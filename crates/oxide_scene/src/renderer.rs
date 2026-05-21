@@ -1,6 +1,7 @@
 //! Automatic renderer for ECS scene primitives.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ops::AddAssign;
 
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
@@ -510,11 +511,23 @@ struct SphereInstanceBatch {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SceneRendererStats {
+    /// Number of active camera views prepared this frame.
+    pub camera_views: u32,
+    /// Number of visible, layer-matching renderables considered for submission.
+    pub renderable_candidates: u32,
+    /// Number of candidate renderables skipped by frustum or distance culling.
+    pub culled_renderables: u32,
+    /// Number of cube primitive instances submitted after culling.
     pub cube_instances: u32,
+    /// Number of sphere primitive instances submitted after culling.
     pub sphere_instances: u32,
+    /// Number of mesh-handle instances submitted after culling.
     pub mesh_handle_instances: u32,
+    /// Number of terrain instances submitted after culling.
     pub terrain_instances: u32,
+    /// Number of sprite instances submitted after culling.
     pub sprite_instances: u32,
+    /// Number of scene renderer draw calls queued for this frame.
     pub draw_calls: u32,
 }
 
@@ -698,6 +711,7 @@ struct SceneViewDraw {
     camera: ViewCameraBinding,
     viewport: CameraViewport,
     clear_color: wgpu::Color,
+    stats: RenderCollectionStats,
     cube_instances: Vec<InstanceBatch>,
     sphere_instances: Vec<SphereInstanceBatch>,
     mesh_handle_draws: Vec<MeshHandleDraw>,
@@ -918,6 +932,9 @@ impl SceneRenderer {
         let mut stats = SceneRendererStats::default();
         for camera in cameras {
             let view = self.prepare_view(device, queue, world, aspect_ratio, camera);
+            stats.camera_views += 1;
+            stats.renderable_candidates += view.stats.candidates;
+            stats.culled_renderables += view.stats.culled;
             stats.cube_instances += view
                 .cube_instances
                 .iter()
@@ -1179,33 +1196,39 @@ impl SceneRenderer {
             aspect_ratio,
         );
         let culling = RenderCullContext::from_camera(camera, aspect_ratio);
-        let (cube_instances, sphere_instances) = self.prepare_instances(
+        let mut culling_stats = RenderCollectionStats::default();
+        let (cube_instances, sphere_instances, instance_stats) = self.prepare_instances(
             device,
             world,
             camera.layers,
             camera.camera.0.position,
             &culling,
         );
-        let mesh_handle_draws = self.prepare_mesh_handle_draws(
+        culling_stats += instance_stats;
+        let (mesh_handle_draws, mesh_stats) = self.prepare_mesh_handle_draws(
             device,
             world,
             camera.layers,
             camera.camera.0.position,
             &culling,
         );
-        let terrain_draws = self.prepare_terrain(
+        culling_stats += mesh_stats;
+        let (terrain_draws, terrain_stats) = self.prepare_terrain(
             device,
             world,
             camera.layers,
             camera.camera.0.position,
             &culling,
         );
-        let sprite_batches = self.prepare_sprites(device, world, camera, &culling);
+        culling_stats += terrain_stats;
+        let (sprite_batches, sprite_stats) = self.prepare_sprites(device, world, camera, &culling);
+        culling_stats += sprite_stats;
 
         SceneViewDraw {
             camera: camera_binding,
             viewport,
             clear_color: camera.clear_color.unwrap_or(self.clear_color),
+            stats: culling_stats,
             cube_instances,
             sphere_instances,
             mesh_handle_draws,
@@ -1221,14 +1244,18 @@ impl SceneRenderer {
         camera_layers: RenderLayers,
         camera_position: Vec3,
         culling: &RenderCullContext,
-    ) -> (Vec<InstanceBatch>, Vec<SphereInstanceBatch>) {
+    ) -> (
+        Vec<InstanceBatch>,
+        Vec<SphereInstanceBatch>,
+        RenderCollectionStats,
+    ) {
         let material_library = world.get_resource::<SceneMaterialLibrary>().cloned();
         let renderables = collect_renderables(world, camera_layers, Some(culling));
         let mut cube_instances = BTreeMap::<MaterialBatchKey, Vec<SceneInstanceRaw>>::new();
         let mut sphere_instances =
             BTreeMap::<(u32, u32, MaterialBatchKey), Vec<SceneInstanceRaw>>::new();
 
-        for (entity, render_mesh) in renderables {
+        for (entity, render_mesh) in renderables.items {
             let model = entity_model_matrix(world, entity);
             let resolved_material = resolve_entity_material(world, entity, Some(&render_mesh));
             let material = MaterialBatchKey::from_material_with_library(
@@ -1291,7 +1318,7 @@ impl SceneRenderer {
             }
         }
 
-        (cube_batches, sphere_batches)
+        (cube_batches, sphere_batches, renderables.stats)
     }
 
     fn prepare_mesh_handle_draws(
@@ -1301,12 +1328,12 @@ impl SceneRenderer {
         camera_layers: RenderLayers,
         camera_position: Vec3,
         culling: &RenderCullContext,
-    ) -> Vec<MeshHandleDraw> {
+    ) -> (Vec<MeshHandleDraw>, RenderCollectionStats) {
         let material_library = world.get_resource::<SceneMaterialLibrary>().cloned();
         let renderables = collect_mesh_filter_renderables(world, camera_layers, Some(culling));
         let mut batches = BTreeMap::<(u64, MaterialBatchKey), Vec<SceneInstanceRaw>>::new();
 
-        for (entity, mesh_filter) in renderables {
+        for (entity, mesh_filter) in renderables.items {
             let render_mesh = world.get::<RenderMesh>(entity).cloned();
             let resolved_material = resolve_entity_material(world, entity, render_mesh.as_ref());
             let material = MaterialBatchKey::from_material_with_library(
@@ -1330,7 +1357,7 @@ impl SceneRenderer {
         }
 
         let Some(mesh_cache) = world.get_resource::<MeshCache>() else {
-            return Vec::new();
+            return (Vec::new(), renderables.stats);
         };
 
         let mut draws = Vec::new();
@@ -1356,7 +1383,7 @@ impl SceneRenderer {
             }
         }
 
-        draws
+        (draws, renderables.stats)
     }
 
     fn prepare_terrain(
@@ -1366,12 +1393,12 @@ impl SceneRenderer {
         camera_layers: RenderLayers,
         camera_position: Vec3,
         culling: &RenderCullContext,
-    ) -> Vec<TerrainDraw> {
+    ) -> (Vec<TerrainDraw>, RenderCollectionStats) {
         let material_library = world.get_resource::<SceneMaterialLibrary>().cloned();
         let terrains = collect_terrains(world, camera_layers, Some(culling));
         let mut draws = Vec::new();
 
-        for (entity, terrain) in terrains {
+        for (entity, terrain) in terrains.items {
             let needs_rebuild = self
                 .terrain_meshes
                 .get(&entity)
@@ -1412,7 +1439,7 @@ impl SceneRenderer {
             }
         }
 
-        draws
+        (draws, terrains.stats)
     }
 
     fn material_bind_group_for(
@@ -1494,19 +1521,19 @@ impl SceneRenderer {
         world: &mut World,
         camera: PreparedCameraView,
         culling: &RenderCullContext,
-    ) -> Vec<SpriteBatch> {
+    ) -> (Vec<SpriteBatch>, RenderCollectionStats) {
         let Some(camera) = CameraFrame::from_view(camera) else {
-            return Vec::new();
+            return (Vec::new(), RenderCollectionStats::default());
         };
 
         let sprites = collect_sprites(world, camera.layers, Some(culling));
         let mut batches = BTreeMap::<(SpriteDepthMode, SpriteId), Vec<SpriteInstanceRaw>>::new();
-        for (entity, sprite) in sprites {
+        for (entity, sprite) in &sprites.items {
             if !self.sprite_textures.contains_key(&sprite.sprite) {
                 continue;
             }
 
-            let (position, rotation, scale) = entity_transform_parts(world, entity);
+            let (position, rotation, scale) = entity_transform_parts(world, *entity);
             let size = Vec2::new(
                 sprite.size.x * scale.x.abs().max(0.001),
                 sprite.size.y * scale.y.abs().max(0.001),
@@ -1523,7 +1550,7 @@ impl SceneRenderer {
                 .push(instance);
         }
 
-        batches
+        let batches = batches
             .into_iter()
             .filter_map(|((depth, sprite), instances)| {
                 create_instance_batch(device, "Scene Sprite Instances", &instances).map(
@@ -1534,11 +1561,13 @@ impl SceneRenderer {
                     },
                 )
             })
-            .collect()
+            .collect();
+        (batches, sprites.stats)
     }
 
     fn prune_terrain_meshes(&mut self, world: &mut World) {
         let active_entities: HashSet<Entity> = collect_terrains(world, RenderLayers::all(), None)
+            .items
             .into_iter()
             .map(|(entity, _)| entity)
             .collect();
@@ -2238,6 +2267,24 @@ impl RenderCullContext {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RenderCollectionStats {
+    candidates: u32,
+    culled: u32,
+}
+
+impl AddAssign for RenderCollectionStats {
+    fn add_assign(&mut self, rhs: Self) {
+        self.candidates += rhs.candidates;
+        self.culled += rhs.culled;
+    }
+}
+
+struct RenderCollection<T> {
+    items: Vec<T>,
+    stats: RenderCollectionStats,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct ViewFrustum {
     planes: [FrustumPlane; 6],
@@ -2322,38 +2369,54 @@ fn collect_renderables(
     world: &mut World,
     camera_layers: RenderLayers,
     culling: Option<&RenderCullContext>,
-) -> Vec<(Entity, RenderMesh)> {
+) -> RenderCollection<(Entity, RenderMesh)> {
+    let mut stats = RenderCollectionStats::default();
     let mut query = world.query::<(Entity, &RenderMesh)>();
-    query
+    let items = query
         .iter(world)
         .filter(|(entity, _)| is_visible(world, *entity))
         .filter(|(entity, _)| render_layers(world, *entity).intersects(camera_layers))
         .filter(|(entity, _)| world.get::<MeshFilter>(*entity).is_none())
         .filter(|(entity, render_mesh)| {
-            is_renderable_in_view(
+            stats.candidates += 1;
+            let visible = is_renderable_in_view(
                 world,
                 *entity,
                 Some(default_mesh_bounds(render_mesh.primitive)),
                 culling,
-            )
+            );
+            if !visible {
+                stats.culled += 1;
+            }
+            visible
         })
         .map(|(entity, render_mesh)| (entity, render_mesh.clone()))
-        .collect()
+        .collect();
+    RenderCollection { items, stats }
 }
 
 fn collect_mesh_filter_renderables(
     world: &mut World,
     camera_layers: RenderLayers,
     culling: Option<&RenderCullContext>,
-) -> Vec<(Entity, MeshFilter)> {
+) -> RenderCollection<(Entity, MeshFilter)> {
+    let mut stats = RenderCollectionStats::default();
     let mut query = world.query::<(Entity, &MeshFilter)>();
-    query
+    let items = query
         .iter(world)
         .filter(|(entity, _)| is_visible(world, *entity))
         .filter(|(entity, _)| render_layers(world, *entity).intersects(camera_layers))
-        .filter(|(entity, _)| is_renderable_in_view(world, *entity, None, culling))
+        .filter(|(entity, _)| {
+            stats.candidates += 1;
+            let visible = is_renderable_in_view(world, *entity, None, culling);
+            if !visible {
+                stats.culled += 1;
+            }
+            visible
+        })
         .map(|(entity, mesh_filter)| (entity, mesh_filter.clone()))
-        .collect()
+        .collect();
+    RenderCollection { items, stats }
 }
 
 fn resolve_entity_material(
@@ -2379,35 +2442,50 @@ fn collect_terrains(
     world: &mut World,
     camera_layers: RenderLayers,
     culling: Option<&RenderCullContext>,
-) -> Vec<(Entity, Terrain)> {
+) -> RenderCollection<(Entity, Terrain)> {
+    let mut stats = RenderCollectionStats::default();
     let mut query = world.query::<(Entity, &Terrain)>();
-    query
+    let items = query
         .iter(world)
         .filter(|(entity, _)| is_visible(world, *entity))
         .filter(|(entity, _)| render_layers(world, *entity).intersects(camera_layers))
         .filter(|(entity, terrain)| {
-            is_renderable_in_view(world, *entity, Some(terrain_bounds(terrain)), culling)
+            stats.candidates += 1;
+            let visible =
+                is_renderable_in_view(world, *entity, Some(terrain_bounds(terrain)), culling);
+            if !visible {
+                stats.culled += 1;
+            }
+            visible
         })
         .map(|(entity, terrain)| (entity, terrain.clone()))
-        .collect()
+        .collect();
+    RenderCollection { items, stats }
 }
 
 fn collect_sprites(
     world: &mut World,
     camera_layers: RenderLayers,
     culling: Option<&RenderCullContext>,
-) -> Vec<(Entity, SpriteBillboard)> {
+) -> RenderCollection<(Entity, SpriteBillboard)> {
+    let mut stats = RenderCollectionStats::default();
     let mut query = world.query::<(Entity, &SpriteBillboard)>();
-    query
+    let items = query
         .iter(world)
         .filter(|(entity, _)| is_visible(world, *entity))
         .filter(|(entity, _)| render_layers(world, *entity).intersects(camera_layers))
         .filter(|(entity, sprite)| {
-            sprite.depth == SpriteDepthMode::Overlay
-                || is_renderable_in_view(world, *entity, Some(sprite_bounds(sprite)), culling)
+            stats.candidates += 1;
+            let visible = sprite.depth == SpriteDepthMode::Overlay
+                || is_renderable_in_view(world, *entity, Some(sprite_bounds(sprite)), culling);
+            if !visible {
+                stats.culled += 1;
+            }
+            visible
         })
         .map(|(entity, sprite)| (entity, sprite.clone()))
-        .collect()
+        .collect();
+    RenderCollection { items, stats }
 }
 
 fn collect_sprite_ids(world: &mut World) -> Vec<SpriteId> {
@@ -3086,8 +3164,14 @@ mod tests {
         visibility_propagate_system(&mut world);
         let renderables = collect_renderables(&mut world, RenderLayers::default(), None);
 
-        assert!(renderables.iter().any(|(entity, _)| *entity == visible));
-        assert!(!renderables.iter().any(|(entity, _)| *entity == hidden));
+        assert!(renderables
+            .items
+            .iter()
+            .any(|(entity, _)| *entity == visible));
+        assert!(!renderables
+            .items
+            .iter()
+            .any(|(entity, _)| *entity == hidden));
     }
 
     #[test]
@@ -3108,17 +3192,21 @@ mod tests {
 
         let default_renderables = collect_renderables(&mut world, RenderLayers::default(), None);
         assert!(default_renderables
+            .items
             .iter()
             .any(|(entity, _)| *entity == world_entity));
         assert!(!default_renderables
+            .items
             .iter()
             .any(|(entity, _)| *entity == weapon_entity));
 
         let weapon_renderables = collect_renderables(&mut world, RenderLayers::layer(1), None);
         assert!(!weapon_renderables
+            .items
             .iter()
             .any(|(entity, _)| *entity == world_entity));
         assert!(weapon_renderables
+            .items
             .iter()
             .any(|(entity, _)| *entity == weapon_entity));
     }
@@ -3139,10 +3227,11 @@ mod tests {
             collect_mesh_filter_renderables(&mut world, RenderLayers::default(), None);
 
         assert!(!primitive_renderables
+            .items
             .iter()
             .any(|(entity, _)| *entity == imported));
         assert_eq!(
-            handle_renderables,
+            handle_renderables.items,
             vec![(imported, MeshFilter::new(mesh_handle))]
         );
     }
@@ -3166,8 +3255,21 @@ mod tests {
 
         let renderables = collect_renderables(&mut world, RenderLayers::default(), Some(&culling));
 
-        assert!(renderables.iter().any(|(entity, _)| *entity == visible));
-        assert!(!renderables.iter().any(|(entity, _)| *entity == offscreen));
+        assert!(renderables
+            .items
+            .iter()
+            .any(|(entity, _)| *entity == visible));
+        assert!(!renderables
+            .items
+            .iter()
+            .any(|(entity, _)| *entity == offscreen));
+        assert_eq!(
+            renderables.stats,
+            RenderCollectionStats {
+                candidates: 2,
+                culled: 1
+            }
+        );
     }
 
     #[test]
@@ -3189,8 +3291,15 @@ mod tests {
 
         let renderables = collect_renderables(&mut world, RenderLayers::default(), Some(&culling));
 
-        assert!(renderables.iter().any(|(entity, _)| *entity == near));
-        assert!(!renderables.iter().any(|(entity, _)| *entity == far));
+        assert!(renderables.items.iter().any(|(entity, _)| *entity == near));
+        assert!(!renderables.items.iter().any(|(entity, _)| *entity == far));
+        assert_eq!(
+            renderables.stats,
+            RenderCollectionStats {
+                candidates: 2,
+                culled: 1
+            }
+        );
     }
 
     #[test]
@@ -3209,7 +3318,17 @@ mod tests {
         let renderables =
             collect_mesh_filter_renderables(&mut world, RenderLayers::default(), Some(&culling));
 
-        assert!(!renderables.iter().any(|(entity, _)| *entity == imported));
+        assert!(!renderables
+            .items
+            .iter()
+            .any(|(entity, _)| *entity == imported));
+        assert_eq!(
+            renderables.stats,
+            RenderCollectionStats {
+                candidates: 1,
+                culled: 1
+            }
+        );
     }
 
     #[test]

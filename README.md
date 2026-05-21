@@ -441,6 +441,9 @@ Built-in labels include `DELTA_SECONDS`, `FRAME_TIME_MS`, and `FPS`. Custom
 tools can call `diagnostics.record("game.visible_enemies", enemies as f64)` to
 append their own rolling samples. `SceneAuthoringPlugins` feeds these frame
 metrics into the egui dev overlay.
+For render-specific tooling, `SceneRenderer::stats()` returns the last prepared
+frame's active camera view count, visible/layer-matching renderable candidates,
+culled renderable count, submitted instance counts, and draw calls.
 
 ### 8. Action Input Mapping
 

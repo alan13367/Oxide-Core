@@ -425,6 +425,9 @@ fn record_spawn_pressure(mut diagnostics: ResMut<Diagnostics>, mut query: Query<
 ```
 
 `SceneAuthoringPlugins` also uses these values for the egui debug overlay.
+For render-specific tooling, call `SceneRenderer::stats()` to inspect the last
+prepared frame's active camera views, visible/layer-matching renderable
+candidates, culled renderables, submitted instances, and draw calls.
 
 Editor and import tooling should call `SceneDescriptor::validate()` before
 publishing authored data. Native `.oxscene` loads also validate automatically,
