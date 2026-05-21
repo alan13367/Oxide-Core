@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Quat, Vec2, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 use oxide_camera::{
     CameraBuffer, CameraComponent, CameraRenderView, CameraUniform, CameraViewport,
 };
@@ -20,9 +20,10 @@ use oxide_renderer::wgpu;
 use oxide_transform::{is_visible, GlobalTransform, TransformComponent};
 
 use crate::{
-    MaterialDescriptorAssets, MaterialFilter, MeshCache, MeshFilter, MeshPrimitive, RenderLayers,
-    RenderMaterial, RenderMesh, SceneGizmoLines, SceneMaterialLibrary, SpriteAssets,
-    SpriteBillboard, SpriteDepthMode, SpriteFacing, SpriteId, Terrain, TextureImageAssets,
+    MaterialDescriptorAssets, MaterialFilter, MeshCache, MeshFilter, MeshPrimitive, RenderBounds,
+    RenderCullDistance, RenderLayers, RenderMaterial, RenderMesh, SceneGizmoLines,
+    SceneMaterialLibrary, SpriteAssets, SpriteBillboard, SpriteDepthMode, SpriteFacing, SpriteId,
+    Terrain, TextureImageAssets,
 };
 
 const SCENE_RENDERER_SHADER: &str = r#"
@@ -1177,13 +1178,29 @@ impl SceneRenderer {
             &camera,
             aspect_ratio,
         );
-        let (cube_instances, sphere_instances) =
-            self.prepare_instances(device, world, camera.layers, camera.camera.0.position);
-        let mesh_handle_draws =
-            self.prepare_mesh_handle_draws(device, world, camera.layers, camera.camera.0.position);
-        let terrain_draws =
-            self.prepare_terrain(device, world, camera.layers, camera.camera.0.position);
-        let sprite_batches = self.prepare_sprites(device, world, camera);
+        let culling = RenderCullContext::from_camera(camera, aspect_ratio);
+        let (cube_instances, sphere_instances) = self.prepare_instances(
+            device,
+            world,
+            camera.layers,
+            camera.camera.0.position,
+            &culling,
+        );
+        let mesh_handle_draws = self.prepare_mesh_handle_draws(
+            device,
+            world,
+            camera.layers,
+            camera.camera.0.position,
+            &culling,
+        );
+        let terrain_draws = self.prepare_terrain(
+            device,
+            world,
+            camera.layers,
+            camera.camera.0.position,
+            &culling,
+        );
+        let sprite_batches = self.prepare_sprites(device, world, camera, &culling);
 
         SceneViewDraw {
             camera: camera_binding,
@@ -1203,9 +1220,10 @@ impl SceneRenderer {
         world: &mut World,
         camera_layers: RenderLayers,
         camera_position: Vec3,
+        culling: &RenderCullContext,
     ) -> (Vec<InstanceBatch>, Vec<SphereInstanceBatch>) {
         let material_library = world.get_resource::<SceneMaterialLibrary>().cloned();
-        let renderables = collect_renderables(world, camera_layers);
+        let renderables = collect_renderables(world, camera_layers, Some(culling));
         let mut cube_instances = BTreeMap::<MaterialBatchKey, Vec<SceneInstanceRaw>>::new();
         let mut sphere_instances =
             BTreeMap::<(u32, u32, MaterialBatchKey), Vec<SceneInstanceRaw>>::new();
@@ -1282,9 +1300,10 @@ impl SceneRenderer {
         world: &mut World,
         camera_layers: RenderLayers,
         camera_position: Vec3,
+        culling: &RenderCullContext,
     ) -> Vec<MeshHandleDraw> {
         let material_library = world.get_resource::<SceneMaterialLibrary>().cloned();
-        let renderables = collect_mesh_filter_renderables(world, camera_layers);
+        let renderables = collect_mesh_filter_renderables(world, camera_layers, Some(culling));
         let mut batches = BTreeMap::<(u64, MaterialBatchKey), Vec<SceneInstanceRaw>>::new();
 
         for (entity, mesh_filter) in renderables {
@@ -1346,9 +1365,10 @@ impl SceneRenderer {
         world: &mut World,
         camera_layers: RenderLayers,
         camera_position: Vec3,
+        culling: &RenderCullContext,
     ) -> Vec<TerrainDraw> {
         let material_library = world.get_resource::<SceneMaterialLibrary>().cloned();
-        let terrains = collect_terrains(world, camera_layers);
+        let terrains = collect_terrains(world, camera_layers, Some(culling));
         let mut draws = Vec::new();
 
         for (entity, terrain) in terrains {
@@ -1473,12 +1493,13 @@ impl SceneRenderer {
         device: &wgpu::Device,
         world: &mut World,
         camera: PreparedCameraView,
+        culling: &RenderCullContext,
     ) -> Vec<SpriteBatch> {
         let Some(camera) = CameraFrame::from_view(camera) else {
             return Vec::new();
         };
 
-        let sprites = collect_sprites(world, camera.layers);
+        let sprites = collect_sprites(world, camera.layers, Some(culling));
         let mut batches = BTreeMap::<(SpriteDepthMode, SpriteId), Vec<SpriteInstanceRaw>>::new();
         for (entity, sprite) in sprites {
             if !self.sprite_textures.contains_key(&sprite.sprite) {
@@ -1517,7 +1538,7 @@ impl SceneRenderer {
     }
 
     fn prune_terrain_meshes(&mut self, world: &mut World) {
-        let active_entities: HashSet<Entity> = collect_terrains(world, RenderLayers::all())
+        let active_entities: HashSet<Entity> = collect_terrains(world, RenderLayers::all(), None)
             .into_iter()
             .map(|(entity, _)| entity)
             .collect();
@@ -2200,9 +2221,107 @@ fn create_view_camera_binding(
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct RenderCullContext {
+    camera_position: Vec3,
+    frustum: ViewFrustum,
+}
+
+impl RenderCullContext {
+    fn from_camera(camera: PreparedCameraView, aspect_ratio: f32) -> Self {
+        Self {
+            camera_position: camera.camera.0.position,
+            frustum: ViewFrustum::from_view_projection(
+                camera.camera.0.view_projection_matrix(aspect_ratio),
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ViewFrustum {
+    planes: [FrustumPlane; 6],
+}
+
+impl ViewFrustum {
+    fn from_view_projection(view_projection: Mat4) -> Self {
+        let rows = [
+            Vec4::new(
+                view_projection.x_axis.x,
+                view_projection.y_axis.x,
+                view_projection.z_axis.x,
+                view_projection.w_axis.x,
+            ),
+            Vec4::new(
+                view_projection.x_axis.y,
+                view_projection.y_axis.y,
+                view_projection.z_axis.y,
+                view_projection.w_axis.y,
+            ),
+            Vec4::new(
+                view_projection.x_axis.z,
+                view_projection.y_axis.z,
+                view_projection.z_axis.z,
+                view_projection.w_axis.z,
+            ),
+            Vec4::new(
+                view_projection.x_axis.w,
+                view_projection.y_axis.w,
+                view_projection.z_axis.w,
+                view_projection.w_axis.w,
+            ),
+        ];
+
+        Self {
+            planes: [
+                FrustumPlane::from_vec4(rows[3] + rows[0]),
+                FrustumPlane::from_vec4(rows[3] - rows[0]),
+                FrustumPlane::from_vec4(rows[3] + rows[1]),
+                FrustumPlane::from_vec4(rows[3] - rows[1]),
+                FrustumPlane::from_vec4(rows[2]),
+                FrustumPlane::from_vec4(rows[3] - rows[2]),
+            ],
+        }
+    }
+
+    fn intersects_sphere(self, center: Vec3, radius: f32) -> bool {
+        self.planes
+            .iter()
+            .all(|plane| plane.distance(center) >= -radius)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FrustumPlane {
+    normal: Vec3,
+    distance: f32,
+}
+
+impl FrustumPlane {
+    fn from_vec4(plane: Vec4) -> Self {
+        let normal = plane.truncate();
+        let length = normal.length();
+        if length <= f32::EPSILON {
+            return Self {
+                normal: Vec3::ZERO,
+                distance: 0.0,
+            };
+        }
+        Self {
+            normal: normal / length,
+            distance: plane.w / length,
+        }
+    }
+
+    fn distance(self, point: Vec3) -> f32 {
+        self.normal.dot(point) + self.distance
+    }
+}
+
 fn collect_renderables(
     world: &mut World,
     camera_layers: RenderLayers,
+    culling: Option<&RenderCullContext>,
 ) -> Vec<(Entity, RenderMesh)> {
     let mut query = world.query::<(Entity, &RenderMesh)>();
     query
@@ -2210,6 +2329,14 @@ fn collect_renderables(
         .filter(|(entity, _)| is_visible(world, *entity))
         .filter(|(entity, _)| render_layers(world, *entity).intersects(camera_layers))
         .filter(|(entity, _)| world.get::<MeshFilter>(*entity).is_none())
+        .filter(|(entity, render_mesh)| {
+            is_renderable_in_view(
+                world,
+                *entity,
+                Some(default_mesh_bounds(render_mesh.primitive)),
+                culling,
+            )
+        })
         .map(|(entity, render_mesh)| (entity, render_mesh.clone()))
         .collect()
 }
@@ -2217,12 +2344,14 @@ fn collect_renderables(
 fn collect_mesh_filter_renderables(
     world: &mut World,
     camera_layers: RenderLayers,
+    culling: Option<&RenderCullContext>,
 ) -> Vec<(Entity, MeshFilter)> {
     let mut query = world.query::<(Entity, &MeshFilter)>();
     query
         .iter(world)
         .filter(|(entity, _)| is_visible(world, *entity))
         .filter(|(entity, _)| render_layers(world, *entity).intersects(camera_layers))
+        .filter(|(entity, _)| is_renderable_in_view(world, *entity, None, culling))
         .map(|(entity, mesh_filter)| (entity, mesh_filter.clone()))
         .collect()
 }
@@ -2246,12 +2375,19 @@ fn resolve_entity_material(
         .unwrap_or_default()
 }
 
-fn collect_terrains(world: &mut World, camera_layers: RenderLayers) -> Vec<(Entity, Terrain)> {
+fn collect_terrains(
+    world: &mut World,
+    camera_layers: RenderLayers,
+    culling: Option<&RenderCullContext>,
+) -> Vec<(Entity, Terrain)> {
     let mut query = world.query::<(Entity, &Terrain)>();
     query
         .iter(world)
         .filter(|(entity, _)| is_visible(world, *entity))
         .filter(|(entity, _)| render_layers(world, *entity).intersects(camera_layers))
+        .filter(|(entity, terrain)| {
+            is_renderable_in_view(world, *entity, Some(terrain_bounds(terrain)), culling)
+        })
         .map(|(entity, terrain)| (entity, terrain.clone()))
         .collect()
 }
@@ -2259,12 +2395,17 @@ fn collect_terrains(world: &mut World, camera_layers: RenderLayers) -> Vec<(Enti
 fn collect_sprites(
     world: &mut World,
     camera_layers: RenderLayers,
+    culling: Option<&RenderCullContext>,
 ) -> Vec<(Entity, SpriteBillboard)> {
     let mut query = world.query::<(Entity, &SpriteBillboard)>();
     query
         .iter(world)
         .filter(|(entity, _)| is_visible(world, *entity))
         .filter(|(entity, _)| render_layers(world, *entity).intersects(camera_layers))
+        .filter(|(entity, sprite)| {
+            sprite.depth == SpriteDepthMode::Overlay
+                || is_renderable_in_view(world, *entity, Some(sprite_bounds(sprite)), culling)
+        })
         .map(|(entity, sprite)| (entity, sprite.clone()))
         .collect()
 }
@@ -2404,6 +2545,81 @@ fn render_layers(world: &World, entity: Entity) -> RenderLayers {
         .get::<RenderLayers>(entity)
         .copied()
         .unwrap_or_default()
+}
+
+fn is_renderable_in_view(
+    world: &World,
+    entity: Entity,
+    default_bounds: Option<RenderBounds>,
+    culling: Option<&RenderCullContext>,
+) -> bool {
+    let Some(culling) = culling else {
+        return true;
+    };
+
+    let bounds = world
+        .get::<RenderBounds>(entity)
+        .copied()
+        .or(default_bounds);
+    if let Some(distance) = world.get::<RenderCullDistance>(entity) {
+        let (center, radius) = bounds
+            .map(|bounds| world_render_sphere(world, entity, bounds))
+            .unwrap_or_else(|| {
+                let position = entity_model_matrix(world, entity).transform_point3(Vec3::ZERO);
+                (position, 0.0)
+            });
+        if center.distance(culling.camera_position) > distance.max_distance + radius {
+            return false;
+        }
+    }
+
+    if let Some(bounds) = bounds {
+        let (center, radius) = world_render_sphere(world, entity, bounds);
+        return culling.frustum.intersects_sphere(center, radius);
+    }
+
+    true
+}
+
+fn world_render_sphere(world: &World, entity: Entity, bounds: RenderBounds) -> (Vec3, f32) {
+    let model = entity_model_matrix(world, entity);
+    let center = model.transform_point3(bounds.center);
+    let scale = model_scale_radius(model);
+    (center, bounds.radius * scale)
+}
+
+fn model_scale_radius(model: Mat4) -> f32 {
+    model
+        .x_axis
+        .truncate()
+        .length()
+        .max(model.y_axis.truncate().length())
+        .max(model.z_axis.truncate().length())
+}
+
+fn default_mesh_bounds(primitive: MeshPrimitive) -> RenderBounds {
+    match primitive {
+        MeshPrimitive::Cube => RenderBounds::unit_cube(),
+        MeshPrimitive::Sphere { .. } => RenderBounds::unit_sphere(),
+    }
+}
+
+fn terrain_bounds(terrain: &Terrain) -> RenderBounds {
+    let (min_y, max_y) = terrain
+        .heights
+        .iter()
+        .copied()
+        .fold((0.0_f32, 0.0_f32), |(min_y, max_y), height| {
+            (min_y.min(height), max_y.max(height))
+        });
+    let half_height = (max_y - min_y) * 0.5;
+    let center_y = min_y + half_height;
+    let radius = Vec3::new(terrain.width * 0.5, half_height, terrain.depth * 0.5).length();
+    RenderBounds::sphere(Vec3::new(0.0, center_y, 0.0), radius)
+}
+
+fn sprite_bounds(sprite: &SpriteBillboard) -> RenderBounds {
+    RenderBounds::from_radius(sprite.size.length() * 0.5)
 }
 
 fn sprite_axes(
@@ -2868,7 +3084,7 @@ mod tests {
             .id();
 
         visibility_propagate_system(&mut world);
-        let renderables = collect_renderables(&mut world, RenderLayers::default());
+        let renderables = collect_renderables(&mut world, RenderLayers::default(), None);
 
         assert!(renderables.iter().any(|(entity, _)| *entity == visible));
         assert!(!renderables.iter().any(|(entity, _)| *entity == hidden));
@@ -2890,7 +3106,7 @@ mod tests {
             ))
             .id();
 
-        let default_renderables = collect_renderables(&mut world, RenderLayers::default());
+        let default_renderables = collect_renderables(&mut world, RenderLayers::default(), None);
         assert!(default_renderables
             .iter()
             .any(|(entity, _)| *entity == world_entity));
@@ -2898,7 +3114,7 @@ mod tests {
             .iter()
             .any(|(entity, _)| *entity == weapon_entity));
 
-        let weapon_renderables = collect_renderables(&mut world, RenderLayers::layer(1));
+        let weapon_renderables = collect_renderables(&mut world, RenderLayers::layer(1), None);
         assert!(!weapon_renderables
             .iter()
             .any(|(entity, _)| *entity == world_entity));
@@ -2918,9 +3134,9 @@ mod tests {
             ))
             .id();
 
-        let primitive_renderables = collect_renderables(&mut world, RenderLayers::default());
+        let primitive_renderables = collect_renderables(&mut world, RenderLayers::default(), None);
         let handle_renderables =
-            collect_mesh_filter_renderables(&mut world, RenderLayers::default());
+            collect_mesh_filter_renderables(&mut world, RenderLayers::default(), None);
 
         assert!(!primitive_renderables
             .iter()
@@ -2929,6 +3145,71 @@ mod tests {
             handle_renderables,
             vec![(imported, MeshFilter::new(mesh_handle))]
         );
+    }
+
+    #[test]
+    fn collect_renderables_culls_primitive_bounds_outside_camera_frustum() {
+        let mut world = World::new();
+        let visible = world
+            .spawn(RenderMesh::new(
+                MeshPrimitive::Cube,
+                RenderMaterial::default(),
+            ))
+            .id();
+        let offscreen = world
+            .spawn((
+                TransformComponent::from_position(Vec3::new(100.0, 0.0, 0.0)),
+                RenderMesh::new(MeshPrimitive::Cube, RenderMaterial::default()),
+            ))
+            .id();
+        let culling = RenderCullContext::from_camera(PreparedCameraView::fallback(), 1.0);
+
+        let renderables = collect_renderables(&mut world, RenderLayers::default(), Some(&culling));
+
+        assert!(renderables.iter().any(|(entity, _)| *entity == visible));
+        assert!(!renderables.iter().any(|(entity, _)| *entity == offscreen));
+    }
+
+    #[test]
+    fn collect_renderables_respects_render_cull_distance() {
+        let mut world = World::new();
+        let near = world
+            .spawn((
+                RenderCullDistance::new(10.0),
+                RenderMesh::new(MeshPrimitive::Cube, RenderMaterial::default()),
+            ))
+            .id();
+        let far = world
+            .spawn((
+                RenderCullDistance::new(2.0),
+                RenderMesh::new(MeshPrimitive::Cube, RenderMaterial::default()),
+            ))
+            .id();
+        let culling = RenderCullContext::from_camera(PreparedCameraView::fallback(), 1.0);
+
+        let renderables = collect_renderables(&mut world, RenderLayers::default(), Some(&culling));
+
+        assert!(renderables.iter().any(|(entity, _)| *entity == near));
+        assert!(!renderables.iter().any(|(entity, _)| *entity == far));
+    }
+
+    #[test]
+    fn mesh_filter_culling_uses_explicit_render_bounds() {
+        let mut world = World::new();
+        let mesh_handle = oxide_asset::Handle::new(101);
+        let imported = world
+            .spawn((
+                TransformComponent::from_position(Vec3::new(100.0, 0.0, 0.0)),
+                MeshFilter::new(mesh_handle),
+                RenderBounds::from_radius(1.0),
+            ))
+            .id();
+        let culling = RenderCullContext::from_camera(PreparedCameraView::fallback(), 1.0);
+
+        let renderables =
+            collect_mesh_filter_renderables(&mut world, RenderLayers::default(), Some(&culling));
+
+        assert!(!renderables.iter().any(|(entity, _)| *entity == imported));
     }
 
     #[test]

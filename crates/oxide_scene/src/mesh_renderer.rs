@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use glam::Vec3;
 use oxide_asset::Handle;
 use oxide_ecs::{Component, Resource};
 
@@ -217,6 +218,80 @@ impl RenderLayers {
     /// Returns true when the two masks share at least one layer.
     pub fn intersects(self, other: Self) -> bool {
         self.mask & other.mask != 0
+    }
+}
+
+/// Local-space bounding sphere used by the scene renderer for culling.
+///
+/// Built-in primitives, terrain, and sprites provide inferred bounds. Add this
+/// component to imported or procedural mesh entities when their visible extent
+/// differs from the default transform origin, or when they should participate
+/// in frustum culling before a mesh asset is resolved.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct RenderBounds {
+    /// Local-space center of the renderable bounds.
+    pub center: Vec3,
+    /// Local-space sphere radius. Negative and non-finite inputs are clamped to
+    /// zero by the constructors.
+    pub radius: f32,
+}
+
+impl RenderBounds {
+    /// Creates a local-space bounding sphere.
+    pub fn sphere(center: Vec3, radius: f32) -> Self {
+        Self {
+            center,
+            radius: sanitize_radius(radius),
+        }
+    }
+
+    /// Creates a local-space bounding sphere centered at the transform origin.
+    pub fn from_radius(radius: f32) -> Self {
+        Self::sphere(Vec3::ZERO, radius)
+    }
+
+    /// Bounds for Oxide's unit cube primitive.
+    pub fn unit_cube() -> Self {
+        Self::from_radius(3.0_f32.sqrt() * 0.5)
+    }
+
+    /// Bounds for Oxide's unit sphere primitive.
+    pub fn unit_sphere() -> Self {
+        Self::from_radius(0.5)
+    }
+}
+
+impl Default for RenderBounds {
+    fn default() -> Self {
+        Self::unit_cube()
+    }
+}
+
+/// Optional maximum render distance for an entity.
+///
+/// The distance is measured from the active camera to the entity's render
+/// bounds center. Entities without `RenderBounds` use their transform origin.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct RenderCullDistance {
+    /// Maximum camera distance before the entity is skipped by the scene
+    /// renderer.
+    pub max_distance: f32,
+}
+
+impl RenderCullDistance {
+    /// Creates a culling distance, clamping invalid inputs to zero.
+    pub fn new(max_distance: f32) -> Self {
+        Self {
+            max_distance: sanitize_radius(max_distance),
+        }
+    }
+}
+
+fn sanitize_radius(value: f32) -> f32 {
+    if value.is_finite() {
+        value.max(0.0)
+    } else {
+        0.0
     }
 }
 

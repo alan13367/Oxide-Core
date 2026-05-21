@@ -19,6 +19,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Scene Material Library**: reusable named scene materials can be registered directly, declared inside `.oxscene` with base colors, alpha modes, and albedo/normal/metallic/roughness texture labels, populated from loaded `.oxmat` descriptors, and referenced from `.oxscene` meshes
 - **Camera Render Views**: ordered multi-camera scene rendering with active flags, normalized viewports, per-camera clear colors, and render-layer filtering
 - **Render Layers**: filter meshes, terrain, and sprites by camera/renderable layer masks for world views, first-person overlays, editor-only helpers, and debug cameras
+- **Renderer Culling**: automatic scene rendering applies per-camera frustum checks for primitives, terrain, sprites, and explicitly bounded mesh assets, with optional per-entity render distance limits
 - **Ordered Render Passes**: plugins can register lightweight frame callbacks around stable built-in anchors for scene, text, app queue, and egui rendering
 - **Native Sprites**: engine-owned RGBA/PNG sprite assets plus billboard and UI sprite components for actors, props, weapons, and overlays
 - **Terrain + World Authoring**: heightfield terrain and configurable world descriptors for code-first maps
@@ -84,7 +85,7 @@ Oxide Core uses a data-driven architecture powered by an Entity-Component-System
 
 ### 1. Start With Scene Authoring Plugins
 
-For code-first games, use `DefaultPlugins` plus `SceneAuthoringPlugins`. The engine will render `RenderMesh` entities automatically, so small games do not need to own a `wgpu::RenderPipeline`, camera buffer, light buffer, depth texture, or primitive GPU mesh.
+For code-first games, use `DefaultPlugins` plus `SceneAuthoringPlugins`. The engine will render `RenderMesh` entities automatically, cull bounded renderables per camera, and let small games avoid owning a `wgpu::RenderPipeline`, camera buffer, light buffer, depth texture, or primitive GPU mesh.
 Plugins are unique by default; custom plugin authors can override `Plugin::name` for stable diagnostics and `Plugin::is_unique` for intentionally repeatable plugin types.
 
 ```rust

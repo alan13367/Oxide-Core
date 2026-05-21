@@ -75,6 +75,10 @@ The built-in anchors are `RENDER_PASS_SCENE`, `RENDER_PASS_GAME_TEXT`,
   children via `InheritedVisibility`.
 - `RenderLayers` filters meshes, terrain, and sprites against the active
   camera's layer mask. Cameras and renderables default to layer `0`.
+- `RenderBounds` gives imported or procedural mesh entities a local-space
+  sphere for per-camera frustum culling. Built-in primitives, terrain, and
+  sprites infer bounds automatically. `RenderCullDistance` adds a simple
+  maximum camera distance gate for large worlds.
 - `SceneEntityPath` stores the slash-separated authored path assigned during
   scene and prefab spawning. `SceneInstanceId` scopes those paths and tags to
   one spawned copy. Use `entity_by_scene_path_in_instance`,
@@ -350,6 +354,10 @@ and prefab overrides,
 from the library. Alpha-masked geometry uses depth writes with a fixed 0.5
 cutoff, while alpha-blended scene geometry is drawn after opaque geometry and
 sorted back-to-front by camera distance per material batch.
+Before batching, the scene renderer skips renderables outside the active
+camera's frustum when bounds are known. Imported mesh-handle entities should add
+`RenderBounds` when their asset pipeline does not provide an authored extent;
+otherwise they remain visible and layer-filtered but conservatively uncullable.
 Texture labels such as `#image_0` or `#crate_albedo` resolve against
 `TextureImageAssets`; file paths such as `textures/crate.png` are loaded by the
 native scene asset pipeline and tracked as scene dependencies. Loaded `.oxmat`

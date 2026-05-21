@@ -111,6 +111,9 @@ impl App for MinimalGame {
                         "Crate Pair",
                     ) {
                         add_y_pulse(&mut self.world, crate_pair, 0.25, Duration::from_secs(2));
+                        self.world
+                            .entity_mut(crate_pair)
+                            .insert(RenderCullDistance::new(80.0));
                     }
                     if let Some(marker) =
                         first_entity_with_tag_in_instance(&mut self.world, scene_instance, "marker")
