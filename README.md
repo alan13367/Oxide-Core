@@ -13,7 +13,7 @@ A 3D game engine built from scratch in Rust, targeting macOS with Metal backend.
 - **Materials + Shaders**: built-in shader pack plus custom WGSL (inline/file) with fallback support
 - **Native Asset Documents**: versioned `.oxscene` and `.oxmat` JSON wrappers with legacy descriptor loading support, nested scene entities, authored scene paths, indexed scene instance lookups, structured scene instance spawn results, live-world scene/prefab export for editor save flows, scoped query/unload helpers, scene-declared dependencies/materials, scene-authored albedo/normal/metallic/roughness texture loading, registered sprite billboards, reusable scene prefabs with instance overrides, and descriptor validation diagnostics
 - **Asset Dependency Tracking**: `AssetServer` records typed source paths, ready or async labeled sub-assets, registered typed extension loaders, and secondary source paths; `.oxscene` files can declare scene dependency paths and automatically record non-virtual scene material texture paths, material descriptors track authored albedo/normal/metallic/roughness texture paths, typed handles can be queried by changed file, native scene/material reloads can be routed together, known paths can be reloaded in place, and `Assets<T>` exposes per-handle revisions plus cursor-readable change records and ECS `Events<AssetChange<T>>` for cache/tooling invalidation
-- **glTF Import Bridging**: imported glTF meshes, materials, images, transform animation clips, and skeletal skin bind data are published as labeled Oxide assets, and spawned nodes retain lightweight mesh/material/node/skin references that the automatic scene renderer and animation systems can use
+- **glTF Import Bridging**: imported glTF meshes, materials, images, transform animation clips, and skeletal skin bind data are published as labeled Oxide assets, mesh CPU data preserves optional joint/weight attributes, and spawned nodes retain lightweight mesh/material/node/skin references that the automatic scene renderer and animation systems can use
 - **Native Scene Reloading**: `.oxscene` handles can be refreshed from direct file changes or dependency changes without duplicating spawned roots
 - **Automatic Scene Renderer**: optional plugin that renders `RenderMesh` scene entities without app-owned pipelines
 - **Scene Material Library**: reusable named scene materials can be registered directly, declared inside `.oxscene` with base colors, alpha modes, and albedo/normal/metallic/roughness texture labels, populated from loaded `.oxmat` descriptors, and referenced from `.oxscene` meshes
@@ -528,8 +528,10 @@ manually reconstructing node identity.
 Imported glTF skins are converted into `SkeletonSkin` assets labeled by skin
 index. Skinned mesh nodes retain `GltfSkinRef` plus `SkinFilter`, and imported
 primitive joint/weight attributes are preserved alongside the mesh entry as
-groundwork for GPU skinning. `AnimationPlugin` updates `SkinJointMatrices`
-after transform propagation so the current joint pose is available to skinning
+groundwork for GPU skinning. `Mesh3D` keeps CPU-side vertices, indices, and
+optional `MeshSkinning` data, and can produce software-skinned vertices from a
+joint matrix palette. `AnimationPlugin` updates `SkinJointMatrices` after
+transform propagation so the current joint pose is available to skinning
 renderers.
 
 ### 10. Physics Plugin Integration

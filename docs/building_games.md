@@ -30,7 +30,9 @@ the engine prelude for normal game code.
 - glTF skins are imported into `SkeletonSkinAssets`; skinned nodes receive
   `SkinFilter` and `GltfSkinRef` so character meshes have stable skin handles
   before GPU skinning is enabled. `AnimationPlugin` also computes
-  `SkinJointMatrices` after transform propagation.
+  `SkinJointMatrices` after transform propagation, and imported `Mesh3D`
+  assets retain `MeshSkinning` data plus a software skinning helper for upload
+  paths.
 - Use `Visibility::Hidden` to hide a renderable entity or hierarchy subtree
   without despawning it. `InheritedVisibility` is propagated automatically.
 - Use `RenderLayers` to filter meshes, terrain, and sprites per camera for

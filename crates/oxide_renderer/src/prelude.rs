@@ -15,7 +15,7 @@ pub use crate::gltf::{
 pub use crate::material::{get_material_bind_group_layout, MaterialError, MaterialPipeline};
 pub use crate::mesh::{
     cube_indices, cube_vertices, sphere_indices, sphere_vertices, triangle_vertices, Mesh, Mesh3D,
-    Vertex, Vertex3D,
+    MeshSkinning, Vertex, Vertex3D,
 };
 pub use crate::pipeline::{
     create_basic_pipeline, create_lit_pipeline, create_shader, create_unlit_pipeline,

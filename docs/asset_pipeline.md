@@ -113,9 +113,11 @@ records external glTF buffer and image URIs as dependencies on the scene handle,
 so a watcher event for a sidecar `.bin` or texture file can find the owning
 scene through `handles_for_changed_path::<GltfScene>(...)`. Oxide then
 publishes each imported mesh into `MeshCache` as a labeled `Mesh3D` asset using
-the glTF source path plus the mesh label emitted by the importer. Spawned nodes
-keep the lightweight `GltfMeshRef` index and also receive `MeshFilter` when a
-stable mesh handle is available.
+the glTF source path plus the mesh label emitted by the importer. `Mesh3D`
+retains CPU-side vertices and indices, and glTF primitives with `JOINTS_0` /
+`WEIGHTS_0` also retain `MeshSkinning` data for software skinning or future GPU
+palette uploads. Spawned nodes keep the lightweight `GltfMeshRef` index and
+also receive `MeshFilter` when a stable mesh handle is available.
 
 Imported glTF materials are converted into Oxide `MaterialDescriptor` values
 using the lit built-in shader plus glTF base color, metallic, roughness,
@@ -144,11 +146,12 @@ components based on the source glTF node index, so gameplay can attach
 Imported glTF skins are converted into `SkeletonSkin` assets and published with
 labels such as `skin_0`. The importer preserves joint node indices, inverse bind
 matrices, optional skeleton roots, and primitive `JOINTS_0`/`WEIGHTS_0`
-attributes as Oxide-owned data. Spawned skinned nodes receive `GltfSkinRef` and
-`SkinFilter`, which gives the future GPU skinning path stable handles without
-changing authoring code. `skin_joint_matrices_system` updates `SkinJointMatrices`
-from `SkeletonSkin`, `SkinFilter`, `TransformAnimationTarget`, and
-`GlobalTransform` after hierarchy propagation.
+attributes as Oxide-owned data, and `Mesh3D::skinned_vertices` can apply a
+current joint matrix palette to the preserved CPU mesh. Spawned skinned nodes
+receive `GltfSkinRef` and `SkinFilter`, which gives the future GPU skinning path
+stable handles without changing authoring code. `skin_joint_matrices_system`
+updates `SkinJointMatrices` from `SkeletonSkin`, `SkinFilter`,
+`TransformAnimationTarget`, and `GlobalTransform` after hierarchy propagation.
 
 The automatic scene renderer can draw `MeshFilter` entities directly from
 `MeshCache`. When a handle-based mesh entity also carries `RenderMesh`, the

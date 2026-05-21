@@ -10,8 +10,7 @@ use gltf::mesh::Mode;
 use wgpu::{Device, Queue};
 
 use crate::descriptor::{AlphaMode, MaterialDescriptor, MaterialType, ShaderDescriptor};
-use crate::mesh::Mesh3D;
-use crate::mesh::Vertex3D;
+use crate::mesh::{Mesh3D, MeshSkinning, Vertex3D};
 use crate::texture::{TextureError, TextureImage};
 
 #[derive(thiserror::Error, Debug)]
@@ -64,13 +63,7 @@ pub struct GltfSkin {
 }
 
 /// Per-vertex skinning attributes for one imported mesh primitive.
-#[derive(Clone, Debug, PartialEq)]
-pub struct GltfMeshSkinning {
-    /// Joint indices influencing each vertex.
-    pub joints: Vec<[u16; 4]>,
-    /// Joint weights influencing each vertex.
-    pub weights: Vec<[f32; 4]>,
-}
+pub type GltfMeshSkinning = MeshSkinning;
 
 /// Imported glTF transform animation clip.
 #[derive(Clone, Debug, PartialEq)]
@@ -204,8 +197,10 @@ pub fn load_gltf(
 
             let mesh_name = format!("mesh_{}_prim{}", mesh_idx, prim_idx);
             mesh_material_indices.push(primitive.material().index());
-            mesh_skinning.push(extract_primitive_skinning(&primitive, &buffers));
-            let loaded_mesh = load_primitive(device, queue, &primitive, &buffers, &mesh_name)?;
+            let skinning = extract_primitive_skinning(&primitive, &buffers);
+            mesh_skinning.push(skinning.clone());
+            let loaded_mesh =
+                load_primitive(device, queue, &primitive, &buffers, skinning, &mesh_name)?;
             meshes.push((mesh_name, loaded_mesh));
         }
     }
@@ -501,7 +496,7 @@ fn extract_primitive_skinning(
         .read_weights(0)
         .map(|weights| weights.into_f32().collect::<Vec<_>>())?;
 
-    Some(GltfMeshSkinning { joints, weights })
+    Some(GltfMeshSkinning::new(joints, weights))
 }
 
 fn gltf_metallic_roughness_image_sources(document: &gltf::Document) -> Vec<usize> {
@@ -664,6 +659,7 @@ fn load_primitive(
     _queue: &Queue,
     primitive: &gltf::Primitive,
     buffers: &[Data],
+    skinning: Option<GltfMeshSkinning>,
     name: &str,
 ) -> Result<Mesh3D, GltfError> {
     let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
@@ -705,7 +701,13 @@ fn load_primitive(
         .unwrap_or_else(|| (0..vertices.len() as u16).collect());
 
     // Create the mesh
-    Ok(Mesh3D::create(device, &vertices, &indices, Some(name)))
+    Ok(Mesh3D::create_with_skinning(
+        device,
+        &vertices,
+        &indices,
+        skinning,
+        Some(name),
+    ))
 }
 
 #[cfg(test)]
