@@ -146,6 +146,9 @@ Register a pass with `add_render_pass`, `add_render_pass_before`, or
 Use `RenderTexture` for sampled offscreen color targets and
 `FullscreenBlitPipeline` when a pass needs to composite a texture back into a
 target without creating app-specific fullscreen triangle boilerplate.
+When the built-in scene renderer should draw into that offscreen target, call
+`prepare_scene_renderer_for_target` during prepare and
+`queue_scene_renderer_to_target` from the render pass.
 
 ```rust
 fn queue_debug_overlay(world: &mut World, frame: &mut RenderFrame) {
@@ -175,6 +178,9 @@ passes remain visible in `RenderPassSchedule::pass_infos` but are skipped by the
 runner. Larger plugins can also toggle a whole render pass set with
 `disable_render_pass_set` and `enable_render_pass_set`, which is useful for
 turning capture, debug, or post-processing stacks on and off from editor UI.
+Advanced pipelines can replace built-in anchors with
+`disable_builtin_render_pass(RENDER_PASS_SCENE)` and then register their own
+scene-to-texture and composite passes.
 
 Long-lived post-process resources usually live as non-send resources:
 
@@ -197,12 +203,33 @@ fn prepare_bloom_resources(world: &mut World) {
     let blit = FullscreenBlitPipeline::new(&renderer.device, renderer.format());
     world.insert_non_send_resource(BloomResources { color, blit });
 }
+
+fn prepare_bloom_scene(world: &mut World) {
+    if let Some((width, height)) = world
+        .get_non_send_resource::<BloomResources>()
+        .map(|resources| resources.color.size())
+    {
+        prepare_scene_renderer_for_target(world, width, height);
+    }
+}
+
+fn queue_bloom_scene(world: &mut World, frame: &mut RenderFrame) {
+    queue_scene_renderer_with_target(world, &mut frame.encoder, |world| {
+        let resources = world.get_non_send_resource::<BloomResources>()?;
+        let (width, height) = resources.color.size();
+        Some(SceneRenderTarget::new(&resources.color.view, width, height))
+    });
+}
 ```
 
 ```rust
 app::<MyGame>()
     .add_plugins(DefaultPlugins)
     .add_plugins(SceneAuthoringPlugins)
+    .add_system(AppStage::Prepare, prepare_bloom_resources)
+    .add_system(AppStage::Prepare, prepare_bloom_scene)
+    .disable_builtin_render_pass(RENDER_PASS_SCENE)
+    .add_render_pass_before("game.bloom.scene", RENDER_PASS_GAME_TEXT, queue_bloom_scene)
     .add_plugin(AudioPlugin)
     .add_system(AppStage::Startup, setup_level)
     .add_labeled_system_to_set(

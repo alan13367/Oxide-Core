@@ -856,6 +856,56 @@ impl<T: App> AppBuilder<T> {
         self
     }
 
+    /// Sets enabled state for a built-in render anchor such as
+    /// [`RENDER_PASS_SCENE`](crate::render::RENDER_PASS_SCENE).
+    ///
+    /// Use this when a plugin replaces built-in work, such as rendering the
+    /// scene into an offscreen target before compositing it back to the frame.
+    pub fn set_builtin_render_pass_enabled(
+        mut self,
+        label: impl AsRef<str>,
+        enabled: bool,
+    ) -> Self {
+        self.set_builtin_render_pass_enabled_mut(label, enabled);
+        self
+    }
+
+    /// Mutable form of [`Self::set_builtin_render_pass_enabled`].
+    pub fn set_builtin_render_pass_enabled_mut(
+        &mut self,
+        label: impl AsRef<str>,
+        enabled: bool,
+    ) -> &mut Self {
+        self.systems
+            .render_passes
+            .set_anchor_enabled(label, enabled);
+        self
+    }
+
+    /// Enables a built-in render anchor.
+    pub fn enable_builtin_render_pass(mut self, label: impl AsRef<str>) -> Self {
+        self.enable_builtin_render_pass_mut(label);
+        self
+    }
+
+    /// Mutable form of [`Self::enable_builtin_render_pass`].
+    pub fn enable_builtin_render_pass_mut(&mut self, label: impl AsRef<str>) -> &mut Self {
+        self.systems.render_passes.enable_anchor(label);
+        self
+    }
+
+    /// Disables a built-in render anchor without removing its metadata.
+    pub fn disable_builtin_render_pass(mut self, label: impl AsRef<str>) -> Self {
+        self.disable_builtin_render_pass_mut(label);
+        self
+    }
+
+    /// Mutable form of [`Self::disable_builtin_render_pass`].
+    pub fn disable_builtin_render_pass_mut(&mut self, label: impl AsRef<str>) -> &mut Self {
+        self.systems.render_passes.disable_anchor(label);
+        self
+    }
+
     /// Sets enabled state for every custom render pass in `set`.
     ///
     /// This is useful for plugin-owned pass groups such as debug overlays,
@@ -1456,6 +1506,7 @@ pub async fn create_renderer(window: &Window) -> Renderer {
 mod tests {
     use super::*;
     use crate::ecs::ResMut;
+    use crate::render::{RenderPassKind, RENDER_PASS_SCENE};
 
     #[derive(oxide_ecs::Resource, Default)]
     struct StartupCounter(u32);
@@ -1621,6 +1672,30 @@ mod tests {
             .into_iter()
             .filter(|info| info.sets.iter().any(|set| set == "debug"))
             .all(|info| info.enabled));
+    }
+
+    #[test]
+    fn app_builder_can_toggle_builtin_render_passes() {
+        let mut builder = AppBuilder::<TestApp>::new();
+
+        builder.disable_builtin_render_pass_mut(RENDER_PASS_SCENE);
+        let scene = builder
+            .render_pass_schedule()
+            .pass_infos()
+            .into_iter()
+            .find(|info| info.label == RENDER_PASS_SCENE)
+            .expect("scene anchor should exist");
+        assert_eq!(scene.kind, RenderPassKind::Anchor);
+        assert!(!scene.enabled);
+
+        builder.enable_builtin_render_pass_mut(RENDER_PASS_SCENE);
+        let scene = builder
+            .render_pass_schedule()
+            .pass_infos()
+            .into_iter()
+            .find(|info| info.label == RENDER_PASS_SCENE)
+            .expect("scene anchor should exist");
+        assert!(scene.enabled);
     }
 
     #[test]

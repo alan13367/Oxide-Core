@@ -94,6 +94,31 @@ pub fn prepare_scene_renderer(world: &mut World) {
     world.insert_non_send_resource(scene_renderer);
 }
 
+/// Prepares the automatic scene renderer for a specific color target size.
+///
+/// This is useful for offscreen `RenderTexture` workflows such as
+/// post-processing, capture passes, minimaps, or editor viewports. It keeps the
+/// scene renderer's depth target and camera aspect ratio aligned with the
+/// target dimensions before queueing.
+pub fn prepare_scene_renderer_for_target(world: &mut World, width: u32, height: u32) {
+    let Some(mut scene_renderer) = world.remove_non_send_resource::<SceneRenderer>() else {
+        return;
+    };
+
+    if world.contains_resource::<RendererResource>() {
+        let (device, queue) = {
+            let renderer = &world.resource::<RendererResource>().renderer;
+            (renderer.device.clone(), renderer.queue.clone())
+        };
+        scene_renderer.prepare_for_target(&device, &queue, world, width, height);
+        if let Some(diagnostics) = world.get_resource_mut::<Diagnostics>() {
+            record_scene_renderer_stats(diagnostics, scene_renderer.stats());
+        }
+    }
+
+    world.insert_non_send_resource(scene_renderer);
+}
+
 pub fn record_scene_renderer_stats(diagnostics: &mut Diagnostics, stats: SceneRendererStats) {
     diagnostics.record(SCENE_CAMERA_VIEWS, stats.camera_views as f64);
     diagnostics.record(
@@ -118,6 +143,42 @@ pub fn queue_scene_renderer(world: &mut World, frame: &mut RenderFrame) {
     };
 
     scene_renderer.queue(&frame.view, &mut frame.encoder);
+    world.insert_non_send_resource(scene_renderer);
+}
+
+/// Queues the automatic scene renderer into a caller-provided target.
+pub fn queue_scene_renderer_to_target(
+    world: &mut World,
+    target: SceneRenderTarget<'_>,
+    encoder: &mut wgpu::CommandEncoder,
+) {
+    let Some(mut scene_renderer) = world.remove_non_send_resource::<SceneRenderer>() else {
+        return;
+    };
+
+    scene_renderer.queue_to_target(target, encoder);
+    world.insert_non_send_resource(scene_renderer);
+}
+
+/// Queues the automatic scene renderer into a target borrowed from `world`.
+///
+/// This avoids borrow conflicts when the target view is stored as a non-send
+/// resource, which is the usual pattern for offscreen render textures.
+pub fn queue_scene_renderer_with_target(
+    world: &mut World,
+    encoder: &mut wgpu::CommandEncoder,
+    target: impl for<'w> FnOnce(&'w World) -> Option<SceneRenderTarget<'w>>,
+) {
+    let Some(mut scene_renderer) = world.remove_non_send_resource::<SceneRenderer>() else {
+        return;
+    };
+
+    {
+        if let Some(target) = target(world) {
+            scene_renderer.queue_to_target(target, encoder);
+        }
+    }
+
     world.insert_non_send_resource(scene_renderer);
 }
 

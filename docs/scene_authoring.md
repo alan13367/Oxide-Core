@@ -60,6 +60,11 @@ For render-to-texture tools, minimaps, capture passes, and future
 post-processing, use `RenderTexture` as the sampled color target and
 `FullscreenBlitPipeline` for fullscreen composites instead of duplicating wgpu
 texture, sampler, bind group layout, and fullscreen triangle setup.
+Use `prepare_scene_renderer_for_target` and
+`queue_scene_renderer_with_target` when the automatic scene renderer should
+draw into an offscreen target; disable `RENDER_PASS_SCENE` with
+`disable_builtin_render_pass` when that offscreen pass replaces the normal
+swapchain scene pass.
 
 ## Scene Components
 

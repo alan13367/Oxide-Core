@@ -339,6 +339,23 @@ impl RenderPassSchedule {
         updated
     }
 
+    /// Sets enabled state for built-in anchors matching `label`.
+    ///
+    /// This is intended for advanced render pipelines that replace a built-in
+    /// pass, such as rendering the scene into an offscreen target before a
+    /// fullscreen post-process composite.
+    pub fn set_anchor_enabled(&mut self, label: impl AsRef<str>, enabled: bool) -> usize {
+        let label = label.as_ref();
+        let mut updated = 0;
+        for entry in &mut self.entries {
+            if entry.label == label && matches!(entry.callback, RenderPassEntryKind::Anchor(_)) {
+                entry.enabled = enabled;
+                updated += 1;
+            }
+        }
+        updated
+    }
+
     /// Enables every custom pass matching `label`.
     pub fn enable_pass(&mut self, label: impl AsRef<str>) -> usize {
         self.set_pass_enabled(label, true)
@@ -357,6 +374,16 @@ impl RenderPassSchedule {
     /// Disables every custom pass in `set` without unregistering it.
     pub fn disable_set(&mut self, set: impl AsRef<str>) -> usize {
         self.set_pass_set_enabled(set, false)
+    }
+
+    /// Enables every built-in anchor matching `label`.
+    pub fn enable_anchor(&mut self, label: impl AsRef<str>) -> usize {
+        self.set_anchor_enabled(label, true)
+    }
+
+    /// Disables every built-in anchor matching `label`.
+    pub fn disable_anchor(&mut self, label: impl AsRef<str>) -> usize {
+        self.set_anchor_enabled(label, false)
     }
 
     /// Returns non-fatal ordering diagnostics for this schedule.
@@ -797,6 +824,37 @@ mod tests {
         let labels = schedule.ordered_labels();
         assert!(labels.contains(&"capture.depth"));
         assert!(labels.contains(&"capture.color"));
+    }
+
+    #[test]
+    fn render_pass_schedule_can_disable_builtin_anchors() {
+        let mut schedule = RenderPassSchedule::new();
+        schedule.add_pass_before("post.scene_to_texture", RENDER_PASS_GAME_TEXT, noop_pass);
+        schedule.add_pass_after("post.composite", "post.scene_to_texture", noop_pass);
+
+        assert_eq!(schedule.disable_anchor(RENDER_PASS_SCENE), 1);
+        assert_eq!(
+            schedule.ordered_labels(),
+            vec![
+                "post.scene_to_texture",
+                RENDER_PASS_GAME_TEXT,
+                RENDER_PASS_APP_QUEUE,
+                RENDER_PASS_EGUI,
+                "post.composite",
+            ]
+        );
+
+        let info = schedule
+            .pass_infos()
+            .into_iter()
+            .find(|info| info.label == RENDER_PASS_SCENE)
+            .expect("scene anchor info should remain available");
+        assert_eq!(info.kind, RenderPassKind::Anchor);
+        assert!(!info.enabled);
+        assert_eq!(info.order_index, None);
+
+        assert_eq!(schedule.enable_anchor(RENDER_PASS_SCENE), 1);
+        assert!(schedule.ordered_labels().contains(&RENDER_PASS_SCENE));
     }
 
     #[test]

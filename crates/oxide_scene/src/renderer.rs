@@ -756,6 +756,43 @@ pub struct SceneRenderer {
     stats: SceneRendererStats,
 }
 
+/// Borrowed scene render target metadata.
+///
+/// Use this when rendering a prepared scene into an offscreen texture, editor
+/// viewport, capture target, or the swapchain view. The width and height drive
+/// camera viewport conversion and must match the target view/depth texture that
+/// was prepared for the frame.
+#[derive(Clone, Copy, Debug)]
+pub struct SceneRenderTarget<'a> {
+    /// Color target to render into.
+    pub view: &'a wgpu::TextureView,
+    /// Target width in physical pixels.
+    pub width: u32,
+    /// Target height in physical pixels.
+    pub height: u32,
+}
+
+impl<'a> SceneRenderTarget<'a> {
+    /// Creates render target metadata for a color view.
+    pub fn new(view: &'a wgpu::TextureView, width: u32, height: u32) -> Self {
+        Self {
+            view,
+            width: width.max(1),
+            height: height.max(1),
+        }
+    }
+
+    /// Returns `width / height`, falling back to `1.0` for degenerate input.
+    pub fn aspect_ratio(&self) -> f32 {
+        Self::aspect_ratio_for_size(self.width, self.height)
+    }
+
+    /// Computes a non-degenerate target aspect ratio for a size.
+    pub fn aspect_ratio_for_size(width: u32, height: u32) -> f32 {
+        width.max(1) as f32 / height.max(1) as f32
+    }
+}
+
 impl SceneRenderer {
     pub fn new(
         device: &wgpu::Device,
@@ -967,7 +1004,49 @@ impl SceneRenderer {
         self.stats = stats;
     }
 
+    /// Resizes internal target resources and prepares scene draws for a target.
+    pub fn prepare_for_target(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        world: &mut World,
+        width: u32,
+        height: u32,
+    ) {
+        let width = width.max(1);
+        let height = height.max(1);
+        self.resize(device, width, height);
+        self.prepare(
+            device,
+            queue,
+            world,
+            SceneRenderTarget::aspect_ratio_for_size(width, height),
+        );
+    }
+
+    /// Queues scene draws into `target`.
+    ///
+    /// Call [`Self::prepare_for_target`] first when the target dimensions differ
+    /// from the renderer's current target size.
+    pub fn queue_to_target(
+        &mut self,
+        target: SceneRenderTarget<'_>,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        let previous_width = self.target_width;
+        let previous_height = self.target_height;
+        self.target_width = target.width;
+        self.target_height = target.height;
+        self.queue_prepared(target.view, encoder);
+        self.target_width = previous_width;
+        self.target_height = previous_height;
+    }
+
     pub fn queue(&mut self, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder) {
+        self.queue_prepared(view, encoder);
+    }
+
+    fn queue_prepared(&mut self, view: &wgpu::TextureView, encoder: &mut wgpu::CommandEncoder) {
         for (index, scene_view) in self.view_draws.iter().enumerate() {
             let color_load = if index == 0 {
                 wgpu::LoadOp::Clear(scene_view.clear_color)
@@ -3376,5 +3455,15 @@ mod tests {
             })
         );
         assert_eq!(cameras[1].layers, RenderLayers::layer(1));
+    }
+
+    #[test]
+    fn scene_render_target_aspect_ratio_clamps_degenerate_sizes() {
+        assert_eq!(
+            SceneRenderTarget::aspect_ratio_for_size(1920, 1080),
+            16.0 / 9.0
+        );
+        assert_eq!(SceneRenderTarget::aspect_ratio_for_size(0, 0), 1.0);
+        assert_eq!(SceneRenderTarget::aspect_ratio_for_size(320, 0), 320.0);
     }
 }
